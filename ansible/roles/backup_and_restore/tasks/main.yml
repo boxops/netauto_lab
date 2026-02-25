@@ -1,0 +1,111 @@
+---
+# ansible/roles/backup_and_restore/tasks/main.yml
+# Back up running configurations and restore from a saved baseline.
+
+- name: Create backup directory for this run
+  ansible.builtin.file:
+    path: "{{ backup_dir }}/{{ ansible_date_time.date }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  run_once: true
+
+# ── Backup ──────────────────────────────────────────────────────────────────
+
+- name: Backup running config (EOS)
+  arista.eos.eos_command:
+    commands: "show running-config"
+  register: eos_running_config
+  when: ansible_network_os == "arista.eos.eos"
+
+- name: Backup running config (IOS)
+  cisco.ios.ios_command:
+    commands: "show running-config"
+  register: ios_running_config
+  when: ansible_network_os == "cisco.ios.ios"
+
+- name: Backup running config (JunOS)
+  junipernetworks.junos.junos_command:
+    commands: "show configuration"
+  register: junos_running_config
+  when: ansible_network_os == "junipernetworks.junos.junos"
+
+- name: Set config_output fact (EOS)
+  ansible.builtin.set_fact:
+    config_output: "{{ eos_running_config.stdout[0] }}"
+  when: ansible_network_os == "arista.eos.eos"
+
+- name: Set config_output fact (IOS)
+  ansible.builtin.set_fact:
+    config_output: "{{ ios_running_config.stdout[0] }}"
+  when: ansible_network_os == "cisco.ios.ios"
+
+- name: Set config_output fact (JunOS)
+  ansible.builtin.set_fact:
+    config_output: "{{ junos_running_config.stdout[0] }}"
+  when: ansible_network_os == "junipernetworks.junos.junos"
+
+- name: Write config to file
+  ansible.builtin.copy:
+    content: "{{ config_output }}"
+    dest: "{{ backup_dir }}/{{ ansible_date_time.date }}/{{ inventory_hostname }}.cfg"
+    mode: "0644"
+  delegate_to: localhost
+
+- name: Push backup to Nautobot as config context
+  ansible.builtin.uri:
+    url: "{{ nautobot_url }}/api/dcim/devices/?name={{ inventory_hostname }}"
+    method: GET
+    headers:
+      Authorization: "Token {{ nautobot_token }}"
+      Accept: "application/json"
+    status_code: 200
+  register: nautobot_device
+  delegate_to: localhost
+  when: push_to_nautobot | default(false)
+
+- name: Commit backups to Git
+  ansible.builtin.shell: |
+    cd {{ backup_dir }}
+    git add .
+    git diff --cached --quiet || git commit -m "backup: {{ ansible_date_time.iso8601 }} - {{ inventory_hostname }}"
+  delegate_to: localhost
+  when: push_to_git | default(true)
+  changed_when: true
+
+# ── Restore ──────────────────────────────────────────────────────────────────
+
+- name: Check restore file exists
+  ansible.builtin.stat:
+    path: "{{ restore_file }}"
+  register: restore_stat
+  delegate_to: localhost
+  when: restore_mode | default(false)
+
+- name: Fail if restore file not found
+  ansible.builtin.fail:
+    msg: "Restore file not found: {{ restore_file }}"
+  when:
+    - restore_mode | default(false)
+    - not restore_stat.stat.exists
+
+- name: Load restore config content
+  ansible.builtin.set_fact:
+    restore_config: "{{ lookup('file', restore_file) }}"
+  when: restore_mode | default(false)
+
+- name: Restore configuration (EOS)
+  arista.eos.eos_config:
+    src: "{{ restore_file }}"
+    replace: block
+  when:
+    - restore_mode | default(false)
+    - ansible_network_os == "arista.eos.eos"
+
+- name: Restore configuration (IOS)
+  cisco.ios.ios_config:
+    src: "{{ restore_file }}"
+    replace: block
+  when:
+    - restore_mode | default(false)
+    - ansible_network_os == "cisco.ios.ios"

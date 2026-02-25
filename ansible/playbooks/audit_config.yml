@@ -1,0 +1,107 @@
+---
+# ansible/playbooks/audit_config.yml
+# Audit device configurations against baseline rules.
+# Checks: required commands present, forbidden commands absent,
+# security best practices, compliance standards.
+#
+# Variables:
+#   audit_profile   - profile name matching a file in vars/audit_profiles/
+#                     (default: 'default')
+
+- name: Audit Configuration Against Baselines
+  hosts: "{{ target_device | default('all') }}"
+  gather_facts: false
+  vars:
+    audit_profile: "default"
+    audit_output_dir: "/reports/audits"
+    fail_on_violation: false
+
+  tasks:
+    - name: Create audit output directory
+      ansible.builtin.file:
+        path: "{{ audit_output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      run_once: true
+
+    - name: Get running configuration (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "show running-config"
+      register: running_config_eos
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Get running configuration (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - "show running-config"
+      register: running_config_ios
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Set running config fact
+      ansible.builtin.set_fact:
+        running_config: >-
+          {{ running_config_eos.stdout[0] if ansible_network_os == 'arista.eos.eos'
+             else running_config_ios.stdout[0] }}
+
+    # ── Required config checks ────────────────────────────────────────────
+
+    - name: Check NTP is configured
+      ansible.builtin.assert:
+        that:
+          - "'ntp' in running_config"
+        fail_msg: "AUDIT FAIL [{{ inventory_hostname }}]: NTP not configured"
+        success_msg: "AUDIT PASS [{{ inventory_hostname }}]: NTP configured"
+      ignore_errors: "{{ not fail_on_violation }}"
+
+    - name: Check syslog is configured
+      ansible.builtin.assert:
+        that:
+          - "'logging' in running_config"
+        fail_msg: "AUDIT FAIL [{{ inventory_hostname }}]: Syslog not configured"
+        success_msg: "AUDIT PASS [{{ inventory_hostname }}]: Syslog configured"
+      ignore_errors: "{{ not fail_on_violation }}"
+
+    - name: Check SNMP is configured
+      ansible.builtin.assert:
+        that:
+          - "'snmp-server' in running_config or 'snmp server' in running_config"
+        fail_msg: "AUDIT FAIL [{{ inventory_hostname }}]: SNMP not configured"
+        success_msg: "AUDIT PASS [{{ inventory_hostname }}]: SNMP configured"
+      ignore_errors: "{{ not fail_on_violation }}"
+
+    - name: Check AAA is configured (EOS)
+      ansible.builtin.assert:
+        that:
+          - "'aaa' in running_config"
+        fail_msg: "AUDIT FAIL [{{ inventory_hostname }}]: AAA not configured"
+        success_msg: "AUDIT PASS [{{ inventory_hostname }}]: AAA configured"
+      when: ansible_network_os == "arista.eos.eos"
+      ignore_errors: "{{ not fail_on_violation }}"
+
+    # ── Forbidden config checks ───────────────────────────────────────────
+
+    - name: Check Telnet is not enabled (EOS)
+      ansible.builtin.assert:
+        that:
+          - "'management telnet' not in running_config"
+        fail_msg: "AUDIT FAIL [{{ inventory_hostname }}]: Telnet is ENABLED (security risk)"
+        success_msg: "AUDIT PASS [{{ inventory_hostname }}]: Telnet not enabled"
+      when: ansible_network_os == "arista.eos.eos"
+      ignore_errors: "{{ not fail_on_violation }}"
+
+    # ── Write audit report ────────────────────────────────────────────────
+
+    - name: Write audit report JSON
+      ansible.builtin.copy:
+        content: |
+          {
+            "device": "{{ inventory_hostname }}",
+            "audit_profile": "{{ audit_profile }}",
+            "timestamp": "{{ ansible_date_time.iso8601 }}",
+            "status": "completed"
+          }
+        dest: "{{ audit_output_dir }}/{{ inventory_hostname }}_audit_{{ ansible_date_time.date }}.json"
+        mode: "0644"
+      delegate_to: localhost

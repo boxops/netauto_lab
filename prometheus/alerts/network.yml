@@ -1,0 +1,140 @@
+---
+# Network alerting rules for Prometheus
+groups:
+
+  - name: device_availability
+    rules:
+      - alert: DeviceDown
+        expr: up{job="snmp-devices"} == 0 OR probe_success{job="icmp-probes"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "Device {{ $labels.instance }} is unreachable"
+          description: "{{ $labels.instance }} has been unreachable for more than 2 minutes."
+          runbook: "https://docs.netauto.lab/runbooks/device-down"
+
+      - alert: ServiceDown
+        expr: probe_success{job="http-probes"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "Service {{ $labels.instance }} is down"
+          description: "HTTP probe for {{ $labels.instance }} has been failing for 2 minutes."
+
+  - name: interface_health
+    rules:
+      - alert: HighInterfaceUtilization
+        expr: |
+          (rate(ifHCInOctets[5m]) + rate(ifHCOutOctets[5m])) * 8 / ifHighSpeed > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          category: capacity
+        annotations:
+          summary: "High utilization on {{ $labels.instance }} {{ $labels.ifDescr }}"
+          description: "Interface utilization has been above 80% for 5 minutes (current: {{ $value | humanizePercentage }})."
+
+      - alert: InterfaceHighErrorRate
+        expr: |
+          rate(ifInErrors[5m]) + rate(ifOutErrors[5m]) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          category: errors
+        annotations:
+          summary: "High error rate on {{ $labels.instance }} {{ $labels.ifDescr }}"
+          description: "Interface error rate is above 1% for 5 minutes."
+
+      - alert: InterfaceDown
+        expr: ifOperStatus{ifAdminStatus="up"} != 1
+        for: 1m
+        labels:
+          severity: warning
+          category: availability
+        annotations:
+          summary: "Interface {{ $labels.ifDescr }} on {{ $labels.instance }} is down"
+          description: "An administratively enabled interface has gone down."
+
+  - name: system_resources
+    rules:
+      - alert: HighCPUUsage
+        expr: |
+          (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) * 100 > 90
+        for: 10m
+        labels:
+          severity: warning
+          category: resources
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage has been above 90% for 10 minutes (current: {{ $value }}%)."
+
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 10m
+        labels:
+          severity: warning
+          category: resources
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage has been above 90% for 10 minutes."
+
+      - alert: DiskSpaceRunningLow
+        expr: |
+          (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes)) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+          category: resources
+        annotations:
+          summary: "Disk space running low on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+          description: "Disk usage is above 85% (current: {{ $value | humanizePercentage }})."
+
+  - name: bgp
+    rules:
+      - alert: BGPPeerDown
+        expr: bgpPeerState != 6
+        for: 2m
+        labels:
+          severity: critical
+          category: routing
+        annotations:
+          summary: "BGP peer {{ $labels.bgpPeerRemoteAddr }} down on {{ $labels.instance }}"
+          description: "BGP session with peer {{ $labels.bgpPeerRemoteAddr }} is not in Established state."
+
+      - alert: BGPPrefixCountDecreased
+        expr: |
+          (bgpPeerInPrefixes - bgpPeerInPrefixes offset 10m) / bgpPeerInPrefixes offset 10m < -0.2
+        for: 5m
+        labels:
+          severity: warning
+          category: routing
+        annotations:
+          summary: "BGP prefix count dropped by >20% from peer {{ $labels.bgpPeerRemoteAddr }}"
+          description: "BGP received prefix count has dropped significantly, indicating possible route withdrawal."
+
+  - name: infrastructure
+    rules:
+      - alert: PrometheusTargetMissing
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: warning
+          category: infrastructure
+        annotations:
+          summary: "Prometheus target {{ $labels.instance }} is missing"
+          description: "A Prometheus target has been unreachable for more than 5 minutes."
+
+      - alert: PrometheusConfigReloadFailed
+        expr: prometheus_config_last_reload_successful == 0
+        for: 5m
+        labels:
+          severity: warning
+          category: infrastructure
+        annotations:
+          summary: "Prometheus configuration reload failed"
+          description: "Prometheus configuration reload has failed."

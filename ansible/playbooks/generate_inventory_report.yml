@@ -1,0 +1,121 @@
+---
+# ansible/playbooks/generate_inventory_report.yml
+# Export device inventory data to CSV and JSON formats.
+# Data includes: hostname, model, OS version, serial number, management IP,
+# site, role, and active interface count.
+#
+# Variables:
+#   report_output_dir  - output directory (default: /reports)
+#   report_formats     - list of formats: csv, json (default: both)
+
+- name: Generate Device Inventory Report
+  hosts: "{{ target_device | default('all') }}"
+  gather_facts: false
+  vars:
+    report_output_dir: "/reports"
+    report_formats:
+      - csv
+      - json
+
+  tasks:
+    - name: Create report output directory
+      ansible.builtin.file:
+        path: "{{ report_output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      run_once: true
+
+    # ── Gather facts ─────────────────────────────────────────────────────────
+
+    - name: Gather EOS facts
+      arista.eos.eos_facts:
+        gather_subset:
+          - hardware
+          - interfaces
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Gather IOS facts
+      cisco.ios.ios_facts:
+        gather_subset:
+          - hardware
+          - interfaces
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Count active interfaces
+      ansible.builtin.set_fact:
+        active_interface_count: >-
+          {{ ansible_net_interfaces | default({}) | dict2items
+             | selectattr('value.operstatus', 'defined')
+             | selectattr('value.operstatus', 'equalto', 'up')
+             | list | length }}
+
+    - name: Build inventory record for this device
+      ansible.builtin.set_fact:
+        inv_record:
+          hostname: "{{ inventory_hostname }}"
+          management_ip: "{{ ansible_host }}"
+          model: "{{ ansible_net_model | default('N/A') }}"
+          os_version: "{{ ansible_net_version | default('N/A') }}"
+          serial: "{{ ansible_net_serialnum | default('N/A') }}"
+          active_interfaces: "{{ active_interface_count }}"
+          site: "{{ nautobot_site | default(hostvars[inventory_hostname].site | default('N/A')) }}"
+          role: "{{ nautobot_role | default(hostvars[inventory_hostname].role | default('N/A')) }}"
+          collected_at: "{{ ansible_date_time.iso8601 }}"
+
+    # ── Aggregate results ─────────────────────────────────────────────────────
+
+    - name: Add record to global inventory list
+      ansible.builtin.set_fact:
+        global_inventory: >-
+          {{ (global_inventory | default([])) + [inv_record] }}
+      delegate_to: localhost
+
+  post_tasks:
+    - name: Compile final inventory list
+      ansible.builtin.set_fact:
+        all_records: >-
+          {{ ansible_play_hosts
+             | map('extract', hostvars, 'inv_record')
+             | list }}
+      run_once: true
+      delegate_to: localhost
+
+    - name: Write JSON report
+      ansible.builtin.copy:
+        content: "{{ all_records | to_nice_json }}"
+        dest: "{{ report_output_dir }}/inventory_report_{{ ansible_date_time.date }}.json"
+        mode: "0644"
+      run_once: true
+      delegate_to: localhost
+      when: "'json' in report_formats"
+
+    - name: Generate CSV header
+      ansible.builtin.copy:
+        content: |
+          hostname,management_ip,model,os_version,serial,active_interfaces,site,role,collected_at
+        dest: "{{ report_output_dir }}/inventory_report_{{ ansible_date_time.date }}.csv"
+        mode: "0644"
+      run_once: true
+      delegate_to: localhost
+      when: "'csv' in report_formats"
+
+    - name: Append CSV rows
+      ansible.builtin.lineinfile:
+        path: "{{ report_output_dir }}/inventory_report_{{ ansible_date_time.date }}.csv"
+        line: >-
+          {{ item.hostname }},{{ item.management_ip }},{{ item.model }},
+          {{ item.os_version }},{{ item.serial }},{{ item.active_interfaces }},
+          {{ item.site }},{{ item.role }},{{ item.collected_at }}
+        insertafter: EOF
+      loop: "{{ all_records }}"
+      run_once: true
+      delegate_to: localhost
+      when: "'csv' in report_formats"
+
+    - name: Report summary
+      ansible.builtin.debug:
+        msg: >-
+          Inventory report generated for {{ all_records | length }} devices.
+          Output: {{ report_output_dir }}/inventory_report_{{ ansible_date_time.date }}.[json|csv]
+      run_once: true

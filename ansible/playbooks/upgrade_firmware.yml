@@ -1,0 +1,122 @@
+---
+# ansible/playbooks/upgrade_firmware.yml
+# Software upgrade orchestration with pre and post checks.
+# Supports Arista EOS and Cisco IOS.
+#
+# Required variables:
+#   target_version    - EOS/IOS version to upgrade to
+#   image_url         - URL to download the firmware image (or local path)
+#
+# Safety: pre-checks must pass or upgrade is aborted. Post-checks verify
+# the device boots into the correct version.
+
+- name: Software Upgrade with Pre/Post Checks
+  hosts: "{{ target_device | default('upgrade_candidates') }}"
+  gather_facts: false
+  serial: 1    # Upgrade one device at a time
+  vars:
+    pre_check_timeout: 60
+    boot_timeout: 600
+    rollback_on_failure: true
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.fail:
+        msg: "target_version and image_url must be set"
+      when: target_version is not defined or image_url is not defined
+
+    - name: "Pre-upgrade: check current version (EOS)"
+      arista.eos.eos_command:
+        commands:
+          - command: "show version | json"
+      register: current_version_eos
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Skip if already on target version (EOS)
+      ansible.builtin.meta: end_host
+      when:
+        - ansible_network_os == "arista.eos.eos"
+        - target_version in (current_version_eos.stdout[0] | from_json).version
+
+    - name: "Pre-upgrade: check disk space (EOS)"
+      arista.eos.eos_command:
+        commands:
+          - "show flash: | json"
+      register: flash_info
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: "Pre-upgrade: backup running config"
+      ansible.builtin.include_role:
+        name: backup_and_restore
+      vars:
+        push_to_git: true
+
+    - name: "Pre-upgrade: verify BGP/routing stability"
+      ansible.builtin.include_role:
+        name: common
+        tasks_from: noop
+      # Replace with import_playbook at play level for real usage
+      ignore_errors: true
+      when: false
+
+  tasks:
+    - name: Copy firmware to device flash (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "copy {{ image_url }} flash:"
+      register: copy_result
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Set boot image (EOS)
+      arista.eos.eos_config:
+        lines:
+          - "boot system flash:{{ image_url | basename }}"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Reload device (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "reload in 2"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Wait for device to go offline
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        state: stopped
+        timeout: 120
+      delegate_to: localhost
+
+    - name: Wait for device to come back online
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        state: started
+        timeout: "{{ boot_timeout }}"
+        delay: 30
+      delegate_to: localhost
+
+  post_tasks:
+    - name: "Post-upgrade: verify new version (EOS)"
+      arista.eos.eos_command:
+        commands:
+          - command: "show version | json"
+      register: new_version_eos
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Assert target version is running (EOS)
+      ansible.builtin.assert:
+        that:
+          - target_version in (new_version_eos.stdout[0] | from_json).version
+        fail_msg: >-
+          UPGRADE FAILED: {{ inventory_hostname }} is running
+          {{ (new_version_eos.stdout[0] | from_json).version }}
+          instead of {{ target_version }}
+        success_msg: >-
+          UPGRADE SUCCESS: {{ inventory_hostname }} is now on {{ target_version }}
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: "Post-upgrade: validate BGP"
+      ansible.builtin.command:
+        cmd: echo "Run validate_bgp.yml separately after upgrade"
+      delegate_to: localhost

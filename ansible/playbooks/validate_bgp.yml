@@ -1,0 +1,78 @@
+---
+# ansible/playbooks/validate_bgp.yml
+# Validate BGP state across the topology:
+#   - All expected peers are in Established state
+#   - Prefix counts are within expected thresholds
+#   - No unexpected route flaps
+#
+# Variables:
+#   expected_peer_count  - minimum number of established peers (default: 1)
+#   min_prefix_count     - minimum accepted received-prefix count (default: 0)
+
+- name: Validate BGP State Across Topology
+  hosts: "{{ target_device | default('all') }}"
+  gather_facts: false
+  vars:
+    expected_peer_count: 1
+    min_prefix_count: 0
+
+  tasks:
+    - name: Get BGP summary (EOS)
+      arista.eos.eos_command:
+        commands:
+          - command: "show ip bgp summary | json"
+      register: bgp_summary_eos
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Get BGP summary (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - "show ip bgp summary"
+      register: bgp_summary_ios
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Parse BGP peers (EOS)
+      ansible.builtin.set_fact:
+        bgp_peers: "{{ (bgp_summary_eos.stdout[0] | from_json).vrfs.default.peers }}"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Count established peers (EOS)
+      ansible.builtin.set_fact:
+        established_count: >-
+          {{ bgp_peers | dict2items
+             | selectattr('value.peerState', 'equalto', 'Established')
+             | list | length }}
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Assert minimum established peers (EOS)
+      ansible.builtin.assert:
+        that:
+          - established_count | int >= expected_peer_count | int
+        fail_msg: >-
+          FAIL: {{ inventory_hostname }} has {{ established_count }} established peers,
+          expected at least {{ expected_peer_count }}.
+        success_msg: >-
+          PASS: {{ inventory_hostname }} has {{ established_count }} established BGP peers.
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Display BGP peer states (EOS)
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.key }}: state={{ item.value.peerState }}
+          prefixesReceived={{ item.value.prefixesReceived | default(0) }}
+      loop: "{{ bgp_peers | dict2items }}"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Display BGP summary (IOS)
+      ansible.builtin.debug:
+        var: bgp_summary_ios.stdout_lines
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Check for peer flaps (EOS)
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: {{ item.key }} has had {{ item.value.prefixesReceived }} resets!
+      loop: "{{ bgp_peers | dict2items }}"
+      when:
+        - ansible_network_os == "arista.eos.eos"
+        - item.value.prefixesReceived is defined

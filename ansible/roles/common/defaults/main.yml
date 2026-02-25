@@ -1,0 +1,25 @@
+---
+# common/defaults/main.yml – Default variables for common role
+ntp_servers:
+  - 0.pool.ntp.org
+  - 1.pool.ntp.org
+
+dns_servers:
+  - 8.8.8.8
+  - 8.8.4.4
+
+syslog_server: "172.20.12.2"
+syslog_port: 514
+
+login_banner: |
+  ====================================================
+  AUTHORIZED ACCESS ONLY
+  Unauthorized access is prohibited and may result in
+  legal action.
+  ====================================================
+
+snmp_location: "Network Lab"
+snmp_contact: "netops@example.com"
+snmp_community: "{{ lookup('env', 'SNMP_COMMUNITY') | default('public') }}"
+
+timezone: "UTC"

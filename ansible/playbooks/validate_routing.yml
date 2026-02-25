@@ -1,0 +1,89 @@
+---
+# ansible/playbooks/validate_routing.yml
+# Verify routing table state:
+#   - Expected prefixes are present
+#   - Default route exists (if expected)
+#   - No unexpected recursive route loops
+#   - Route source matches expected protocol
+#
+# Variables:
+#   required_prefixes  - list of prefixes that must exist (optional)
+#   check_default_route - verify 0.0.0.0/0 is installed (default: false)
+
+- name: Validate Routing Table
+  hosts: "{{ target_device | default('all') }}"
+  gather_facts: false
+  vars:
+    required_prefixes: []
+    check_default_route: false
+
+  tasks:
+    - name: Get routing table summary (EOS)
+      arista.eos.eos_command:
+        commands:
+          - command: "show ip route summary | json"
+          - command: "show ip route | json"
+      register: route_table_eos
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Get routing table summary (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - "show ip route summary"
+          - "show ip route"
+      register: route_table_ios
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Display route summary (EOS)
+      ansible.builtin.debug:
+        msg: "Route summary for {{ inventory_hostname }}: {{ route_table_eos.stdout[0] }}"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Display route summary (IOS)
+      ansible.builtin.debug:
+        var: route_table_ios.stdout_lines[0]
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Check for default route (EOS)
+      ansible.builtin.assert:
+        that:
+          - "'0.0.0.0/0' in route_table_eos.stdout[1]"
+        fail_msg: "FAIL: No default route found on {{ inventory_hostname }}"
+        success_msg: "PASS: Default route present on {{ inventory_hostname }}"
+      when:
+        - ansible_network_os == "arista.eos.eos"
+        - check_default_route | bool
+
+    - name: Check required prefixes are present (EOS)
+      ansible.builtin.assert:
+        that:
+          - "item in route_table_eos.stdout[1]"
+        fail_msg: "FAIL: Required prefix {{ item }} NOT found in routing table on {{ inventory_hostname }}"
+        success_msg: "PASS: Prefix {{ item }} present on {{ inventory_hostname }}"
+      loop: "{{ required_prefixes }}"
+      when:
+        - ansible_network_os == "arista.eos.eos"
+        - required_prefixes | length > 0
+
+    - name: Check required prefixes are present (IOS)
+      ansible.builtin.assert:
+        that:
+          - "item in route_table_ios.stdout[1]"
+        fail_msg: "FAIL: Required prefix {{ item }} NOT found on {{ inventory_hostname }}"
+        success_msg: "PASS: Prefix {{ item }} present on {{ inventory_hostname }}"
+      loop: "{{ required_prefixes }}"
+      when:
+        - ansible_network_os == "cisco.ios.ios"
+        - required_prefixes | length > 0
+
+    - name: Get BGP-learned route count (EOS)
+      arista.eos.eos_command:
+        commands:
+          - command: "show ip route bgp | json"
+      register: bgp_routes_eos
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Report BGP route count (EOS)
+      ansible.builtin.debug:
+        msg: "BGP routes on {{ inventory_hostname }}: {{ bgp_routes_eos.stdout[0] }}"
+      when: ansible_network_os == "arista.eos.eos"

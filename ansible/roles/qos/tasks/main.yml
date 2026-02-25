@@ -1,0 +1,98 @@
+---
+# ansible/roles/qos/tasks/main.yml
+# Apply QoS policies for traffic classification and rate-limiting.
+
+# ── Class maps / traffic classification ─────────────────────────────────────
+
+- name: Configure QoS class maps (EOS)
+  arista.eos.eos_config:
+    lines:
+      - "class-map match-any CRITICAL-TRAFFIC"
+      - " match ip dscp 46"
+      - "class-map match-any MANAGEMENT-TRAFFIC"
+      - " match ip dscp 16"
+      - "class-map match-any BULK-TRAFFIC"
+      - " match ip dscp 0"
+  when: ansible_network_os == "arista.eos.eos"
+
+- name: Configure QoS class maps (IOS)
+  cisco.ios.ios_config:
+    lines:
+      - "class-map match-any CRITICAL-TRAFFIC"
+      - " match ip dscp ef"
+      - "class-map match-any MANAGEMENT-TRAFFIC"
+      - " match ip dscp cs2"
+      - "class-map match-any BULK-TRAFFIC"
+      - " match ip dscp default"
+  when: ansible_network_os == "cisco.ios.ios"
+
+# ── Policy maps ─────────────────────────────────────────────────────────────
+
+- name: Configure QoS policy maps (EOS)
+  arista.eos.eos_config:
+    lines:
+      - "policy-map WAN-EGRESS"
+      - " class CRITICAL-TRAFFIC"
+      - "  priority percent {{ qos_critical_bw_pct | default(30) }}"
+      - " class MANAGEMENT-TRAFFIC"
+      - "  bandwidth percent {{ qos_mgmt_bw_pct | default(10) }}"
+      - " class BULK-TRAFFIC"
+      - "  bandwidth percent {{ qos_bulk_bw_pct | default(20) }}"
+      - " class class-default"
+      - "  bandwidth percent {{ qos_default_bw_pct | default(40) }}"
+  when: ansible_network_os == "arista.eos.eos"
+
+- name: Configure QoS policy maps (IOS)
+  cisco.ios.ios_config:
+    lines:
+      - "policy-map WAN-EGRESS"
+      - " class CRITICAL-TRAFFIC"
+      - "  priority percent {{ qos_critical_bw_pct | default(30) }}"
+      - " class MANAGEMENT-TRAFFIC"
+      - "  bandwidth percent {{ qos_mgmt_bw_pct | default(10) }}"
+      - " class BULK-TRAFFIC"
+      - "  bandwidth percent {{ qos_bulk_bw_pct | default(20) }}"
+      - " class class-default"
+      - "  fair-queue"
+  when: ansible_network_os == "cisco.ios.ios"
+
+# ── Apply policy to interfaces ───────────────────────────────────────────────
+
+- name: Apply QoS policy to WAN interfaces (EOS)
+  arista.eos.eos_config:
+    lines:
+      - "service-policy output WAN-EGRESS"
+    parents: "interface {{ item }}"
+  loop: "{{ qos_wan_interfaces | default([]) }}"
+  when: ansible_network_os == "arista.eos.eos"
+
+- name: Apply QoS policy to WAN interfaces (IOS)
+  cisco.ios.ios_config:
+    lines:
+      - "service-policy output WAN-EGRESS"
+    parents: "interface {{ item }}"
+  loop: "{{ qos_wan_interfaces | default([]) }}"
+  when: ansible_network_os == "cisco.ios.ios"
+
+# ── DSCP trust on access ports ───────────────────────────────────────────────
+
+- name: Enable DSCP rewrite on uplinks (EOS)
+  arista.eos.eos_config:
+    lines:
+      - "qos trust dscp"
+    parents: "interface {{ item }}"
+  loop: "{{ qos_uplink_interfaces | default([]) }}"
+  when: ansible_network_os == "arista.eos.eos"
+
+- name: Verify QoS policy (EOS)
+  arista.eos.eos_command:
+    commands: "show policy-map"
+  register: qos_verify
+  when: ansible_network_os == "arista.eos.eos"
+
+- name: Display QoS verification output
+  ansible.builtin.debug:
+    var: qos_verify.stdout_lines
+  when:
+    - ansible_network_os == "arista.eos.eos"
+    - qos_verify is defined

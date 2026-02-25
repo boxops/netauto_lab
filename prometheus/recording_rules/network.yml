@@ -1,0 +1,48 @@
+---
+# Pre-computed aggregations for faster dashboard queries
+groups:
+  - name: network_aggregations
+    interval: 60s
+    rules:
+      # 5-minute interface utilization (bps)
+      - record: job:interface_bps:rate5m
+        expr: |
+          (rate(ifHCInOctets[5m]) + rate(ifHCOutOctets[5m])) * 8
+
+      # Interface utilization percentage
+      - record: job:interface_utilization_pct:rate5m
+        expr: |
+          (rate(ifHCInOctets[5m]) + rate(ifHCOutOctets[5m])) * 8 / ifHighSpeed * 100
+
+      # Inbound traffic bps per instance (sum of all interfaces)
+      - record: instance:inbound_bps:rate5m
+        expr: sum by (instance) (rate(ifHCInOctets[5m]) * 8)
+
+      # Outbound traffic bps per instance
+      - record: instance:outbound_bps:rate5m
+        expr: sum by (instance) (rate(ifHCOutOctets[5m]) * 8)
+
+      # Error rate per interface
+      - record: job:interface_error_rate:rate5m
+        expr: |
+          (rate(ifInErrors[5m]) + rate(ifOutErrors[5m])) /
+          (rate(ifHCInUcastPkts[5m]) + rate(ifHCOutUcastPkts[5m]) + 0.001)
+
+      # Discard rate per interface
+      - record: job:interface_discard_rate:rate5m
+        expr: |
+          (rate(ifInDiscards[5m]) + rate(ifOutDiscards[5m])) /
+          (rate(ifHCInUcastPkts[5m]) + rate(ifHCOutUcastPkts[5m]) + 0.001)
+
+  - name: host_aggregations
+    interval: 60s
+    rules:
+      # Host CPU usage percentage
+      - record: instance:cpu_usage_pct:rate5m
+        expr: |
+          (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) * 100
+
+      # Host memory usage percentage
+      - record: instance:memory_usage_pct:avg
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100

@@ -1,0 +1,48 @@
+modules:
+  # HTTP 2xx check
+  http_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      valid_status_codes: []  # defaults to 2xx
+      method: GET
+      follow_redirects: true
+      fail_if_ssl: false
+      fail_if_not_ssl: false
+      preferred_ip_protocol: "ip4"
+
+  # HTTP POST check
+  http_post_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      method: POST
+      preferred_ip_protocol: "ip4"
+
+  # TCP connect check
+  tcp_connect:
+    prober: tcp
+    timeout: 5s
+
+  # SSH banner check
+  ssh_banner:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      query_response:
+        - expect: "^SSH-2.0-"
+
+  # ICMP ping
+  icmp:
+    prober: icmp
+    timeout: 5s
+    icmp:
+      preferred_ip_protocol: "ip4"
+
+  # ICMP IPv6
+  icmp_ttl5:
+    prober: icmp
+    timeout: 5s
+    icmp:
+      ttl: 5

@@ -1,0 +1,106 @@
+---
+# ansible/playbooks/remediate.yml
+# Auto-remediation playbook for configuration drift.
+# Compares running config against Nautobot Golden Config intended config
+# and pushes only the delta. Designed to be run after compliance_check.yml.
+#
+# Variables:
+#   dry_run         - if true, perform check mode only (default: true)
+#   remediate_limit - limit remediation to specific devices (optional)
+
+- name: Auto-Remediate Configuration Drift
+  hosts: "{{ remediate_limit | default('all') }}"
+  gather_facts: false
+  vars:
+    dry_run: true
+
+  pre_tasks:
+    - name: Warn about live remediation
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: dry_run=false — LIVE remediation will be applied to
+          {{ inventory_hostname }}. Review diffs carefully.
+      when: not (dry_run | bool)
+
+    - name: Fetch intended config from Nautobot Golden Config
+      ansible.builtin.uri:
+        url: "{{ nautobot_url }}/api/plugins/golden-config/config-render/{{ inventory_hostname }}/"
+        method: GET
+        headers:
+          Authorization: "Token {{ nautobot_token }}"
+          Accept: "application/json"
+        status_code: 200
+      register: intended_config_resp
+      delegate_to: localhost
+
+    - name: Set intended config fact
+      ansible.builtin.set_fact:
+        intended_config: "{{ intended_config_resp.json.device_rendered_config }}"
+
+  tasks:
+    - name: Apply intended config (EOS) - CHECK MODE
+      arista.eos.eos_config:
+        src: "{{ intended_config }}"
+        replace: block
+      check_mode: true
+      diff: true
+      register: config_diff_eos
+      when:
+        - ansible_network_os == "arista.eos.eos"
+        - dry_run | bool
+
+    - name: Apply intended config (EOS) - LIVE
+      arista.eos.eos_config:
+        src: "{{ intended_config }}"
+        replace: block
+      check_mode: false
+      diff: true
+      register: config_apply_eos
+      when:
+        - ansible_network_os == "arista.eos.eos"
+        - not (dry_run | bool)
+
+    - name: Apply intended config (IOS) - CHECK MODE
+      cisco.ios.ios_config:
+        src: "{{ intended_config }}"
+        replace: block
+      check_mode: true
+      diff: true
+      register: config_diff_ios
+      when:
+        - ansible_network_os == "cisco.ios.ios"
+        - dry_run | bool
+
+    - name: Apply intended config (IOS) - LIVE
+      cisco.ios.ios_config:
+        src: "{{ intended_config }}"
+        replace: block
+      check_mode: false
+      diff: true
+      register: config_apply_ios
+      when:
+        - ansible_network_os == "cisco.ios.ios"
+        - not (dry_run | bool)
+
+  post_tasks:
+    - name: Update Nautobot compliance status
+      ansible.builtin.uri:
+        url: "{{ nautobot_url }}/api/plugins/golden-config/config-compliance/"
+        method: POST
+        headers:
+          Authorization: "Token {{ nautobot_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          device: "{{ inventory_hostname }}"
+          remediated: "{{ not (dry_run | bool) }}"
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+        status_code: [200, 201]
+      delegate_to: localhost
+      when: not (dry_run | bool)
+
+    - name: Report remediation result
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: Remediation
+          {{ 'DRY RUN complete' if dry_run | bool else 'APPLIED' }}.

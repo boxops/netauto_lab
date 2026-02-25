@@ -1,0 +1,81 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # ── Syslog receiver – UDP ──────────────────────────────────
+  - job_name: syslog-udp
+    syslog:
+      listen_address: "0.0.0.0:1514"
+      listen_protocol: "udp"
+      idle_timeout: 60s
+      label_structured_data: yes
+      labels:
+        job: syslog
+    relabel_configs:
+      - source_labels: ['__syslog_message_hostname']
+        target_label: 'device'
+      - source_labels: ['__syslog_message_severity']
+        target_label: 'severity'
+      - source_labels: ['__syslog_message_facility']
+        target_label: 'facility'
+      - source_labels: ['__syslog_message_app_name']
+        target_label: 'app'
+    pipeline_stages:
+      # Detect and tag interface state changes
+      - match:
+          selector: '{job="syslog"}'
+          stages:
+            - regex:
+                expression: '(?i)(?P<if_event>interface .+ (changed|went|is) (up|down|administratively down))'
+            - labels:
+                if_event:
+      # Detect BGP events
+      - match:
+          selector: '{job="syslog"}'
+          stages:
+            - regex:
+                expression: '(?i)(?P<bgp_event>BGP.*(established|idle|active|connect|open|notification))'
+            - labels:
+                bgp_event:
+      # Drop debug messages to save storage
+      - match:
+          selector: '{severity="debug"}'
+          action: drop
+
+  # ── Syslog receiver – TCP ──────────────────────────────────
+  - job_name: syslog-tcp
+    syslog:
+      listen_address: "0.0.0.0:1514"
+      listen_protocol: "tcp"
+      idle_timeout: 60s
+      label_structured_data: yes
+      labels:
+        job: syslog
+        transport: tcp
+    relabel_configs:
+      - source_labels: ['__syslog_message_hostname']
+        target_label: 'device'
+      - source_labels: ['__syslog_message_severity']
+        target_label: 'severity'
+      - source_labels: ['__syslog_message_facility']
+        target_label: 'facility'
+
+  # ── Host system logs ───────────────────────────────────────
+  - job_name: varlogs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: varlogs
+          __path__: /var/log/{syslog,auth.log,kern.log}
+    pipeline_stages:
+      - multiline:
+          firstline: '^\w{3}\s+\d{1,2} \d{2}:\d{2}:\d{2}'
+          max_wait_time: 3s

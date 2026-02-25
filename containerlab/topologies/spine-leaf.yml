@@ -1,0 +1,119 @@
+---
+# Containerlab Spine-Leaf topology
+# 2 Spines, 3 Leaves – Arista cEOS-based Clos fabric
+# Requirements: containerlab >= 0.45, Docker, Arista cEOS image
+#
+# Deploy:  sudo containerlab deploy -t topologies/spine-leaf.yml
+# Destroy: sudo containerlab destroy -t topologies/spine-leaf.yml --cleanup
+
+name: spine-leaf
+
+mgmt:
+  network: clab
+  ipv4-gw: 172.20.20.1
+  ipv4-subnet: 172.20.20.0/24
+
+topology:
+  defaults:
+    kind: ceos
+    image: ceos:latest
+    startup-config: ../configs/{name}/startup-config.cfg
+
+  nodes:
+    # ── Spines ──────────────────────────────────────────────
+    spine1:
+      kind: ceos
+      image: ceos:latest
+      mgmt-ipv4: 172.20.20.11
+      startup-config: ../configs/spine1/startup-config.cfg
+      env:
+        CEOS_EOS_VERSION: "4.30.0F"
+      labels:
+        role: spine
+        site: site-lab
+        bgp-as: "65001"
+
+    spine2:
+      kind: ceos
+      image: ceos:latest
+      mgmt-ipv4: 172.20.20.12
+      startup-config: ../configs/spine2/startup-config.cfg
+      env:
+        CEOS_EOS_VERSION: "4.30.0F"
+      labels:
+        role: spine
+        site: site-lab
+        bgp-as: "65002"
+
+    # ── Leaves ───────────────────────────────────────────────
+    leaf1:
+      kind: ceos
+      image: ceos:latest
+      mgmt-ipv4: 172.20.20.21
+      startup-config: ../configs/leaf1/startup-config.cfg
+      env:
+        CEOS_EOS_VERSION: "4.30.0F"
+      labels:
+        role: leaf
+        site: site-lab
+        bgp-as: "65101"
+
+    leaf2:
+      kind: ceos
+      image: ceos:latest
+      mgmt-ipv4: 172.20.20.22
+      startup-config: ../configs/leaf2/startup-config.cfg
+      env:
+        CEOS_EOS_VERSION: "4.30.0F"
+      labels:
+        role: leaf
+        site: site-lab
+        bgp-as: "65102"
+
+    leaf3:
+      kind: ceos
+      image: ceos:latest
+      mgmt-ipv4: 172.20.20.23
+      startup-config: ../configs/leaf3/startup-config.cfg
+      env:
+        CEOS_EOS_VERSION: "4.30.0F"
+      labels:
+        role: leaf
+        site: site-lab
+        bgp-as: "65103"
+
+    # ── Linux clients ────────────────────────────────────────
+    client1:
+      kind: linux
+      image: alpine:latest
+      mgmt-ipv4: 172.20.20.31
+      exec:
+        - ip addr add 192.168.100.10/24 dev eth1
+        - ip route add default via 192.168.100.1
+      labels:
+        role: client
+
+    client2:
+      kind: linux
+      image: alpine:latest
+      mgmt-ipv4: 172.20.20.32
+      exec:
+        - ip addr add 192.168.200.10/24 dev eth1
+        - ip route add default via 192.168.200.1
+      labels:
+        role: client
+
+  links:
+    # Spine1 to Leaves
+    - endpoints: ["spine1:eth1", "leaf1:eth1"]
+    - endpoints: ["spine1:eth2", "leaf2:eth1"]
+    - endpoints: ["spine1:eth3", "leaf3:eth1"]
+
+    # Spine2 to Leaves
+    - endpoints: ["spine2:eth1", "leaf1:eth2"]
+    - endpoints: ["spine2:eth2", "leaf2:eth2"]
+    - endpoints: ["spine2:eth3", "leaf3:eth2"]
+
+    # Clients to Leaves
+    - endpoints: ["client1:eth1", "leaf1:eth3"]
+    - endpoints: ["client2:eth1", "leaf3:eth3"]

@@ -1,0 +1,107 @@
+---
+# health_check.yml – Multi-vendor health check playbook
+# Usage: ansible-playbook playbooks/health_check.yml -i inventory/lab.yml
+- name: Network-wide Health Check
+  hosts: all
+  gather_facts: false
+  vars:
+    cpu_threshold: 90
+    memory_threshold: 90
+    max_bgp_flaps: 5
+
+  tasks:
+    - name: Test device reachability
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        timeout: 10
+      delegate_to: localhost
+      register: reachability_test
+      ignore_errors: true
+
+    - name: Mark device unreachable
+      ansible.builtin.set_fact:
+        device_reachable: "{{ reachability_test.failed | default(false) | ternary(false, true) }}"
+
+    - name: Skip remaining tasks if device unreachable
+      ansible.builtin.meta: end_host
+      when: not device_reachable
+
+    - name: Gather device facts
+      ansible.netcommon.facts:
+      register: device_facts
+
+    - name: Check CPU utilization (EOS)
+      arista.eos.eos_command:
+        commands:
+          - show processes top once | include Cpu
+      register: cpu_output
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Check memory utilization (EOS)
+      arista.eos.eos_command:
+        commands:
+          - show version | include Memory
+      register: mem_output
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Check interface status (EOS)
+      arista.eos.eos_command:
+        commands:
+          - show interfaces status
+      register: intf_output
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Check BGP summary (EOS)
+      arista.eos.eos_command:
+        commands:
+          - show bgp summary | json
+      register: bgp_output
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Check CPU utilization (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - show processes cpu sorted | head 5
+      register: cpu_output
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Check interface status (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - show interfaces summary
+      register: intf_output
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Check BGP summary (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - show bgp summary
+      register: bgp_output
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Build health report entry
+      ansible.builtin.set_fact:
+        health_report:
+          device: "{{ inventory_hostname }}"
+          reachable: "{{ device_reachable }}"
+          platform: "{{ ansible_network_os }}"
+          cpu_output: "{{ cpu_output.stdout | default('N/A') }}"
+          interface_output: "{{ intf_output.stdout | default('N/A') }}"
+          bgp_output: "{{ bgp_output.stdout | default('N/A') }}"
+
+    - name: Display health report
+      ansible.builtin.debug:
+        var: health_report
+
+- name: Generate Health Summary Report
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Save health report to file
+      ansible.builtin.copy:
+        content: "{{ hostvars | to_nice_json }}"
+        dest: "/ansible/reports/health_check_{{ ansible_date_time.date }}.json"
+      vars:
+        # Filter only health_report keys
+        hostvars_filtered: "{{ hostvars | dict2items | selectattr('value.health_report', 'defined') | list }}"

@@ -1,0 +1,62 @@
+---
+# ansible/playbooks/check_hardware.yml
+# Hardware component status check:
+#   - Power supply status
+#   - Fan status
+#   - Temperature sensors
+#   - Optics/transceiver diagnostics
+
+- name: Check Hardware Component Status
+  hosts: "{{ target_device | default('all') }}"
+  gather_facts: false
+
+  tasks:
+    # ── EOS ──────────────────────────────────────────────────────────────────
+
+    - name: Get EOS environment status
+      arista.eos.eos_command:
+        commands:
+          - command: "show environment all | json"
+      register: eos_env
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Get EOS power supply status
+      arista.eos.eos_command:
+        commands:
+          - command: "show power detail | json"
+      register: eos_power
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Get EOS transceiver diagnostics
+      arista.eos.eos_command:
+        commands:
+          - command: "show interfaces transceiver detail | json"
+      register: eos_xcvr
+      when: ansible_network_os == "arista.eos.eos"
+
+    # ── IOS ───────────────────────────────────────────────────────────────────
+
+    - name: Get IOS environment status
+      cisco.ios.ios_command:
+        commands:
+          - "show environment all"
+          - "show power inline"
+      register: ios_env
+      when: ansible_network_os == "cisco.ios.ios"
+
+    # ── Parse and report ───────────────────────────────────────────────────
+
+    - name: Report temperature status (EOS)
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} temperature status: {{ eos_env.stdout[0] }}"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Report power status (EOS)
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} power status: {{ eos_power.stdout[0] }}"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Report IOS environment
+      ansible.builtin.debug:
+        var: ios_env.stdout_lines
+      when: ansible_network_os == "cisco.ios.ios"

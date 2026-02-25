@@ -1,0 +1,33 @@
+# Dynamic inventory via Nautobot GraphQL plugin
+# Used when running: ansible-inventory --list
+
+plugin: networktocode.nautobot.gql_inventory
+api_endpoint: "{{ lookup('env', 'NAUTOBOT_URL') | default('http://nautobot:8080') }}"
+token: "{{ lookup('env', 'NAUTOBOT_TOKEN') }}"
+validate_certs: false
+
+# Group devices by these attributes
+group_by:
+  - site
+  - role
+  - platform
+  - manufacturer
+  - tags
+
+# Variables to pull from Nautobot
+device_query_parameters:
+  - id
+  - name
+  - primary_ip4
+  - platform
+  - role
+  - site
+  - config_context
+  - interfaces
+  - tags
+
+compose:
+  ansible_host: primary_ip4.address | ansible.utils.ipaddr('address')
+  ansible_network_os: platform.slug | replace('-', '_')
+  device_role: role.slug
+  device_site: site.slug

@@ -1,0 +1,60 @@
+---
+# compliance_check.yml – Check device configs against Golden Config baselines
+# Usage: ansible-playbook playbooks/compliance_check.yml -i inventory/lab.yml
+
+- name: Run Nautobot Golden Config Compliance Check
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Trigger compliance check via Nautobot API
+      ansible.builtin.uri:
+        url: "{{ lookup('env', 'NAUTOBOT_URL') }}/api/plugins/golden-config/compliance-run/"
+        method: POST
+        headers:
+          Authorization: "Token {{ lookup('env', 'NAUTOBOT_TOKEN') }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          devices: "{{ groups['all'] }}"
+        status_code: [200, 201, 202]
+      register: compliance_job
+
+    - name: Wait for compliance job to complete
+      ansible.builtin.uri:
+        url: "{{ lookup('env', 'NAUTOBOT_URL') }}/api/extras/jobs/{{ compliance_job.json.job_id }}/result/"
+        headers:
+          Authorization: "Token {{ lookup('env', 'NAUTOBOT_TOKEN') }}"
+      register: job_result
+      until: job_result.json.status in ['completed', 'failed', 'errored']
+      retries: 30
+      delay: 10
+      when: compliance_job.json.job_id is defined
+
+    - name: Fetch compliance results
+      ansible.builtin.uri:
+        url: "{{ lookup('env', 'NAUTOBOT_URL') }}/api/plugins/golden-config/compliance/?limit=1000"
+        headers:
+          Authorization: "Token {{ lookup('env', 'NAUTOBOT_TOKEN') }}"
+        return_content: true
+      register: compliance_results
+
+    - name: Show non-compliant devices
+      ansible.builtin.debug:
+        msg: "Non-compliant: {{ item.device.name }} - Feature: {{ item.rule.feature }} - Rule: {{ item.rule.name }}"
+      loop: "{{ compliance_results.json.results }}"
+      when: item.compliance != true
+
+    - name: Generate compliance report
+      ansible.builtin.template:
+        src: "templates/compliance_report.j2"
+        dest: "/ansible/reports/compliance_{{ ansible_date_time.date }}.md"
+      vars:
+        results: "{{ compliance_results.json.results }}"
+      ignore_errors: true
+
+    - name: Fail if non-compliant devices found
+      ansible.builtin.fail:
+        msg: "Compliance check failed: {{ compliance_results.json.results | selectattr('compliance', 'equalto', false) | list | length }} device(s) are non-compliant."
+      when:
+        - compliance_results.json.results | selectattr('compliance', 'equalto', false) | list | length > 0
+        - fail_on_non_compliance | default(false)

@@ -1,4 +1,4 @@
-# **INTERMEDIATE NETWORK AUTOMATION STACK - AI Agent Requirements**
+# **INTERMEDIATE NETWORK AUTOMATION STACK**
 
 ## **Project Overview**
 

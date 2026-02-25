@@ -1,0 +1,104 @@
+---
+# ansible/playbooks/bounce_interface.yml
+# Safely bounce (shutdown + no shutdown) a network interface with pre and
+# post checks. Designed to be idempotent and rollback-safe.
+#
+# Required variables:
+#   target_interface  - interface name (e.g. Ethernet1)
+#   target_device     - hostname or group from inventory
+#
+# Example usage:
+#   ansible-playbook playbooks/bounce_interface.yml \
+#     -i inventory/nautobot.yml \
+#     --limit leaf1 \
+#     -e "target_interface=Ethernet1"
+
+- name: Bounce Interface with Safety Checks
+  hosts: "{{ target_device | default('all') }}"
+  gather_facts: false
+  vars:
+    bounce_delay_seconds: 5
+    check_bgp_recovery_timeout: 60
+
+  pre_tasks:
+    - name: Validate target_interface is defined
+      ansible.builtin.fail:
+        msg: "target_interface must be set (e.g. -e target_interface=Ethernet1)"
+      when: target_interface is not defined
+
+    - name: Capture pre-bounce interface state (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "show interfaces {{ target_interface }} status"
+          - "show ip bgp summary | json"
+      register: pre_state_eos
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Capture pre-bounce interface state (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - "show interfaces {{ target_interface }} | include line protocol"
+          - "show ip bgp summary"
+      register: pre_state_ios
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Display pre-bounce state
+      ansible.builtin.debug:
+        msg: "Pre-bounce state captured for {{ target_interface }} on {{ inventory_hostname }}"
+
+  tasks:
+    - name: Shutdown interface (EOS)
+      arista.eos.eos_config:
+        lines:
+          - "shutdown"
+        parents: "interface {{ target_interface }}"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Shutdown interface (IOS)
+      cisco.ios.ios_config:
+        lines:
+          - "shutdown"
+        parents: "interface {{ target_interface }}"
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Wait for bounce delay
+      ansible.builtin.pause:
+        seconds: "{{ bounce_delay_seconds }}"
+
+    - name: No-shutdown interface (EOS)
+      arista.eos.eos_config:
+        lines:
+          - "no shutdown"
+        parents: "interface {{ target_interface }}"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: No-shutdown interface (IOS)
+      cisco.ios.ios_config:
+        lines:
+          - "no shutdown"
+        parents: "interface {{ target_interface }}"
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Wait for interface to recover
+      ansible.builtin.pause:
+        seconds: 10
+
+  post_tasks:
+    - name: Capture post-bounce interface state (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "show interfaces {{ target_interface }} status"
+      register: post_state_eos
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Capture post-bounce interface state (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - "show interfaces {{ target_interface }} | include line protocol"
+      register: post_state_ios
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Display post-bounce summary
+      ansible.builtin.debug:
+        msg: >-
+          Interface {{ target_interface }} on {{ inventory_hostname }} bounce complete.

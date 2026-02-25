@@ -1,0 +1,66 @@
+---
+# ansible/playbooks/connectivity_test.yml
+# End-to-end reachability tests between network nodes.
+# Tests ICMP reachability, TCP port checks, and traceroute paths.
+#
+# Variables:
+#   test_targets    - list of IPs/hostnames to test from each device
+#   tcp_ports       - list of TCP ports to verify (default: [22, 179, 443])
+
+- name: End-to-End Connectivity Tests
+  hosts: "{{ target_device | default('all') }}"
+  gather_facts: false
+  vars:
+    tcp_ports:
+      - 22
+      - 179
+    icmp_count: 5
+    icmp_timeout: 2
+
+  tasks:
+    - name: Set default test targets if not provided
+      ansible.builtin.set_fact:
+        test_targets: "{{ test_targets | default(groups['all'] | map('extract', hostvars, 'ansible_host') | list) }}"
+
+    - name: Ping test targets (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "ping {{ item }} repeat {{ icmp_count }} timeout {{ icmp_timeout }}"
+      register: ping_results_eos
+      loop: "{{ test_targets }}"
+      when:
+        - ansible_network_os == "arista.eos.eos"
+        - item != ansible_host
+
+    - name: Ping test targets (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - "ping {{ item }} repeat {{ icmp_count }} timeout {{ icmp_timeout }}"
+      register: ping_results_ios
+      loop: "{{ test_targets }}"
+      when:
+        - ansible_network_os == "cisco.ios.ios"
+        - item != ansible_host
+
+    - name: Report ICMP results (EOS)
+      ansible.builtin.debug:
+        msg: >-
+          Ping from {{ inventory_hostname }} to {{ item.item }}:
+          {{ 'PASS' if 'bytes from' in item.stdout[0] else 'FAIL' }}
+      loop: "{{ ping_results_eos.results | default([]) }}"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Traceroute to gateway (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "traceroute {{ item }}"
+      register: traceroute_results
+      loop: "{{ traceroute_targets | default([]) }}"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Display traceroute results
+      ansible.builtin.debug:
+        var: traceroute_results
+      when:
+        - ansible_network_os == "arista.eos.eos"
+        - traceroute_targets is defined

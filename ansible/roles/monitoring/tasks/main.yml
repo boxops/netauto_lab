@@ -1,0 +1,40 @@
+---
+# monitoring/tasks/main.yml – Configure SNMP and streaming telemetry
+
+- name: Configure SNMPv3 (EOS)
+  arista.eos.eos_config:
+    lines:
+      - "snmp-server engineID local {{ inventory_hostname | hash('md5') | truncate(20, true, '') }}"
+      - "snmp-server group netauto-v3 v3 priv"
+      - "snmp-server user {{ lookup('env', 'SNMPV3_USER') | default('netauto') }} netauto-v3 v3 auth sha {{ lookup('env', 'SNMPV3_AUTH_PASS') }} priv aes128 {{ lookup('env', 'SNMPV3_PRIV_PASS') }}"
+      - "snmp-server community {{ snmp_community | default('public') }} ro"
+      - "snmp-server host {{ syslog_server }} version 2c {{ snmp_community | default('public') }}"
+  when: ansible_network_os == "arista.eos.eos"
+
+- name: Configure SNMPv3 (IOS)
+  cisco.ios.ios_config:
+    lines:
+      - "snmp-server group netauto-v3 v3 priv"
+      - "snmp-server user {{ lookup('env', 'SNMPV3_USER') | default('netauto') }} netauto-v3 v3 auth sha {{ lookup('env', 'SNMPV3_AUTH_PASS') }} priv aes 128 {{ lookup('env', 'SNMPV3_PRIV_PASS') }}"
+      - "snmp-server host {{ syslog_server }} version 2c {{ snmp_community | default('public') }}"
+  when: ansible_network_os == "cisco.ios.ios"
+
+- name: Configure syslog (EOS)
+  arista.eos.eos_logging_global:
+    config:
+      hosts:
+        - name: "{{ syslog_server }}"
+          port: "{{ syslog_port | default(514) }}"
+      buffered:
+        buffer_size: 32000
+  when: ansible_network_os == "arista.eos.eos"
+
+- name: Configure syslog (IOS)
+  cisco.ios.ios_logging_global:
+    config:
+      hosts:
+        - ipv4: "{{ syslog_server }}"
+          transport:
+            udp:
+              port: "{{ syslog_port | default(514) }}"
+  when: ansible_network_os == "cisco.ios.ios"

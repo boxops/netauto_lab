@@ -1,0 +1,105 @@
+---
+# ansible/playbooks/clear_bgp_session.yml
+# Reset BGP sessions for specified peers with safeguards:
+#   1. Verify current peer state before clearing.
+#   2. Perform soft reset by default (no hard reset unless confirmed).
+#   3. Verify peer recovers post-clear.
+#
+# Required variables:
+#   bgp_peer  - peer IP address to clear (or 'all')
+#
+# Example usage:
+#   ansible-playbook playbooks/clear_bgp_session.yml \
+#     -i inventory/nautobot.yml --limit spine1 \
+#     -e "bgp_peer=10.0.0.2"
+
+- name: Clear BGP Session with Safeguards
+  hosts: "{{ target_device | default('all') }}"
+  gather_facts: false
+  vars:
+    bgp_clear_method: "soft"   # 'soft' (default) or 'hard'
+    bgp_recovery_wait: 30
+
+  pre_tasks:
+    - name: Validate bgp_peer is defined
+      ansible.builtin.fail:
+        msg: "bgp_peer must be set (e.g. -e bgp_peer=10.0.0.2)"
+      when: bgp_peer is not defined
+
+    - name: Check current BGP peer state (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "show ip bgp neighbors {{ bgp_peer }} | include BGP state"
+      register: pre_bgp_state_eos
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Check current BGP peer state (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - "show ip bgp neighbors {{ bgp_peer }} | include BGP state"
+      register: pre_bgp_state_ios
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Display pre-clear peer state
+      ansible.builtin.debug:
+        msg: "BGP peer {{ bgp_peer }} on {{ inventory_hostname }} - pre-clear state captured"
+
+  tasks:
+    - name: Soft-clear BGP session (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "clear ip bgp {{ bgp_peer }} soft"
+      when:
+        - ansible_network_os == "arista.eos.eos"
+        - bgp_clear_method == "soft"
+
+    - name: Hard-reset BGP session (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "clear ip bgp {{ bgp_peer }}"
+      when:
+        - ansible_network_os == "arista.eos.eos"
+        - bgp_clear_method == "hard"
+
+    - name: Soft-clear BGP session (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - "clear ip bgp {{ bgp_peer }} soft"
+      when:
+        - ansible_network_os == "cisco.ios.ios"
+        - bgp_clear_method == "soft"
+
+    - name: Hard-reset BGP session (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - "clear ip bgp {{ bgp_peer }}"
+      when:
+        - ansible_network_os == "cisco.ios.ios"
+        - bgp_clear_method == "hard"
+
+    - name: Wait for BGP session recovery
+      ansible.builtin.pause:
+        seconds: "{{ bgp_recovery_wait }}"
+
+  post_tasks:
+    - name: Verify BGP peer re-established (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "show ip bgp neighbors {{ bgp_peer }} | include BGP state"
+      register: post_bgp_state_eos
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Verify BGP peer re-established (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - "show ip bgp neighbors {{ bgp_peer }} | include BGP state"
+      register: post_bgp_state_ios
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Assert BGP session is Established (EOS)
+      ansible.builtin.assert:
+        that:
+          - "'Established' in post_bgp_state_eos.stdout[0]"
+        fail_msg: "BGP peer {{ bgp_peer }} did NOT recover to Established state!"
+        success_msg: "BGP peer {{ bgp_peer }} is Established."
+      when: ansible_network_os == "arista.eos.eos"

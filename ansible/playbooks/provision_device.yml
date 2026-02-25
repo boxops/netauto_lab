@@ -1,0 +1,68 @@
+---
+# provision_device.yml – Zero-touch provisioning workflow
+# Usage: ansible-playbook playbooks/provision_device.yml -i inventory/lab.yml
+#        -e "target_device=leaf4 device_role=leaf device_site=site-lab"
+
+- name: Provision New Network Device
+  hosts: "{{ target_device | default('new_devices') }}"
+  gather_facts: false
+  serial: 1
+  vars:
+    provision_timeout: 300
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - ansible_host is defined
+          - ansible_network_os is defined
+        fail_msg: "Missing required variables: ansible_host, ansible_network_os"
+
+    - name: Wait for device SSH availability
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        delay: 5
+        timeout: "{{ provision_timeout }}"
+      delegate_to: localhost
+
+  roles:
+    - role: common
+    - role: interfaces
+    - role: routing
+    - role: security
+    - role: monitoring
+
+  post_tasks:
+    - name: Verify device is reachable after provisioning
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        timeout: 30
+      delegate_to: localhost
+
+    - name: Run health check post-provisioning
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/health_check.yml"
+
+    - name: Register device in Nautobot
+      ansible.builtin.uri:
+        url: "{{ lookup('env', 'NAUTOBOT_URL') }}/api/dcim/devices/"
+        method: POST
+        headers:
+          Authorization: "Token {{ lookup('env', 'NAUTOBOT_TOKEN') }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ inventory_hostname }}"
+          device_type: "{{ device_type_slug | default('ceos') }}"
+          role: "{{ device_role | default('leaf') }}"
+          site: "{{ device_site | default('site-lab') }}"
+          status: "active"
+          primary_ip4: "{{ ansible_host }}/24"
+        status_code: [200, 201]
+      delegate_to: localhost
+      ignore_errors: true
+
+    - name: Provision complete notification
+      ansible.builtin.debug:
+        msg: "Device {{ inventory_hostname }} ({{ ansible_host }}) provisioned and registered successfully."

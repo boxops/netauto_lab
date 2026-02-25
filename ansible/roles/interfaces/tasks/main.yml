@@ -1,0 +1,50 @@
+---
+# interfaces/tasks/main.yml – Interface configuration management
+
+- name: Configure interfaces (EOS)
+  arista.eos.eos_interfaces:
+    config: "{{ interfaces_config | default([]) }}"
+    state: merged
+  when:
+    - ansible_network_os == "arista.eos.eos"
+    - interfaces_config is defined
+
+- name: Configure interface IP addresses (EOS)
+  arista.eos.eos_l3_interfaces:
+    config: "{{ l3_interfaces_config | default([]) }}"
+    state: merged
+  when:
+    - ansible_network_os == "arista.eos.eos"
+    - l3_interfaces_config is defined
+
+- name: Configure interfaces (IOS)
+  cisco.ios.ios_interfaces:
+    config: "{{ interfaces_config | default([]) }}"
+    state: merged
+  when:
+    - ansible_network_os == "cisco.ios.ios"
+    - interfaces_config is defined
+
+- name: Configure interface IP addresses (IOS)
+  cisco.ios.ios_l3_interfaces:
+    config: "{{ l3_interfaces_config | default([]) }}"
+    state: merged
+  when:
+    - ansible_network_os == "cisco.ios.ios"
+    - l3_interfaces_config is defined
+
+- name: Configure VLANs (EOS)
+  arista.eos.eos_vlans:
+    config: "{{ vlans | default([]) }}"
+    state: merged
+  when:
+    - ansible_network_os == "arista.eos.eos"
+    - vlans is defined
+
+- name: Configure L2 interfaces (EOS)
+  arista.eos.eos_l2_interfaces:
+    config: "{{ l2_interfaces_config | default([]) }}"
+    state: merged
+  when:
+    - ansible_network_os == "arista.eos.eos"
+    - l2_interfaces_config is defined

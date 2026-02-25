@@ -1,0 +1,88 @@
+---
+# deploy_config.yml – Push intended configurations from Nautobot Golden Config
+# Usage: ansible-playbook playbooks/deploy_config.yml -i inventory/lab.yml
+#        ansible-playbook playbooks/deploy_config.yml -i inventory/lab.yml --check
+
+- name: Fetch Intended Configurations from Nautobot
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Get intended configs from Nautobot Golden Config
+      ansible.builtin.uri:
+        url: "{{ lookup('env', 'NAUTOBOT_URL') }}/api/plugins/golden-config/config-plans/?device={{ item }}&status=approved"
+        headers:
+          Authorization: "Token {{ lookup('env', 'NAUTOBOT_TOKEN') }}"
+        return_content: true
+      register: intended_configs
+      loop: "{{ groups['all'] }}"
+
+    - name: Store intended configs as facts
+      ansible.builtin.set_fact:
+        device_intended_configs: >-
+          {{
+            device_intended_configs | default({}) | combine({
+              item.item: (item.json.results[0].config_plan | default('')) if item.json.results else ''
+            })
+          }}
+      loop: "{{ intended_configs.results }}"
+      when: item.json is defined
+
+- name: Deploy Configurations to Devices
+  hosts: all
+  gather_facts: false
+  serial: 5
+  tasks:
+    - name: Get intended config for this device
+      ansible.builtin.set_fact:
+        intended_config: "{{ hostvars['localhost'].device_intended_configs[inventory_hostname] | default('') }}"
+
+    - name: Skip if no intended config available
+      ansible.builtin.meta: end_host
+      when: intended_config == ''
+
+    - name: Deploy configuration (EOS)
+      arista.eos.eos_config:
+        src: "{{ intended_config }}"
+        replace: block
+        diff_against: running
+        save_when: changed
+      register: deploy_result
+      when: ansible_network_os == "arista.eos.eos"
+      check_mode: "{{ ansible_check_mode }}"
+      notify: Record config change
+
+    - name: Deploy configuration (IOS)
+      cisco.ios.ios_config:
+        src: "{{ intended_config }}"
+        replace: block
+        diff_against: running
+        save_when: changed
+      register: deploy_result
+      when: ansible_network_os == "cisco.ios.ios"
+      check_mode: "{{ ansible_check_mode }}"
+      notify: Record config change
+
+    - name: Show what would change (check mode)
+      ansible.builtin.debug:
+        msg: "{{ deploy_result.diff | default('No diff available') }}"
+      when: ansible_check_mode
+
+  handlers:
+    - name: Record config change
+      ansible.builtin.uri:
+        url: "{{ lookup('env', 'NAUTOBOT_URL') }}/api/extras/change-log/"
+        method: POST
+        headers:
+          Authorization: "Token {{ lookup('env', 'NAUTOBOT_TOKEN') }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          user_name: "ansible"
+          action: "update"
+          changed_object_type: "dcim.device"
+          object_repr: "{{ inventory_hostname }}"
+          object_data:
+            config_deployed: "{{ ansible_date_time.iso8601 }}"
+        status_code: [200, 201]
+      delegate_to: localhost
+      ignore_errors: true

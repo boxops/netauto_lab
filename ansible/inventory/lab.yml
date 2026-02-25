@@ -1,0 +1,71 @@
+---
+# Static lab inventory for Containerlab devices
+# Used when Nautobot is unavailable or for initial bootstrap
+
+all:
+  children:
+    lab:
+      children:
+        spines:
+          hosts:
+            spine1:
+              ansible_host: 172.20.20.11
+              ansible_network_os: arista.eos.eos
+              ansible_user: admin
+              ansible_password: "{{ vault_device_password }}"
+              ansible_become: true
+              ansible_become_method: enable
+              device_role: spine
+              bgp_as: 65001
+            spine2:
+              ansible_host: 172.20.20.12
+              ansible_network_os: arista.eos.eos
+              ansible_user: admin
+              ansible_password: "{{ vault_device_password }}"
+              ansible_become: true
+              ansible_become_method: enable
+              device_role: spine
+              bgp_as: 65002
+
+        leaves:
+          hosts:
+            leaf1:
+              ansible_host: 172.20.20.21
+              ansible_network_os: arista.eos.eos
+              ansible_user: admin
+              ansible_password: "{{ vault_device_password }}"
+              ansible_become: true
+              ansible_become_method: enable
+              device_role: leaf
+              bgp_as: 65101
+              vlans: [100, 200]
+            leaf2:
+              ansible_host: 172.20.20.22
+              ansible_network_os: arista.eos.eos
+              ansible_user: admin
+              ansible_password: "{{ vault_device_password }}"
+              ansible_become: true
+              ansible_become_method: enable
+              device_role: leaf
+              bgp_as: 65102
+              vlans: [100, 200]
+            leaf3:
+              ansible_host: 172.20.20.23
+              ansible_network_os: arista.eos.eos
+              ansible_user: admin
+              ansible_password: "{{ vault_device_password }}"
+              ansible_become: true
+              ansible_become_method: enable
+              device_role: leaf
+              bgp_as: 65103
+              vlans: [100, 200, 300]
+
+  vars:
+    ansible_connection: network_cli
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+    ntp_servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+    snmp_community: "{{ lookup('env', 'SNMP_COMMUNITY') | default('public') }}"
+    syslog_server: 172.20.12.2
+    syslog_port: 514

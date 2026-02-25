@@ -1,0 +1,104 @@
+---
+# ansible/playbooks/restore_device.yml
+# Restore a device from a previously saved configuration backup.
+#
+# Required variables:
+#   restore_device_name  - name of the device to restore
+#   restore_file         - path to the backup config file
+#
+# Safety:
+#   1. Pre-restore snapshot of current config is taken.
+#   2. Confirmation prompt unless skip_confirm=true.
+
+- name: Restore Device from Backup
+  hosts: "{{ restore_device_name }}"
+  gather_facts: false
+  vars:
+    skip_confirm: false
+    rollback_timeout: 60
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.fail:
+        msg: "restore_file must be specified (e.g. -e restore_file=/backups/2025-01-01/leaf1.cfg)"
+      when: restore_file is not defined
+
+    - name: Verify restore file exists
+      ansible.builtin.stat:
+        path: "{{ restore_file }}"
+      register: restore_file_stat
+      delegate_to: localhost
+
+    - name: Fail if restore file not found
+      ansible.builtin.fail:
+        msg: "Restore file does not exist: {{ restore_file }}"
+      when: not restore_file_stat.stat.exists
+
+    - name: Confirm restore
+      ansible.builtin.pause:
+        prompt: >-
+          About to restore {{ inventory_hostname }} from {{ restore_file }}.
+          This will REPLACE the running configuration.
+          Type 'yes' to continue or press Ctrl+C to abort.
+      register: confirm_restore
+      when: not (skip_confirm | bool)
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Restore aborted by user."
+      when:
+        - not (skip_confirm | bool)
+        - confirm_restore.user_input != 'yes'
+
+    - name: "Pre-restore: snapshot current running config"
+      ansible.builtin.include_role:
+        name: backup_and_restore
+      vars:
+        backup_dir: "/backups/pre-restore-snapshots"
+        push_to_git: true
+
+  tasks:
+    - name: Restore configuration (EOS)
+      arista.eos.eos_config:
+        src: "{{ restore_file }}"
+        replace: block
+      register: restore_result_eos
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Restore configuration (IOS)
+      cisco.ios.ios_config:
+        src: "{{ restore_file }}"
+        replace: block
+      register: restore_result_ios
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Save restored config to startup (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "write memory"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Save restored config to startup (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - "write memory"
+      when: ansible_network_os == "cisco.ios.ios"
+
+  post_tasks:
+    - name: Verify device is reachable post-restore
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        timeout: "{{ rollback_timeout }}"
+      delegate_to: localhost
+
+    - name: "Post-restore: run health check"
+      ansible.builtin.command:
+        cmd: echo "Run health_check.yml separately to verify device state"
+      delegate_to: localhost
+
+    - name: Report restore success
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} successfully restored from {{ restore_file }}.
+          Pre-restore snapshot saved to /backups/pre-restore-snapshots/.

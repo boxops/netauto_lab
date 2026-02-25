@@ -1,0 +1,85 @@
+---
+# common/tasks/main.yml – Common baseline configuration for all devices
+
+- name: Include platform-specific tasks
+  ansible.builtin.include_tasks: "{{ ansible_network_os | replace('.', '_') }}.yml"
+  ignore_errors: true
+
+- name: Apply common EOS configuration
+  arista.eos.eos_config:
+    lines:
+      # Hostname
+      - "hostname {{ inventory_hostname }}"
+      # NTP
+      - "ntp server {{ ntp_servers[0] }}"
+      - "ntp server {{ ntp_servers[1] }}"
+      # DNS
+      - "ip name-server vrf default {{ dns_servers[0] }}"
+      - "ip name-server vrf default {{ dns_servers[1] }}"
+      # Timezone
+      - "clock timezone {{ timezone }}"
+      # AAA
+      - "aaa root secret 0 {{ vault_device_password | default('changeme') }}"
+      # Login banner
+      - "banner login EOF"
+      - "{{ login_banner }}"
+      - "EOF"
+      # Enable SSH
+      - "management ssh"
+      - " idle-timeout 10"
+      - " authentication mode keyboard-interactive"
+      - "!"
+      # Disable telnet
+      - "no service unsupported-transceiver"
+      # Logging
+      - "logging host {{ syslog_server }} {{ syslog_port }}"
+      - "logging buffered 32000 debugging"
+      - "logging console errors"
+      # SNMP
+      - "snmp-server contact {{ snmp_contact }}"
+      - "snmp-server location {{ snmp_location }}"
+      - "snmp-server community {{ snmp_community }} ro"
+      # Disable unused services
+      - "no ip http server"
+      - "no ip http secure-server"
+    save_when: changed
+  when: ansible_network_os == "arista.eos.eos"
+
+- name: Apply common IOS/IOS-XE configuration
+  cisco.ios.ios_config:
+    lines:
+      - "hostname {{ inventory_hostname }}"
+      - "ntp server {{ ntp_servers[0] }}"
+      - "ntp server {{ ntp_servers[1] }}"
+      - "ip name-server {{ dns_servers[0] }}"
+      - "ip name-server {{ dns_servers[1] }}"
+      - "clock timezone UTC 0 0"
+      - "logging trap informational"
+      - "logging {{ syslog_server }}"
+      - "snmp-server contact {{ snmp_contact }}"
+      - "snmp-server location {{ snmp_location }}"
+      - "snmp-server community {{ snmp_community }} RO"
+      - "no ip http server"
+      - "no ip http secure-server"
+      - "service password-encryption"
+      - "ip ssh version 2"
+      - "ip ssh time-out 60"
+      - "ip ssh authentication-retries 3"
+    save_when: changed
+  when: ansible_network_os == "cisco.ios.ios"
+
+- name: Save configuration
+  ansible.netcommon.cli_command:
+    command: "{{ save_command }}"
+  vars:
+    save_command: >-
+      {% if ansible_network_os == 'arista.eos.eos' %}
+      copy running-config startup-config
+      {% elif ansible_network_os in ['cisco.ios.ios', 'cisco.nxos.nxos'] %}
+      copy running-config startup-config
+      {% elif ansible_network_os == 'junipernetworks.junos.junos' %}
+      commit and-quit
+      {% else %}
+      copy running-config startup-config
+      {% endif %}
+  ignore_errors: true

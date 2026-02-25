@@ -1,0 +1,89 @@
+---
+# backup_config.yml – Back up device configurations to Nautobot / Git
+# Usage: ansible-playbook playbooks/backup_config.yml -i inventory/lab.yml
+- name: Backup Device Configurations
+  hosts: all
+  gather_facts: false
+  serial: 10  # Run 10 devices at a time
+
+  tasks:
+    - name: Verify device is reachable
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        timeout: 10
+      delegate_to: localhost
+
+    - name: Backup running configuration (EOS)
+      arista.eos.eos_command:
+        commands:
+          - show running-config
+      register: config_output
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Backup running configuration (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - show running-config
+      register: config_output
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Backup running configuration (IOS-XR)
+      cisco.iosxr.iosxr_command:
+        commands:
+          - show running-config
+      register: config_output
+      when: ansible_network_os == "cisco.iosxr.iosxr"
+
+    - name: Backup running configuration (NX-OS)
+      cisco.nxos.nxos_command:
+        commands:
+          - show running-config
+      register: config_output
+      when: ansible_network_os == "cisco.nxos.nxos"
+
+    - name: Backup running configuration (JunOS)
+      junipernetworks.junos.junos_command:
+        commands:
+          - show configuration
+      register: config_output
+      when: ansible_network_os == "junipernetworks.junos.junos"
+
+    - name: Create local backup directory
+      ansible.builtin.file:
+        path: "/ansible/backups/{{ ansible_date_time.date }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+
+    - name: Save configuration to local file
+      ansible.builtin.copy:
+        content: "{{ config_output.stdout[0] }}"
+        dest: "/ansible/backups/{{ ansible_date_time.date }}/{{ inventory_hostname }}.cfg"
+      delegate_to: localhost
+      when: config_output.stdout is defined
+
+    - name: Push backup to Nautobot Golden Config
+      ansible.builtin.uri:
+        url: "{{ lookup('env', 'NAUTOBOT_URL') }}/api/plugins/golden-config/config-backups/"
+        method: POST
+        headers:
+          Authorization: "Token {{ lookup('env', 'NAUTOBOT_TOKEN') }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          device: "{{ inventory_hostname }}"
+          backup_config: "{{ config_output.stdout[0] }}"
+          created: "{{ ansible_date_time.iso8601 }}"
+        status_code: [200, 201]
+      delegate_to: localhost
+      when: config_output.stdout is defined
+      ignore_errors: true
+
+- name: Backup Summary
+  hosts: localhost
+  gather_facts: true
+  tasks:
+    - name: Report backup results
+      ansible.builtin.debug:
+        msg: "Backup complete. Files saved to /ansible/backups/{{ ansible_date_time.date }}/"

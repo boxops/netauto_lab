@@ -1,0 +1,195 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "1": {
+                  "text": "Idle",
+                  "color": "blue"
+                },
+                "2": {
+                  "text": "Connect",
+                  "color": "yellow"
+                },
+                "3": {
+                  "text": "Active",
+                  "color": "orange"
+                },
+                "4": {
+                  "text": "OpenSent",
+                  "color": "orange"
+                },
+                "5": {
+                  "text": "OpenConfirm",
+                  "color": "orange"
+                },
+                "6": {
+                  "text": "Established",
+                  "color": "green"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 6
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "BGP Peer States",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "bgpPeerState",
+          "legendFormat": "{{ instance }} -> {{ bgpPeerRemoteAddr }}"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 2,
+      "title": "BGP Received Prefixes",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "bgpPeerInPrefixes",
+          "legendFormat": "{{ instance }} <- {{ bgpPeerRemoteAddr }}"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 3,
+      "title": "BGP Session Uptime",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "bgpPeerFsmEstablishedTime",
+          "legendFormat": "{{ instance }} <-> {{ bgpPeerRemoteAddr }}"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "Loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 4,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "sortOrder": "Descending"
+      },
+      "title": "BGP-related Syslog Events",
+      "type": "logs",
+      "targets": [
+        {
+          "expr": "{job=\"syslog\"} |= \"BGP\"",
+          "legendFormat": ""
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": [
+    "network",
+    "bgp",
+    "routing"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "BGP Monitoring",
+  "uid": "bgp-monitoring",
+  "version": 1
+}

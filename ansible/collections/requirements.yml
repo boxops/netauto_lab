@@ -1,0 +1,23 @@
+---
+# Ansible collection requirements for network automation
+collections:
+  - name: ansible.netcommon
+    version: ">=5.0.0"
+  - name: ansible.utils
+    version: ">=3.0.0"
+  - name: arista.eos
+    version: ">=6.0.0"
+  - name: cisco.ios
+    version: ">=4.0.0"
+  - name: cisco.iosxr
+    version: ">=6.0.0"
+  - name: cisco.nxos
+    version: ">=5.0.0"
+  - name: junipernetworks.junos
+    version: ">=6.0.0"
+  - name: community.general
+    version: ">=8.0.0"
+  - name: networktocode.nautobot
+    version: ">=4.0.0"
+  - name: community.crypto
+    version: ">=2.0.0"

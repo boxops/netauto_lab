@@ -1,0 +1,77 @@
+---
+# ansible/playbooks/full_backup.yml
+# Comprehensive backup of all device configs, Nautobot database,
+# Prometheus snapshots, and Grafana dashboards.
+#
+# This is the "belt and suspenders" backup — run before major changes
+# or on a scheduled basis.
+
+- name: Full System Backup
+  hosts: "{{ target_device | default('all') }}"
+  gather_facts: false
+  vars:
+    backup_base_dir: "/backups"
+    push_to_git: true
+
+  tasks:
+    - name: Set backup timestamp
+      ansible.builtin.set_fact:
+        backup_ts: "{{ ansible_date_time.date }}_{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}"
+      run_once: true
+
+    - name: Create timestamped backup directory
+      ansible.builtin.file:
+        path: "{{ backup_base_dir }}/{{ backup_ts }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      run_once: true
+
+    # ── Device config backup ──────────────────────────────────────────────
+
+    - name: Backup device configurations
+      ansible.builtin.include_role:
+        name: backup_and_restore
+      vars:
+        backup_dir: "{{ backup_base_dir }}/{{ backup_ts }}"
+        restore_mode: false
+        push_to_git: false   # We commit once at the end
+
+    # ── Git commit all configs ────────────────────────────────────────────
+
+    - name: Commit all configs to Git
+      ansible.builtin.shell: |
+        cd {{ backup_base_dir }}
+        git add {{ backup_ts }}/
+        git diff --cached --quiet || git commit -m "full-backup: {{ backup_ts }} ({{ ansible_play_hosts | length }} devices)"
+      delegate_to: localhost
+      run_once: true
+      changed_when: true
+      when: push_to_git | bool
+
+- name: Backup Infrastructure Services
+  hosts: localhost
+  gather_facts: true
+  vars:
+    backup_base_dir: "/backups"
+
+  tasks:
+    - name: Trigger Prometheus snapshot
+      ansible.builtin.uri:
+        url: "{{ prometheus_url | default('http://prometheus:9090') }}/api/v1/admin/tsdb/snapshot"
+        method: POST
+        status_code: [200, 204]
+      register: prom_snapshot
+      ignore_errors: true
+
+    - name: Export Nautobot database backup
+      ansible.builtin.shell: |
+        docker compose exec -T nautobot-db pg_dump -U nautobot nautobot | \
+          gzip > {{ backup_base_dir }}/{{ ansible_date_time.date }}_nautobot_db.sql.gz
+      delegate_to: localhost
+      ignore_errors: true
+      changed_when: true
+
+    - name: Report backup completion
+      ansible.builtin.debug:
+        msg: "Full system backup complete. Location: {{ backup_base_dir }}"

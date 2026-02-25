@@ -1,0 +1,91 @@
+---
+# ansible/playbooks/document_topology.yml
+# Auto-generate topology documentation from live device data and Nautobot.
+# Outputs: Mermaid diagram, LLDP neighbor table, interface summary CSV,
+# and Markdown documentation file.
+
+- name: Document Network Topology
+  hosts: localhost
+  gather_facts: true
+  vars:
+    docs_output_dir: "/reports/topology"
+    topology_name: "{{ topology_name | default('network-topology') }}"
+
+  tasks:
+    - name: Create topology docs output directory
+      ansible.builtin.file:
+        path: "{{ docs_output_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Fetch all devices from Nautobot
+      ansible.builtin.uri:
+        url: "{{ nautobot_url }}/api/dcim/devices/?limit=200"
+        method: GET
+        headers:
+          Authorization: "Token {{ nautobot_token }}"
+          Accept: "application/json"
+        status_code: 200
+      register: nb_devices
+
+    - name: Fetch all cables from Nautobot
+      ansible.builtin.uri:
+        url: "{{ nautobot_url }}/api/dcim/cables/?limit=500"
+        method: GET
+        headers:
+          Authorization: "Token {{ nautobot_token }}"
+          Accept: "application/json"
+        status_code: 200
+      register: nb_cables
+
+    - name: Fetch all interfaces from Nautobot
+      ansible.builtin.uri:
+        url: "{{ nautobot_url }}/api/dcim/interfaces/?limit=1000"
+        method: GET
+        headers:
+          Authorization: "Token {{ nautobot_token }}"
+          Accept: "application/json"
+        status_code: 200
+      register: nb_interfaces
+
+    - name: Generate Mermaid topology diagram
+      ansible.builtin.template:
+        src: "../templates/topology.mermaid.j2"
+        dest: "{{ docs_output_dir }}/{{ topology_name }}.mmd"
+        mode: "0644"
+      ignore_errors: true
+
+    - name: Build device summary table
+      ansible.builtin.set_fact:
+        device_table: |
+          # Network Topology Documentation
+          Generated: {{ ansible_date_time.iso8601 }}
+
+          ## Devices
+
+          | Hostname | Role | Platform | Site | Management IP |
+          |----------|------|----------|------|---------------|
+          {% for device in nb_devices.json.results %}
+          | {{ device.name }} | {{ device.device_role.name | default('N/A') }} | {{ device.platform.name | default('N/A') }} | {{ device.site.name | default('N/A') }} | {{ device.primary_ip.address | default('N/A') }} |
+          {% endfor %}
+
+          ## Links
+
+          | Device A | Interface A | Device B | Interface B |
+          |----------|-------------|----------|-------------|
+          {% for cable in nb_cables.json.results %}
+          | {{ cable.termination_a.device.name | default('N/A') }} | {{ cable.termination_a.name | default('N/A') }} | {{ cable.termination_b.device.name | default('N/A') }} | {{ cable.termination_b.name | default('N/A') }} |
+          {% endfor %}
+
+    - name: Write topology Markdown file
+      ansible.builtin.copy:
+        content: "{{ device_table }}"
+        dest: "{{ docs_output_dir }}/{{ topology_name }}.md"
+        mode: "0644"
+
+    - name: Report topology doc generation
+      ansible.builtin.debug:
+        msg: >-
+          Topology documentation written to
+          {{ docs_output_dir }}/{{ topology_name }}.md
+          ({{ nb_devices.json.count }} devices, {{ nb_cables.json.count }} links)

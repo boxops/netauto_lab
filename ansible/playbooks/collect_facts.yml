@@ -1,0 +1,119 @@
+---
+# ansible/playbooks/collect_facts.yml
+# Gather device facts from all managed devices and sync them back to Nautobot.
+# Facts collected: OS version, serial number, hardware model, uptime,
+# interface list, MAC addresses.
+#
+# Variables:
+#   sync_to_nautobot  - push fact data to Nautobot (default: true)
+#   facts_output_dir  - local dir for JSON fact dumps (default: /tmp/facts)
+
+- name: Collect Device Facts and Sync to Nautobot
+  hosts: "{{ target_device | default('all') }}"
+  gather_facts: false
+  vars:
+    sync_to_nautobot: true
+    facts_output_dir: "/tmp/facts"
+
+  tasks:
+    - name: Create facts output directory
+      ansible.builtin.file:
+        path: "{{ facts_output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      run_once: true
+
+    # ── EOS ──────────────────────────────────────────────────────────────────
+
+    - name: Gather EOS facts
+      arista.eos.eos_facts:
+        gather_subset:
+          - "hardware"
+          - "interfaces"
+          - "config"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Get EOS version info
+      arista.eos.eos_command:
+        commands:
+          - command: "show version | json"
+      register: eos_version
+      when: ansible_network_os == "arista.eos.eos"
+
+    # ── IOS ───────────────────────────────────────────────────────────────────
+
+    - name: Gather IOS facts
+      cisco.ios.ios_facts:
+        gather_subset:
+          - "hardware"
+          - "interfaces"
+          - "config"
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Get IOS version info
+      cisco.ios.ios_command:
+        commands:
+          - "show version"
+      register: ios_version
+      when: ansible_network_os == "cisco.ios.ios"
+
+    # ── Compile fact record ───────────────────────────────────────────────────
+
+    - name: Build fact record
+      ansible.builtin.set_fact:
+        device_facts:
+          hostname: "{{ inventory_hostname }}"
+          os_version: "{{ ansible_net_version | default('unknown') }}"
+          model: "{{ ansible_net_model | default('unknown') }}"
+          serial: "{{ ansible_net_serialnum | default('unknown') }}"
+          uptime_seconds: "{{ ansible_net_uptime | default(0) }}"
+          interfaces: "{{ ansible_net_interfaces | default({}) | list }}"
+          collected_at: "{{ ansible_date_time.iso8601 }}"
+
+    - name: Write facts to JSON file
+      ansible.builtin.copy:
+        content: "{{ device_facts | to_nice_json }}"
+        dest: "{{ facts_output_dir }}/{{ inventory_hostname }}.json"
+        mode: "0644"
+      delegate_to: localhost
+
+    # ── Nautobot sync ─────────────────────────────────────────────────────────
+
+    - name: Look up device in Nautobot
+      ansible.builtin.uri:
+        url: "{{ nautobot_url }}/api/dcim/devices/?name={{ inventory_hostname }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ nautobot_token }}"
+          Accept: "application/json"
+        status_code: 200
+      register: nb_device_lookup
+      delegate_to: localhost
+      when: sync_to_nautobot | bool
+
+    - name: Update Nautobot device custom fields with facts
+      ansible.builtin.uri:
+        url: "{{ nautobot_url }}/api/dcim/devices/{{ nb_device_lookup.json.results[0].id }}/"
+        method: PATCH
+        headers:
+          Authorization: "Token {{ nautobot_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          custom_fields:
+            os_version: "{{ device_facts.os_version }}"
+            serial_number: "{{ device_facts.serial }}"
+            last_fact_sync: "{{ device_facts.collected_at }}"
+        status_code: 200
+      delegate_to: localhost
+      when:
+        - sync_to_nautobot | bool
+        - nb_device_lookup.json.count | int > 0
+
+    - name: Display collected facts summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ device_facts.model }}
+          OS={{ device_facts.os_version }}
+          Serial={{ device_facts.serial }}

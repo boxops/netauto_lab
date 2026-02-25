@@ -1,0 +1,59 @@
+---
+# security/tasks/main.yml – Security hardening configuration
+
+- name: Configure SSH hardening (EOS)
+  arista.eos.eos_config:
+    lines:
+      - "management ssh"
+      - " idle-timeout 10"
+      - " shutdown"
+      - " no shutdown"
+      - "!"
+      - "ip ssh version 2"
+      - "no ip telnet server enable"
+    save_when: changed
+  when: ansible_network_os == "arista.eos.eos"
+
+- name: Configure AAA (EOS)
+  arista.eos.eos_config:
+    lines:
+      - "aaa authentication login default local"
+      - "aaa authentication enable default local"
+      - "aaa authorization exec default local"
+      - "aaa authorization commands all default local"
+      - "aaa accounting exec default start-stop logging"
+      - "aaa accounting commands all default start-stop logging"
+    save_when: changed
+  when: ansible_network_os == "arista.eos.eos"
+
+- name: Configure SSH hardening (IOS)
+  cisco.ios.ios_config:
+    lines:
+      - "ip ssh version 2"
+      - "ip ssh time-out 60"
+      - "ip ssh authentication-retries 3"
+      - "ip ssh logging events"
+      - "no service telnet"
+      - "service password-encryption"
+      - "no service pad"
+      - "no cdp run"
+    save_when: changed
+  when: ansible_network_os == "cisco.ios.ios"
+
+- name: Configure AAA (IOS)
+  cisco.ios.ios_config:
+    lines:
+      - "aaa new-model"
+      - "aaa authentication login default local"
+      - "aaa authorization exec default local"
+      - "aaa accounting exec default start-stop logging"
+    save_when: changed
+  when: ansible_network_os == "cisco.ios.ios"
+
+- name: Configure ACLs from host_vars (EOS)
+  arista.eos.eos_acls:
+    config: "{{ acl_config | default([]) }}"
+    state: merged
+  when:
+    - ansible_network_os == "arista.eos.eos"
+    - acl_config is defined
