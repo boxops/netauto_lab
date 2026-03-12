@@ -1,4 +1,4 @@
-# Intermediate Network Automation Stack
+# Network Automation Stack
 
 A production-ready, containerized network automation and observability platform for network engineers and NetOps teams.
 
@@ -13,7 +13,7 @@ A production-ready, containerized network automation and observability platform 
 │                │                   │  ┌─────────────────────┐   │
 │  ┌──────────┐  │  ┌─────────────┐  │  │  Ops Agent          │   │
 │  │Nautobot  │  │  │ Prometheus  │  │  │  (LangGraph+GPT-4)  │   │
-│  │(DCIM/IPAM│  │  │+ Alertmgr  │  │  └─────────────────────┘   │
+│  │(DCIM/IPAM│  │  │+ Alertmgr   │  │  └─────────────────────┘   │
 │  │ Golden   │  │  └─────────────┘  │  ┌─────────────────────┐   │
 │  │ Config)  │  │  ┌─────────────┐  │  │  Engineering Agent  │   │
 │  └──────────┘  │  │   Grafana   │  │  │  (LangGraph+GPT-4)  │   │
