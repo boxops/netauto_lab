@@ -81,6 +81,7 @@ else
   SECRET_KEY=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(50)))")
   NAUTOBOT_DB_PASS=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32)))")
   REDIS_PASS=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32)))")
+  NAUTOBOT_ADMIN_PASS=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20)))")
   GF_PASS=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20)))")
   GITEA_PASS=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20)))")
   GITEA_SECRET=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(40)))")
@@ -90,6 +91,7 @@ else
   sed -i "s|CHANGE_ME_USE_STRONG_RANDOM_KEY_50CHARS|${SECRET_KEY}|g" .env
   sed -i "s|CHANGE_ME_nautobot_db_password|${NAUTOBOT_DB_PASS}|g" .env
   sed -i "s|CHANGE_ME_redis_password|${REDIS_PASS}|g" .env
+  sed -i "s|CHANGE_ME_nautobot_admin_password|${NAUTOBOT_ADMIN_PASS}|g" .env
   sed -i "s|CHANGE_ME_grafana_admin_password|${GF_PASS}|g" .env
   sed -i "s|CHANGE_ME_gitea_admin_password|${GITEA_PASS}|g" .env
   sed -i "s|CHANGE_ME_gitea_secret_key|${GITEA_SECRET}|g" .env
@@ -153,15 +155,31 @@ log "Running database migrations..."
 docker compose exec -T nautobot nautobot-server migrate --no-input 2>&1 | tee -a "${LOG_FILE}"
 
 log "Creating superuser..."
-docker compose exec -T nautobot sh -c "
-  NAUTOBOT_SUPERUSER_NAME=${NAUTOBOT_SUPERUSER_NAME:-admin} \
-  NAUTOBOT_SUPERUSER_EMAIL=${NAUTOBOT_SUPERUSER_EMAIL:-admin@example.com} \
-  NAUTOBOT_SUPERUSER_PASSWORD=${NAUTOBOT_SUPERUSER_PASSWORD} \
-  NAUTOBOT_SUPERUSER_API_TOKEN=${NAUTOBOT_SUPERUSER_API_TOKEN} \
-  nautobot-server create_superuser --no-input \
-    --username \${NAUTOBOT_SUPERUSER_NAME} \
-    --email \${NAUTOBOT_SUPERUSER_EMAIL} 2>&1 || true
-" 2>&1 | tee -a "${LOG_FILE}"
+cat > /tmp/nautobot_superuser.py << 'SUPERUSER_SCRIPT'
+import os, sys
+from django.contrib.auth import get_user_model
+from nautobot.users.models import Token
+User = get_user_model()
+username = os.environ.get('NAUTOBOT_SUPERUSER_NAME', 'admin')
+email    = os.environ.get('NAUTOBOT_SUPERUSER_EMAIL', 'admin@example.com')
+password  = os.environ.get('NAUTOBOT_SUPERUSER_PASSWORD', '')
+token_key = os.environ.get('NAUTOBOT_SUPERUSER_API_TOKEN', '')
+if not password:
+    print('ERROR: NAUTOBOT_SUPERUSER_PASSWORD is not set')
+    sys.exit(1)
+u, created = User.objects.get_or_create(username=username, defaults={'email': email, 'is_superuser': True, 'is_staff': True})
+u.set_password(password)
+u.is_superuser = True
+u.is_staff = True
+u.save()
+if token_key:
+    t, _ = Token.objects.get_or_create(user=u, defaults={'key': token_key})
+    if t.key != token_key:
+        t.key = token_key
+        t.save()
+print(f"Superuser {'created' if created else 'updated'}: {username}")
+SUPERUSER_SCRIPT
+docker compose exec -T nautobot nautobot-server shell < /tmp/nautobot_superuser.py 2>&1 | tee -a "${LOG_FILE}"
 
 log "Collecting static files..."
 docker compose exec -T nautobot nautobot-server collectstatic --no-input 2>&1 | tee -a "${LOG_FILE}"
@@ -179,9 +197,71 @@ log "✓ Nautobot initialized"
 
 # ── Step 8: Start all remaining services ─────────────────────────────────────
 header "Step 8/9 – Starting all services"
+# Create the clab management network if it doesn't exist yet.
+# ContainerLab will use this network when a topology is later deployed.
+if ! docker network inspect clab >/dev/null 2>&1; then
+  log "Creating clab management network..."
+  docker network create --driver bridge \
+    --subnet 172.20.20.0/24 \
+    --gateway 172.20.20.1 \
+    clab 2>&1 | tee -a "${LOG_FILE}"
+else
+  log "✓ clab network already exists"
+fi
 docker compose up -d 2>&1 | tee -a "${LOG_FILE}"
 log "Waiting for services to stabilize (60 seconds)..."
 sleep 60
+
+# ── Initialize Gitea ──────────────────────────────────────────────────────────────────
+log "Initializing Gitea admin user..."
+GITEA_USER="${GITEA_ADMIN_USER:-gitadmin}"
+GITEA_PASS_VAL="${GITEA_ADMIN_PASSWORD}"
+GITEA_EMAIL="${GITEA_ADMIN_EMAIL:-gitadmin@example.com}"
+docker compose exec -T -u git gitea gitea admin user create \
+  --username "${GITEA_USER}" \
+  --password "${GITEA_PASS_VAL}" \
+  --email "${GITEA_EMAIL}" \
+  --admin \
+  --must-change-password=false 2>&1 | tee -a "${LOG_FILE}" || \
+  log "Gitea admin user already exists or creation skipped."
+
+log "Creating netauto-jobs repository in Gitea..."
+GITEA_PORT_VAL="${GITEA_PORT:-3001}"
+if curl -sf -u "${GITEA_USER}:${GITEA_PASS_VAL}" \
+     -X POST "http://localhost:${GITEA_PORT_VAL}/api/v1/user/repos" \
+     -H "Content-Type: application/json" \
+     -d '{"name":"netauto-jobs","description":"Nautobot Jobs repository","private":false,"auto_init":true,"default_branch":"main"}' \
+     -o /dev/null 2>&1; then
+  log "✓ netauto-jobs repository created"
+else
+  warn "netauto-jobs repository may already exist or Gitea is not ready yet."
+fi
+
+log "Registering netauto-jobs Git repository in Nautobot..."
+python3 - << GITREPO_SCRIPT 2>&1 | tee -a "${LOG_FILE}" || warn "Git repo registration failed. Register manually in Nautobot."
+import os, requests
+token = os.environ.get('NAUTOBOT_SUPERUSER_API_TOKEN', '')
+port  = os.environ.get('NAUTOBOT_PORT', '8080')
+gitea_port = os.environ.get('GITEA_PORT', '3001')
+gitea_user = os.environ.get('GITEA_ADMIN_USER', 'gitadmin')
+gitea_pass = os.environ.get('GITEA_ADMIN_PASSWORD', '')
+base = f'http://localhost:{port}/api'
+H = {'Authorization': f'Token {token}', 'Content-Type': 'application/json'}
+existing = requests.get(f'{base}/extras/git-repositories/?name=netauto-jobs', headers=H).json()
+if existing.get('count', 0) > 0:
+    print('Git repository netauto-jobs already registered in Nautobot.')
+else:
+    r = requests.post(f'{base}/extras/git-repositories/', headers=H, json={
+        'name': 'netauto-jobs',
+        'remote_url': f'http://{gitea_user}:{gitea_pass}@gitea:3000/{gitea_user}/netauto-jobs.git',
+        'branch': 'main',
+        'provided_contents': ['extras.job'],
+    })
+    if r.ok:
+        print(f'Registered netauto-jobs Git repository (id={r.json()["id"]}).')
+    else:
+        print(f'WARNING: {r.status_code} {r.text[:200]}')
+GITREPO_SCRIPT
 
 # ── Step 9: Final health check ────────────────────────────────────────────────
 header "Step 9/9 – Health check"
@@ -194,8 +274,7 @@ PROMETHEUS_PORT="${PROMETHEUS_PORT:-9090}"
 GITEA_PORT="${GITEA_PORT:-3001}"
 AGENT_UI_PORT="${AGENT_UI_PORT:-7860}"
 
-cat << EOF
-
+echo -e "
 ${GREEN}╔══════════════════════════════════════════════════════════╗
 ║          Network Automation Stack – Ready!                ║
 ╚══════════════════════════════════════════════════════════╝${NC}
@@ -225,5 +304,4 @@ ${YELLOW}Next steps:${NC}
   3. Deploy Containerlab: make deploy-lab
   4. Sync inventory: make sync-inventory
   5. Open Grafana and verify dashboards
-
-EOF
+"

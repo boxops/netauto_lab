@@ -1,0 +1,16 @@
+Value IP_ADDRESS (\S+)
+Value INTERFACE (\S+(?:\s\d+)?)
+Value INTERFACE_STATUS_ADMIN_OPER (\S+/\S+)
+Value TYPE (Static|static|DHCP)
+Value REDIRECT (\S+)
+Value STATUS (\S+)
+Value GATEWAY_IP (\S+)
+Value GATEWAY_STATUS (\S+)
+Value GATEWAY_TYPE (Static|static|DHCP)
+
+Start
+  ^\s*${IP_ADDRESS}\s+${INTERFACE}\s+${INTERFACE_STATUS_ADMIN_OPER}\s+${TYPE}\s+${STATUS}\s*$$
+  ^\s*${IP_ADDRESS}\s+${INTERFACE}\s+${INTERFACE_STATUS_ADMIN_OPER}\s+${TYPE}\s+${REDIRECT}\s+${STATUS}\s*$$
+  ^\s*${IP_ADDRESS}\s+${INTERFACE}\s+${TYPE}\s+${STATUS}\s*$$
+  ^\s*${GATEWAY_IP}\s+${GATEWAY_STATUS}\s+${GATEWAY_TYPE}\s*$$
+  ^\s*${IP_ADDRESS}\s+${INTERFACE}\s+${INTERFACE_STATUS_ADMIN_OPER}\s+${TYPE}\s+${REDIRECT}\s+${STATUS}\s+${GATEWAY_IP}\s+${GATEWAY_STATUS}\s+${GATEWAY_TYPE}\s*$$ -> Record

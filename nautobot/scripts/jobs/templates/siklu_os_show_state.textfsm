@@ -1,0 +1,4 @@
+Value DEVICE_TYPE (\S+)
+
+Start
+  ^product\s+${DEVICE_TYPE}; -> Record

@@ -17,7 +17,6 @@ topology:
   defaults:
     kind: ceos
     image: ceos:latest
-    startup-config: ../configs/{name}/startup-config.cfg
 
   nodes:
     # ── Spines ──────────────────────────────────────────────

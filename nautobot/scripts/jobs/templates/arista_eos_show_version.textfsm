@@ -1,0 +1,23 @@
+# TextFSM template for Arista EOS: show version
+#
+# Sample output (cEOS Lab):
+#   Arista cEOSLab
+#   Hardware version:
+#   Serial number: BAC6B4F072353C7B0E1B58A70AB8CCCB
+#   ...
+#
+# Sample output (physical hardware):
+#   Arista DCS-7050CX3-32S-F
+#   Hardware version: 20.00
+#   Serial number: JAS12345678
+#   ...
+#
+# MODEL captures the platform identifier after "Arista ", e.g.:
+#   "cEOSLab"          for containerised EOS lab instances
+#   "DCS-7050CX3-32S-F" for real hardware
+Value MODEL (\S+)
+
+Start
+  ^Arista\s+${MODEL} -> Record
+
+EOF

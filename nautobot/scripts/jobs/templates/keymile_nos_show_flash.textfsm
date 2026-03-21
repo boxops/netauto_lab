@@ -1,0 +1,10 @@
+Value AREA (\S+)
+Value TOTAL (\d+)
+Value USED (\d+)
+Value FREE (\d+)
+Value VERSION (\S+)
+Value SUB_VERSION (#\d+)
+
+Start
+  ^\s*${AREA}\s+${TOTAL}\s+${USED}\s+${FREE}\s+${VERSION}\s+${SUB_VERSION}\s*$$ -> Record
+  ^\s*${AREA}\s+${TOTAL}\s+${USED}\s+${FREE}\s*$$ -> Record

@@ -1,0 +1,73 @@
+! Startup-config last modified at Sat Mar 21 18:52:03 2026 by root
+! device: spine2 (cEOSLab, EOS-4.29.0.1F-29140821.42901F (engineering build))
+!
+no aaa root
+!
+username admin privilege 15 role network-admin secret sha512 $6$aMCClZ1Oz8G1zs5B$lQbCjqzakdpc0u4phnP4G.CkSChsPKedBLGGqIoGSgRAkOypQI61e6BOlFo2xDnZZMq.cdGNO8Rm5OJJrshU80
+username netauto privilege 15 secret sha512 $6$FiR0TMXPFEzm63Ci$q7f6lCrssnVZlT37l0i9cu68/8gfCgqfYad6KCbTVDfhbJwu0x51xFrxiRIaxtoNifV5U.tFKEg3dTGB0.2u10
+!
+transceiver qsfp default-mode 4x10G
+!
+service routing protocols model ribd
+!
+logging buffered 32000 informational
+logging host 172.20.12.2
+!
+hostname spine2
+!
+snmp-server community public ro
+snmp-server host 172.20.12.2 version 2c public
+!
+spanning-tree mode mstp
+!
+management api http-commands
+   no protocol https
+   protocol http
+   no shutdown
+!
+interface Ethernet1
+   description "spine2->leaf1 (eth2)"
+   no switchport
+   ip address 10.1.1.0/31
+!
+interface Ethernet2
+   description "spine2->leaf2 (eth2)"
+   no switchport
+   ip address 10.1.2.0/31
+!
+interface Ethernet3
+   description "spine2->leaf3 (eth2)"
+   no switchport
+   ip address 10.1.3.0/31
+!
+interface Loopback0
+   ip address 10.0.0.2/32
+!
+interface Management0
+   ip address 172.20.20.12/24
+!
+ip routing
+!
+ntp server 0.pool.ntp.org
+ntp server 1.pool.ntp.org
+!
+router bgp 65002
+   router-id 10.0.0.2
+   maximum-paths 4
+   neighbor 10.1.1.1 remote-as 65101
+   neighbor 10.1.1.1 send-community
+   neighbor 10.1.1.1 maximum-routes 12000
+   neighbor 10.1.2.1 remote-as 65102
+   neighbor 10.1.2.1 send-community
+   neighbor 10.1.2.1 maximum-routes 12000
+   neighbor 10.1.3.1 remote-as 65103
+   neighbor 10.1.3.1 send-community
+   neighbor 10.1.3.1 maximum-routes 12000
+   !
+   address-family ipv4
+      neighbor 10.1.1.1 activate
+      neighbor 10.1.2.1 activate
+      neighbor 10.1.3.1 activate
+      network 10.0.0.0/24
+!
+end

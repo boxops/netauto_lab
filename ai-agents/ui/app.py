@@ -72,11 +72,6 @@ ENG_EXAMPLES = [
 def create_ui():
     with gr.Blocks(
         title="Network AI Agents",
-        theme=gr.themes.Soft(primary_hue="blue"),
-        css="""
-        .chatbot { height: 550px !important; }
-        .example-btn { font-size: 0.85em; }
-        """,
     ) as demo:
         gr.Markdown(
             """
@@ -207,4 +202,9 @@ if __name__ == "__main__":
         server_port=7860,
         show_error=True,
         share=False,
+        theme=gr.themes.Soft(primary_hue="blue"),
+        css="""
+        .chatbot { height: 550px !important; }
+        .example-btn { font-size: 0.85em; }
+        """,
     )

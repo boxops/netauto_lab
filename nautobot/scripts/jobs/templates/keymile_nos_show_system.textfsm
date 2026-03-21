@@ -1,0 +1,20 @@
+Value MODEL (\S+)
+Value MAIN_MEMORY_SIZE (\d+)
+Value FLASH_MEMORY_SIZE (\d+)
+Value HARDWARE_REVISION (.*)
+Value HARDWARE_ADDRESS (..:..:..:..:..:..)
+Value SERIAL_NUMBER (.*)
+Value VERSION (.*)
+Value BL_VERSION (.*)
+Value PLD_VERSION (.*)
+
+Start
+  ^\s*Model\s+Name\s+:\s+${MODEL}$$
+  ^\s*Main\s+Memory\s+Size\s+:\s+${MAIN_MEMORY_SIZE}\s+MB$$
+  ^\s*Flash\s+Memory\s+Size\s+:\s+${FLASH_MEMORY_SIZE}\s+MB
+  ^\s*H/W\s+Revision\s+:\s+${HARDWARE_REVISION}$$
+  ^\s*H/W\s+Address\s+:\s+${HARDWARE_ADDRESS}$$
+  ^\s*Serial\s+Number\s+:\s+${SERIAL_NUMBER}$$
+  ^\s*NOS\s+Version\s+:\s+${VERSION}$$
+  ^\s*B/L\s+Version\s+:\s+${BL_VERSION}$$
+  ^\s*PLD\s+Version\s+:\s+${PLD_VERSION}$$ -> Record

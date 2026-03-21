@@ -43,7 +43,10 @@ CACHES = {
 }
 
 CELERY_BROKER_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/3"
-CELERY_RESULT_BACKEND = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/4"
+# Use Nautobot's custom DB backend so JobResult status/dates are persisted in PostgreSQL.
+# (The default Redis backend would store results only in Redis, leaving JobResult.status
+# permanently stuck at PENDING in the database.)
+CELERY_RESULT_BACKEND = "nautobot.core.celery.backends.NautobotDatabaseBackend"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_LEVEL = os.environ.get("NAUTOBOT_LOG_LEVEL", "INFO")
@@ -86,3 +89,8 @@ PLUGINS_CONFIG = {
 # ── Misc ──────────────────────────────────────────────────────────────────────
 DEBUG = is_truthy(os.environ.get("NAUTOBOT_DEBUG", "False"))
 EXEMPT_VIEW_PERMISSIONS = ["*"]
+
+# ── Jobs ─────────────────────────────────────────────────────────────────────
+# Jobs placed here are auto-discovered without needing a Git repository.
+# The ./nautobot/scripts directory is bind-mounted into the container at this path.
+JOBS_ROOT = "/opt/nautobot/scripts/jobs"

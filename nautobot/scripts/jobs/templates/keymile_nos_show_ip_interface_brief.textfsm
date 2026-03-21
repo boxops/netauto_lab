@@ -1,0 +1,8 @@
+Value INTERFACE (\S+)
+Value STATUS (up|down|administratively down)
+Value PROTOCOL (up|down|administratively down)
+Value PRIMARY_IP ((?:\d{1,3}\.){3}\d{1,3}|unassigned)
+Value SECONDARY_IP ((?:\d{1,3}\.){3}\d{1,3}|unassigned)
+
+Start
+  ^\s*${INTERFACE}\s+${STATUS}\s+${PROTOCOL}\s+${PRIMARY_IP}\s+${SECONDARY_IP}\s*$$ -> Record

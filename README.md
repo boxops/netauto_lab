@@ -41,13 +41,13 @@ A production-ready, containerized network automation and observability platform 
 
 | Service          | URL                        | Default Credentials |
 |------------------|----------------------------|---------------------|
-| Nautobot         | http://localhost:8080       | admin / see .env    |
-| Grafana          | http://localhost:3000       | admin / see .env    |
-| Prometheus       | http://localhost:9090       | N/A                 |
-| Alertmanager     | http://localhost:9093       | N/A                 |
-| Loki             | http://localhost:3100       | N/A                 |
-| Gitea            | http://localhost:3001       | gitadmin / see .env |
-| AI Agents UI     | http://localhost:7860       | N/A                 |
+| Nautobot         | http://localhost:8080      | admin / see .env    |
+| Grafana          | http://localhost:3000      | admin / see .env    |
+| Prometheus       | http://localhost:9090      | N/A                 |
+| Alertmanager     | http://localhost:9093      | N/A                 |
+| Loki             | http://localhost:3100      | N/A                 |
+| Gitea            | http://localhost:3001      | gitadmin / see .env |
+| AI Agents UI     | http://localhost:7860      | N/A                 |
 
 ## Prerequisites
 

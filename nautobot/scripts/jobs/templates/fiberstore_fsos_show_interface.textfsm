@@ -1,0 +1,16 @@
+Value INTERFACE (.*)
+Value DESCRIPTION (.*)
+Value MAC_ADDRESS (([0-9a-fA-F]{4}[.]){2}[0-9a-fA-F]{4})
+Value IP_ADDRESS (\S+)
+Value LINK_STATUS (.*)
+Value MEDIA_TYPE (.*)
+Value SPEED (\S+)
+Value DUPLEX (\w+)
+
+Start
+  ^Interface\s+${INTERFACE}
+  ^\s+Description:\s+${DESCRIPTION}
+  ^\s+Hardware\s+is\s+\w+,\s+address\s+is\s+${MAC_ADDRESS}\s+
+  ^\s+${IP_ADDRESS}\s+broadcast\s+
+  ^\s+Interface\s+current\s+state:\s+${LINK_STATUS}
+  ^\s+Speed\s+-\s+${SPEED}\s+,\s+Duplex\s+-\s+${DUPLEX}\s+,\s+Media\s+type\s+is\s+${MEDIA_TYPE} -> Record

@@ -1,0 +1,4 @@
+Value VERSION (\S+)
+
+Start
+  ^software-rev\s+${VERSION};

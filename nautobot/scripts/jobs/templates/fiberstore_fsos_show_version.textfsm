@@ -1,0 +1,24 @@
+Value MODEL (.*)
+Value VERSION (.*)
+Value RUNNING_IMAGE (.*)
+Value HOSTNAME (.*)
+Value UPTIME (\d+\s+days,\s+\d+\s+hours,\s+\d+\s+minutes)
+Value HARDWARE_TYPE (.*)
+Value HARDWARE_VERSION (.*)
+Value SDRAM_SIZE (.*)
+Value FLASH_SIZE (.*)
+Value BOOTROM_VERSION (.*)
+Value SERIAL_NUMBER (.*)
+Value WEB_VERSION (.*)
+
+Start
+  ^\s*FSOS\s+Software,\s+${MODEL},\s+Version\s+${VERSION}$$
+  ^\s*The\s+current\s+running\s+image\s+is\s+${RUNNING_IMAGE}$$
+  ^\s*${HOSTNAME}\s+uptime\s+is\s+${UPTIME}$$
+  ^\s*Hardware\s+Type\s+is\s+${HARDWARE_TYPE}$$
+  ^\s*Hardware\s+Version\s+is\s+${HARDWARE_VERSION}$$
+  ^\s*SDRAM\s+size\s+${SDRAM_SIZE}$$
+  ^\s*Flash\s+size\s+${FLASH_SIZE}$$
+  ^\s*BootRom\s+Version\s+is\s+${BOOTROM_VERSION}$$
+  ^\s*System\s+serial\s+number\s+is\s+${SERIAL_NUMBER}$$
+  ^\s*Current\s+Web\s+Version\s+is\s+${WEB_VERSION}$$ -> Record

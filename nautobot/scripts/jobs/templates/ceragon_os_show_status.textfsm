@@ -1,0 +1,20 @@
+Value SYSTEM_NAME (.+)
+Value SYSTEM_DESCRIPTION (.+)
+Value SYSTEM_CONTACT (.+)
+Value SYSTEM_LOCATION (.+)
+Value LATITUDE (.*)
+Value LONGITUDE (.*)
+Value UNIT_TYPE (.+)
+Value UNIT_STATUS (.+)
+Value UPTIME (\d+)
+
+Start
+  ^.*System\ name:\s+${SYSTEM_NAME}
+  ^System\ description:\s+${SYSTEM_DESCRIPTION}
+  ^System\ contact\ person:\s+${SYSTEM_CONTACT}
+  ^System\ location:\s+${SYSTEM_LOCATION}
+  ^Latitude:\s+${LATITUDE}
+  ^Longitude:\s+${LONGITUDE}
+  ^Unit\ type:\s+${UNIT_TYPE}
+  ^Unit\ operational\ status:\s+${UNIT_STATUS}
+  ^System\ up\ time\ \[seconds\]:\s+${UPTIME}

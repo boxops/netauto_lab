@@ -1,0 +1,19 @@
+Value VERSION (.*)
+Value HOSTNAME (.*)
+Value UPTIME (\d+\s+week,\s+\d+\s+days,\s+\d+\s+hours,\s+\d+\s+minutes)
+Value BOOT_IMAGE (.*)
+Value SERIAL_NUMBER (.*)
+Value NON_VOLATILE_MEMORY (.*)
+Value PHYSICAL_MEMORY (.*)
+Value EMMC_FLASH (.*)
+Value CONFIG_REGISTER (.*)
+
+Start
+  ^\s*Cisco\s+IOS\s+XE\s+Software,\s+Version\s+${VERSION}$$
+  ^\s*${HOSTNAME}\s+uptime\s+is\s+${UPTIME}$$
+  ^\s*System\s+image\s+file\s+is\s+"${BOOT_IMAGE}"$$
+  ^\s*Processor\s+board\s+ID\s+${SERIAL_NUMBER}$$
+  ^\s*${NON_VOLATILE_MEMORY}\s+bytes\s+of\s+non-volatile\s+configuration\s+memory\.$$
+  ^\s*${PHYSICAL_MEMORY}\s+bytes\s+of\s+physical\s+memory\.$$
+  ^\s*${EMMC_FLASH}\s+bytes\s+of\s+eMMC\s+flash\s+at\s+bootflash:\.$$
+  ^\s*Configuration\s+register\s+is\s+${CONFIG_REGISTER}$$ -> Record

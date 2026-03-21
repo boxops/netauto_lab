@@ -6,7 +6,7 @@ After running `containerlab deploy`, this script reads the Containerlab
 inventory and registers/updates all devices in Nautobot.
 
 Usage:
-    python3 scripts/sync_inventory.py [--topology containerlab/topologies/spine-leaf.yml]
+    python3 scripts/sync_inventory.py [--topology containerlab/topologies/spine-leaf.clab.yml]
     python3 scripts/sync_inventory.py --dry-run
 """
 from __future__ import annotations
@@ -29,22 +29,23 @@ except ImportError:
 # ── Configuration ──────────────────────────────────────────────────────────────
 NAUTOBOT_URL = os.getenv("NAUTOBOT_URL", "http://localhost:8080")
 NAUTOBOT_TOKEN = os.getenv("NAUTOBOT_SUPERUSER_API_TOKEN", "")
-DEFAULT_TOPOLOGY = "containerlab/topologies/spine-leaf.yml"
+DEFAULT_TOPOLOGY = "containerlab/topologies/spine-leaf.clab.yml"
 CLAB_PREFIX = "clab-spine-leaf"  # Containerlab container name prefix
 
-# Role-to-slug mapping
-ROLE_SLUG_MAP = {
-    "spine": "spine",
-    "leaf": "leaf",
-    "border-leaf": "border-leaf",
-    "client": "server",
+# Role label → Nautobot role name
+ROLE_NAME_MAP = {
+    "spine": "Spine",
+    "leaf": "Leaf",
+    "border-leaf": "Border-Leaf",
+    "client": "Server",
 }
 
-PLATFORM_SLUG_MAP = {
-    "ceos": "arista_eos",
-    "linux": "server",
-    "srlinux": "nokia_srlinux",
-    "vr-vmx": "juniper_junos",
+# Containerlab kind → Nautobot platform name
+PLATFORM_NAME_MAP = {
+    "ceos": "Arista EOS",
+    "linux": "Nokia SR Linux",
+    "srlinux": "Nokia SR Linux",
+    "vr-vmx": "Juniper JunOS",
 }
 
 
@@ -52,7 +53,7 @@ def get_clab_inspect(topology: str) -> dict[str, Any]:
     """Run containerlab inspect to get current state."""
     try:
         result = subprocess.run(
-            ["sudo", "containerlab", "inspect", "--topology", topology, "--format", "json"],
+            ["sudo", "containerlab", "inspect", "--all", "--format", "json"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -90,12 +91,18 @@ def sync_to_nautobot(
     nodes = topology.get("topology", {}).get("nodes", {})
     lab_name = topology.get("name", "spine-leaf")
 
-    site = nb.dcim.sites.get(slug=site_slug)
-    if not site:
-        print(f"ERROR: Site '{site_slug}' not found in Nautobot. Run the initializer first.")
+    location = nb.dcim.locations.get(name=site_slug)
+    if not location:
+        print(f"ERROR: Location '{site_slug}' not found in Nautobot. Run the initializer first.")
         sys.exit(1)
 
-    print(f"Syncing {len(nodes)} nodes to Nautobot site: {site.name}")
+    # Nautobot 3.x requires a namespace for IP addresses
+    namespace = nb.ipam.namespaces.get(name="Global")
+    if not namespace:
+        print("ERROR: 'Global' namespace not found in Nautobot.")
+        sys.exit(1)
+
+    print(f"Syncing {len(nodes)} nodes to Nautobot location: {location.name}")
     print("=" * 60)
 
     for node_name, node_config in nodes.items():
@@ -105,22 +112,21 @@ def sync_to_nautobot(
         role_name = labels.get("role", "leaf")
         bgp_as = labels.get("bgp-as", "")
 
-        role_slug = ROLE_SLUG_MAP.get(role_name, "leaf")
-        platform_slug = PLATFORM_SLUG_MAP.get(kind, "arista_eos")
+        role_name_nb = ROLE_NAME_MAP.get(role_name, "Leaf")
+        platform_name = PLATFORM_NAME_MAP.get(kind, "Arista EOS")
 
-        role = nb.dcim.device_roles.get(slug=role_slug)
-        platform = nb.dcim.platforms.get(slug=platform_slug)
+        role = nb.extras.roles.get(name=role_name_nb)
+        platform = nb.dcim.platforms.get(name=platform_name)
 
         if not role:
-            print(f"  SKIP {node_name}: role '{role_slug}' not found")
+            print(f"  SKIP {node_name}: role '{role_name_nb}' not found")
             continue
 
-        # Pick appropriate device type
-        dt_slug = "ceos" if kind == "ceos" else "sr-linux"
-        device_type = nb.dcim.device_types.get(slug=dt_slug)
+        # Pick appropriate device type by model name
+        dt_model = "cEOS" if kind == "ceos" else "SR Linux"
+        device_type = nb.dcim.device_types.get(model=dt_model)
         if not device_type:
-            dt_slug = "ceos"
-            device_type = nb.dcim.device_types.get(slug=dt_slug)
+            device_type = nb.dcim.device_types.get(model="cEOS")
             if not device_type:
                 print(f"  SKIP {node_name}: no suitable device type found")
                 continue
@@ -129,8 +135,8 @@ def sync_to_nautobot(
             "name": node_name,
             "device_type": device_type.id,
             "role": role.id,
-            "site": site.id,
-            "status": "active",
+            "location": location.id,
+            "status": "Active",
         }
         if platform:
             device_data["platform"] = platform.id
@@ -140,9 +146,9 @@ def sync_to_nautobot(
 
         if dry_run:
             if existing:
-                print(f"  UPDATE (dry-run) {node_name}: role={role_name}, platform={platform_slug}, mgmt_ip={mgmt_ip}")
+                print(f"  UPDATE (dry-run) {node_name}: role={role_name_nb}, platform={platform_name}, mgmt_ip={mgmt_ip}")
             else:
-                print(f"  CREATE (dry-run) {node_name}: role={role_name}, platform={platform_slug}, mgmt_ip={mgmt_ip}")
+                print(f"  CREATE (dry-run) {node_name}: role={role_name_nb}, platform={platform_name}, mgmt_ip={mgmt_ip}")
             continue
 
         if existing:
@@ -154,20 +160,48 @@ def sync_to_nautobot(
             print(f"  CREATED {node_name} (id={device.id})")
 
         # Set management IP
+        # Nautobot 3.x: IP must be assigned to a device interface before
+        # it can be set as primary_ip4.
         if mgmt_ip:
             ip_str = f"{mgmt_ip}/24"
-            existing_ip = nb.ipam.ip_addresses.get(address=ip_str)
-            if not existing_ip:
-                try:
-                    ip_obj = nb.ipam.ip_addresses.create({
+            try:
+                # 1. Get or create the IP address
+                existing_ip = nb.ipam.ip_addresses.get(address=ip_str, namespace=namespace.id)
+                if not existing_ip:
+                    existing_ip = nb.ipam.ip_addresses.create({
                         "address": ip_str,
-                        "status": "active",
+                        "status": "Active",
+                        "namespace": namespace.id,
                         "description": f"Management IP for {node_name}",
                     })
-                    device.update({"primary_ip4": ip_obj.id})
-                    print(f"    Assigned mgmt IP: {ip_str}")
-                except Exception as e:
-                    print(f"    WARNING: Could not assign IP {ip_str}: {e}")
+
+                # 2. Get or create a management interface on the device
+                mgmt_iface = nb.dcim.interfaces.get(device=device.id, name="Management0")
+                if not mgmt_iface:
+                    mgmt_iface = nb.dcim.interfaces.create({
+                        "device": device.id,
+                        "name": "Management0",
+                        "type": "virtual",
+                        "status": "Active",
+                        "mgmt_only": True,
+                    })
+
+                # 3. Associate the IP with the interface if not already done
+                existing_assoc = nb.ipam.ip_address_to_interface.filter(
+                    ip_address=existing_ip.id,
+                    interface=mgmt_iface.id,
+                )
+                if not existing_assoc:
+                    nb.ipam.ip_address_to_interface.create({
+                        "ip_address": existing_ip.id,
+                        "interface": mgmt_iface.id,
+                    })
+
+                # 4. Set as primary IP on the device
+                device.update({"primary_ip4": existing_ip.id})
+                print(f"    Assigned mgmt IP: {ip_str}")
+            except Exception as e:
+                print(f"    WARNING: Could not assign IP {ip_str}: {e}")
 
         # Set custom fields (BGP AS, SNMP)
         if bgp_as:
@@ -187,7 +221,7 @@ def main():
     parser = argparse.ArgumentParser(description="Sync Containerlab topology to Nautobot")
     parser.add_argument("--topology", default=DEFAULT_TOPOLOGY, help="Path to Containerlab topology YAML")
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without modifying Nautobot")
-    parser.add_argument("--site", default="site-lab", help="Nautobot site slug to assign devices to")
+    parser.add_argument("--site", default="site-lab", help="Nautobot location name to assign devices to")
     args = parser.parse_args()
 
     if not NAUTOBOT_TOKEN:

@@ -1,0 +1,17 @@
+Value CARD_NAME (\S+)
+Value SUBTYPE (\S+)
+Value PART_NUMBER (\S+)
+Value SERIAL_NUMBER (\S+)
+Value COMPANY_NAME (.+)
+Value PRODUCT_NAME (.+)
+Value PRODUCT_DESCRIPTION (.+)
+
+Start
+  ^\s*System\s+information: -> Continue.Record
+  ^\s*card-name\s+:\s+${CARD_NAME}\s*$$
+  ^\s*Subtype\s+:\s+${SUBTYPE}\s*$$
+  ^\s*part\s+number\s+:\s+${PART_NUMBER}\s*$$
+  ^\s*serial\s+number\s+:\s+${SERIAL_NUMBER}\s*$$
+  ^\s*company\s+name\s+:\s+${COMPANY_NAME}\s*$$
+  ^\s*product\s+name\s+:\s+${PRODUCT_NAME}\s*$$
+  ^\s*product\s+description\s+:\s+${PRODUCT_DESCRIPTION}\s*$$ -> Record

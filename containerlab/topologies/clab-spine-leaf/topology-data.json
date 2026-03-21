@@ -1,0 +1,384 @@
+{
+  "name": "spine-leaf",
+  "type": "clab",
+  "clab": {
+    "config": {
+      "prefix": "clab",
+      "mgmt": {
+        "network": "clab",
+        "bridge": "br-4089ab61407a",
+        "ipv4-subnet": "172.20.20.0/24",
+        "ipv4-gw": "172.20.20.1",
+        "ipv6-gw": "fe80::42:d3ff:fe1b:d587",
+        "external-access": true
+      }
+    }
+  },
+  "ssh-pub-keys": [],
+  "nodes": {
+    "client1": {
+      "index": "0",
+      "shortname": "client1",
+      "longname": "clab-spine-leaf-client1",
+      "fqdn": "client1.spine-leaf.io",
+      "group": "",
+      "labdir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/client1",
+      "kind": "linux",
+      "image": "alpine:latest",
+      "mgmt-net": "",
+      "mgmt-intf": "",
+      "mgmt-ipv4-address": "172.20.20.31",
+      "mgmt-ipv4-prefix-length": 24,
+      "mgmt-ipv6-address": "",
+      "mgmt-ipv6-prefix-length": 0,
+      "mac-address": "",
+      "labels": {
+        "clab-mgmt-net-bridge": "br-4089ab61407a",
+        "clab-node-group": "",
+        "clab-node-kind": "linux",
+        "clab-node-lab-dir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/client1",
+        "clab-node-longname": "clab-spine-leaf-client1",
+        "clab-node-name": "client1",
+        "clab-node-type": "",
+        "clab-owner": "ubuntu",
+        "clab-topo-file": "/home/ubuntu/netauto_lab/containerlab/topologies/spine-leaf.clab.yml",
+        "containerlab": "spine-leaf",
+        "role": "client"
+      },
+      "port-bindings": [
+      ]
+    },
+    "client2": {
+      "index": "1",
+      "shortname": "client2",
+      "longname": "clab-spine-leaf-client2",
+      "fqdn": "client2.spine-leaf.io",
+      "group": "",
+      "labdir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/client2",
+      "kind": "linux",
+      "image": "alpine:latest",
+      "mgmt-net": "",
+      "mgmt-intf": "",
+      "mgmt-ipv4-address": "172.20.20.32",
+      "mgmt-ipv4-prefix-length": 24,
+      "mgmt-ipv6-address": "",
+      "mgmt-ipv6-prefix-length": 0,
+      "mac-address": "",
+      "labels": {
+        "clab-mgmt-net-bridge": "br-4089ab61407a",
+        "clab-node-group": "",
+        "clab-node-kind": "linux",
+        "clab-node-lab-dir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/client2",
+        "clab-node-longname": "clab-spine-leaf-client2",
+        "clab-node-name": "client2",
+        "clab-node-type": "",
+        "clab-owner": "ubuntu",
+        "clab-topo-file": "/home/ubuntu/netauto_lab/containerlab/topologies/spine-leaf.clab.yml",
+        "containerlab": "spine-leaf",
+        "role": "client"
+      },
+      "port-bindings": [
+      ]
+    },
+    "leaf1": {
+      "index": "2",
+      "shortname": "leaf1",
+      "longname": "clab-spine-leaf-leaf1",
+      "fqdn": "leaf1.spine-leaf.io",
+      "group": "",
+      "labdir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/leaf1",
+      "kind": "ceos",
+      "image": "ceos:latest",
+      "mgmt-net": "",
+      "mgmt-intf": "Management0",
+      "mgmt-ipv4-address": "172.20.20.21",
+      "mgmt-ipv4-prefix-length": 24,
+      "mgmt-ipv6-address": "",
+      "mgmt-ipv6-prefix-length": 0,
+      "mac-address": "00:1c:73:10:4e:62",
+      "labels": {
+        "bgp-as": "65101",
+        "clab-mgmt-net-bridge": "br-4089ab61407a",
+        "clab-node-group": "",
+        "clab-node-kind": "ceos",
+        "clab-node-lab-dir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/leaf1",
+        "clab-node-longname": "clab-spine-leaf-leaf1",
+        "clab-node-name": "leaf1",
+        "clab-node-type": "",
+        "clab-owner": "ubuntu",
+        "clab-topo-file": "/home/ubuntu/netauto_lab/containerlab/topologies/spine-leaf.clab.yml",
+        "containerlab": "spine-leaf",
+        "role": "leaf",
+        "site": "site-lab"
+      },
+      "port-bindings": [
+      ]
+    },
+    "leaf2": {
+      "index": "3",
+      "shortname": "leaf2",
+      "longname": "clab-spine-leaf-leaf2",
+      "fqdn": "leaf2.spine-leaf.io",
+      "group": "",
+      "labdir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/leaf2",
+      "kind": "ceos",
+      "image": "ceos:latest",
+      "mgmt-net": "",
+      "mgmt-intf": "Management0",
+      "mgmt-ipv4-address": "172.20.20.22",
+      "mgmt-ipv4-prefix-length": 24,
+      "mgmt-ipv6-address": "",
+      "mgmt-ipv6-prefix-length": 0,
+      "mac-address": "00:1c:73:9a:8f:bd",
+      "labels": {
+        "bgp-as": "65102",
+        "clab-mgmt-net-bridge": "br-4089ab61407a",
+        "clab-node-group": "",
+        "clab-node-kind": "ceos",
+        "clab-node-lab-dir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/leaf2",
+        "clab-node-longname": "clab-spine-leaf-leaf2",
+        "clab-node-name": "leaf2",
+        "clab-node-type": "",
+        "clab-owner": "ubuntu",
+        "clab-topo-file": "/home/ubuntu/netauto_lab/containerlab/topologies/spine-leaf.clab.yml",
+        "containerlab": "spine-leaf",
+        "role": "leaf",
+        "site": "site-lab"
+      },
+      "port-bindings": [
+      ]
+    },
+    "leaf3": {
+      "index": "4",
+      "shortname": "leaf3",
+      "longname": "clab-spine-leaf-leaf3",
+      "fqdn": "leaf3.spine-leaf.io",
+      "group": "",
+      "labdir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/leaf3",
+      "kind": "ceos",
+      "image": "ceos:latest",
+      "mgmt-net": "",
+      "mgmt-intf": "Management0",
+      "mgmt-ipv4-address": "172.20.20.23",
+      "mgmt-ipv4-prefix-length": 24,
+      "mgmt-ipv6-address": "",
+      "mgmt-ipv6-prefix-length": 0,
+      "mac-address": "00:1c:73:6a:f4:1a",
+      "labels": {
+        "bgp-as": "65103",
+        "clab-mgmt-net-bridge": "br-4089ab61407a",
+        "clab-node-group": "",
+        "clab-node-kind": "ceos",
+        "clab-node-lab-dir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/leaf3",
+        "clab-node-longname": "clab-spine-leaf-leaf3",
+        "clab-node-name": "leaf3",
+        "clab-node-type": "",
+        "clab-owner": "ubuntu",
+        "clab-topo-file": "/home/ubuntu/netauto_lab/containerlab/topologies/spine-leaf.clab.yml",
+        "containerlab": "spine-leaf",
+        "role": "leaf",
+        "site": "site-lab"
+      },
+      "port-bindings": [
+      ]
+    },
+    "spine1": {
+      "index": "5",
+      "shortname": "spine1",
+      "longname": "clab-spine-leaf-spine1",
+      "fqdn": "spine1.spine-leaf.io",
+      "group": "",
+      "labdir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/spine1",
+      "kind": "ceos",
+      "image": "ceos:latest",
+      "mgmt-net": "",
+      "mgmt-intf": "Management0",
+      "mgmt-ipv4-address": "172.20.20.11",
+      "mgmt-ipv4-prefix-length": 24,
+      "mgmt-ipv6-address": "",
+      "mgmt-ipv6-prefix-length": 0,
+      "mac-address": "00:1c:73:98:d7:f2",
+      "labels": {
+        "bgp-as": "65001",
+        "clab-mgmt-net-bridge": "br-4089ab61407a",
+        "clab-node-group": "",
+        "clab-node-kind": "ceos",
+        "clab-node-lab-dir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/spine1",
+        "clab-node-longname": "clab-spine-leaf-spine1",
+        "clab-node-name": "spine1",
+        "clab-node-type": "",
+        "clab-owner": "ubuntu",
+        "clab-topo-file": "/home/ubuntu/netauto_lab/containerlab/topologies/spine-leaf.clab.yml",
+        "containerlab": "spine-leaf",
+        "role": "spine",
+        "site": "site-lab"
+      },
+      "port-bindings": [
+      ]
+    },
+    "spine2": {
+      "index": "6",
+      "shortname": "spine2",
+      "longname": "clab-spine-leaf-spine2",
+      "fqdn": "spine2.spine-leaf.io",
+      "group": "",
+      "labdir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/spine2",
+      "kind": "ceos",
+      "image": "ceos:latest",
+      "mgmt-net": "",
+      "mgmt-intf": "Management0",
+      "mgmt-ipv4-address": "172.20.20.12",
+      "mgmt-ipv4-prefix-length": 24,
+      "mgmt-ipv6-address": "",
+      "mgmt-ipv6-prefix-length": 0,
+      "mac-address": "00:1c:73:7b:46:f9",
+      "labels": {
+        "bgp-as": "65002",
+        "clab-mgmt-net-bridge": "br-4089ab61407a",
+        "clab-node-group": "",
+        "clab-node-kind": "ceos",
+        "clab-node-lab-dir": "/home/ubuntu/netauto_lab/containerlab/topologies/clab-spine-leaf/spine2",
+        "clab-node-longname": "clab-spine-leaf-spine2",
+        "clab-node-name": "spine2",
+        "clab-node-type": "",
+        "clab-owner": "ubuntu",
+        "clab-topo-file": "/home/ubuntu/netauto_lab/containerlab/topologies/spine-leaf.clab.yml",
+        "containerlab": "spine-leaf",
+        "role": "spine",
+        "site": "site-lab"
+      },
+      "port-bindings": [
+      ]
+    }
+  },
+  "links": [
+    {
+      "endpoints": {
+        "a": {
+          "node": "spine1",
+          "interface": "eth1",
+          "mac": "aa:c1:ab:d2:66:c1",
+          "peer": "z"
+        },
+        "z": {
+          "node": "leaf1",
+          "interface": "eth1",
+          "mac": "aa:c1:ab:c5:45:a7",
+          "peer": "a"
+        }
+      }
+    },
+    {
+      "endpoints": {
+        "a": {
+          "node": "spine1",
+          "interface": "eth2",
+          "mac": "aa:c1:ab:40:78:c1",
+          "peer": "z"
+        },
+        "z": {
+          "node": "leaf2",
+          "interface": "eth1",
+          "mac": "aa:c1:ab:23:1b:e6",
+          "peer": "a"
+        }
+      }
+    },
+    {
+      "endpoints": {
+        "a": {
+          "node": "spine1",
+          "interface": "eth3",
+          "mac": "aa:c1:ab:86:20:cd",
+          "peer": "z"
+        },
+        "z": {
+          "node": "leaf3",
+          "interface": "eth1",
+          "mac": "aa:c1:ab:02:82:45",
+          "peer": "a"
+        }
+      }
+    },
+    {
+      "endpoints": {
+        "a": {
+          "node": "spine2",
+          "interface": "eth1",
+          "mac": "aa:c1:ab:b7:18:75",
+          "peer": "z"
+        },
+        "z": {
+          "node": "leaf1",
+          "interface": "eth2",
+          "mac": "aa:c1:ab:8a:ae:f8",
+          "peer": "a"
+        }
+      }
+    },
+    {
+      "endpoints": {
+        "a": {
+          "node": "spine2",
+          "interface": "eth2",
+          "mac": "aa:c1:ab:9b:8c:12",
+          "peer": "z"
+        },
+        "z": {
+          "node": "leaf2",
+          "interface": "eth2",
+          "mac": "aa:c1:ab:34:a6:29",
+          "peer": "a"
+        }
+      }
+    },
+    {
+      "endpoints": {
+        "a": {
+          "node": "spine2",
+          "interface": "eth3",
+          "mac": "aa:c1:ab:13:2f:06",
+          "peer": "z"
+        },
+        "z": {
+          "node": "leaf3",
+          "interface": "eth2",
+          "mac": "aa:c1:ab:48:ed:f2",
+          "peer": "a"
+        }
+      }
+    },
+    {
+      "endpoints": {
+        "a": {
+          "node": "client1",
+          "interface": "eth1",
+          "mac": "aa:c1:ab:53:28:2a",
+          "peer": "z"
+        },
+        "z": {
+          "node": "leaf1",
+          "interface": "eth3",
+          "mac": "aa:c1:ab:69:56:5e",
+          "peer": "a"
+        }
+      }
+    },
+    {
+      "endpoints": {
+        "a": {
+          "node": "client2",
+          "interface": "eth1",
+          "mac": "aa:c1:ab:db:2a:53",
+          "peer": "z"
+        },
+        "z": {
+          "node": "leaf3",
+          "interface": "eth3",
+          "mac": "aa:c1:ab:5e:2b:a9",
+          "peer": "a"
+        }
+      }
+    }
+  ]
+}

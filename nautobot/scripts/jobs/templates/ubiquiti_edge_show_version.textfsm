@@ -1,0 +1,16 @@
+Value VERSION (\S+)
+Value BUILD_ID (\d+)
+Value BUILD_ON (.*)
+Value COPYRIGHT (.+)
+Value MODEL (.+)
+Value SERIAL_NUMBER (\S+)
+Value UPTIME (.+)
+
+Start
+  ^Version:\s+${VERSION}\s*$$
+  ^Build\ ID:\s+${BUILD_ID}\s*$$
+  ^Build\ on:\s+${BUILD_ON}\s*$$
+  ^Copyright:\s+${COPYRIGHT}\s*$$
+  ^HW\ model:\s+${MODEL}\s*$$
+  ^HW\ S/N:\s+${SERIAL_NUMBER}\s*$$
+  ^Uptime:\s+${UPTIME}\s*$$ -> Record

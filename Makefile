@@ -45,6 +45,8 @@ init:  ## Initialize environment (first-time setup)
 
 start:  ## Start all services
 	@echo -e "$(GREEN)Starting all services...$(NC)"
+	@docker network inspect clab >/dev/null 2>&1 \
+	  || docker network create clab --subnet 172.20.20.0/24 >/dev/null
 	$(COMPOSE) up -d
 	@echo -e "$(GREEN)Services started. Run 'make status' to verify.$(NC)"
 
@@ -117,24 +119,24 @@ clean:  ## Remove all containers and data (DESTRUCTIVE – prompts for confirmat
 
 deploy-lab:  ## Deploy Containerlab spine-leaf topology
 	@echo -e "$(GREEN)Deploying Containerlab topology...$(NC)"
-	@sudo containerlab deploy --topology containerlab/topologies/spine-leaf.yml 2>&1 \
-	  || (echo -e "$(YELLOW)Containerlab not installed or failed. See docs.$(NC)"; exit 1)
+	@sudo containerlab deploy --topo containerlab/topologies/spine-leaf.clab.yml 2>&1 \
+	  || { echo -e "$(YELLOW)Containerlab deploy failed. See docs.$(NC)"; exit 1; }
 	@echo -e "$(GREEN)Lab deployed. Run 'make sync-inventory' to register in Nautobot.$(NC)"
 
 destroy-lab:  ## Destroy Containerlab topology
 	@echo -e "$(YELLOW)Destroying Containerlab topology...$(NC)"
-	@sudo containerlab destroy --topology containerlab/topologies/spine-leaf.yml --cleanup 2>&1 || true
+	@sudo containerlab destroy --topo containerlab/topologies/spine-leaf.clab.yml --cleanup 2>&1 || true
 
 sync-inventory:  ## Sync Containerlab devices to Nautobot
 	@echo -e "$(GREEN)Syncing inventory to Nautobot...$(NC)"
-	@NAUTOBOT_URL="http://localhost:${NAUTOBOT_PORT:-8080}" \
-	  NAUTOBOT_SUPERUSER_API_TOKEN="${NAUTOBOT_SUPERUSER_API_TOKEN}" \
+	@NAUTOBOT_URL="http://localhost:$(NAUTOBOT_PORT)" \
+	  NAUTOBOT_SUPERUSER_API_TOKEN="$(NAUTOBOT_SUPERUSER_API_TOKEN)" \
 	  python3 scripts/sync_inventory.py
 	@echo -e "$(GREEN)Inventory sync complete.$(NC)"
 
 sync-inventory-dry:  ## Preview inventory sync (dry run)
-	@NAUTOBOT_URL="http://localhost:${NAUTOBOT_PORT:-8080}" \
-	  NAUTOBOT_SUPERUSER_API_TOKEN="${NAUTOBOT_SUPERUSER_API_TOKEN}" \
+	@NAUTOBOT_URL="http://localhost:$(NAUTOBOT_PORT)" \
+	  NAUTOBOT_SUPERUSER_API_TOKEN="$(NAUTOBOT_SUPERUSER_API_TOKEN)" \
 	  python3 scripts/sync_inventory.py --dry-run
 
 ## ── Ansible ───────────────────────────────────────────────────────────────────
@@ -163,16 +165,31 @@ lint:  ## Lint Ansible playbooks and configs
 	  | xargs python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" 2>&1 \
 	  && echo "YAML validation: OK" || echo "YAML validation: check errors above"
 
+## ── Nautobot Jobs ──────────────────────────────────────────────────────
+
+refresh-jobs:  ## Re-scan JOBS_ROOT and register any new/changed Job classes
+	@echo -e "$(CYAN)Refreshing Nautobot Jobs from JOBS_ROOT...$(NC)"
+	@echo "\
+from nautobot.extras.jobs import get_jobs; \
+from nautobot.extras.models import Job as JobModel, JobQueue; \
+dq = JobQueue.objects.get(name='default'); \
+jobs = get_jobs(reload=True); \
+new = [JobModel.objects.get_or_create(module_name=jc.__module__, job_class_name=jc.__name__, defaults={'name': getattr(jc.Meta,'name',jc.__name__), 'default_job_queue': dq}) for jc in jobs.values()]; \
+created = sum(1 for _, c in new if c); \
+print(f'Jobs in registry: {len(jobs)} | New DB records: {created}')" \
+	  | $(COMPOSE) exec -T nautobot nautobot-server shell
+	@echo -e "$(GREEN)Jobs refreshed.$(NC)"
+
+sync-jobs:  ## Pull the latest commits from the netauto-jobs Git repo into Nautobot
+	@echo -e "$(CYAN)Syncing netauto-jobs Git repository in Nautobot...$(NC)"
+	@python3 scripts/sync_nautobot_jobs.py
+	@echo -e "$(GREEN)Sync complete.$(NC)"
+
 ## ── AI Agents ─────────────────────────────────────────────────────────────────
 
-agent-chat:  ## Start an interactive CLI chat with the Ops Agent
-	@echo -e "$(CYAN)Network AI Agents CLI – type 'exit' to quit$(NC)"
-	@echo ""
-	@which python3 >/dev/null 2>&1 || (echo "python3 required"; exit 1)
-	@python3 -c "
+define AGENT_CHAT_PY
 import sys, httpx, json
-AGENT_URL = 'http://localhost:${AGENT_UI_PORT:-7860}'
-OPS_URL   = 'http://localhost:8000'
+OPS_URL = 'http://localhost:8000'
 print('Connecting to Ops Agent...')
 session_id = ''
 while True:
@@ -188,7 +205,7 @@ while True:
         resp.raise_for_status()
         data = resp.json()
         session_id = data.get('session_id', session_id)
-        print(f'\n{data[\"response\"]}')
+        print(f'\n{data["response"]}')
     except KeyboardInterrupt:
         break
     except httpx.ConnectError:
@@ -196,7 +213,14 @@ while True:
         sys.exit(1)
     except Exception as e:
         print(f'Error: {e}')
-"
+endef
+export AGENT_CHAT_PY
+
+agent-chat:  ## Start an interactive CLI chat with the Ops Agent
+	@echo -e "$(CYAN)Network AI Agents CLI – type 'exit' to quit$(NC)"
+	@echo ""
+	@which python3 >/dev/null 2>&1 || (echo "python3 required"; exit 1)
+	@python3 -c "$$AGENT_CHAT_PY"
 
 ## ── Testing ───────────────────────────────────────────────────────────────────
 

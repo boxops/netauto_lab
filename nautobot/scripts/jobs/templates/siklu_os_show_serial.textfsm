@@ -1,0 +1,4 @@
+Value SERIAL_NUMBER (\S+)
+
+Start
+  ^serial-num\s+${SERIAL_NUMBER};

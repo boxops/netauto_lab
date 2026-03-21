@@ -1,0 +1,20 @@
+Value SWITCH (\S+)
+Value SYSTEM_DESC (.+)
+Value TYPE (.+)
+Value MODEL (.+)
+Value SERIAL_NUMBER (\S+)
+Value PART_NUMBER (\S+)
+Value MAC_ADDRESS (\S+)
+Value VERSION ([\d.]+)
+Value HARDWARE_REVISION (\d+)
+
+Start
+  ^Switch:\s+${SWITCH}\s*$$
+  ^System\s+Description\.+\s+${SYSTEM_DESC}\s*$$
+  ^Machine\s+Type\.+\s+${TYPE}\s*$$
+  ^Machine\s+Model\.+\s+${MODEL}\s*$$
+  ^Serial\s+Number\.+\s+${SERIAL_NUMBER}\s*$$
+  ^Part\s+Number\.+\s+${PART_NUMBER}\s*$$
+  ^Burned\s+In\s+MAC\s+Address\.+\s+${MAC_ADDRESS}\s*$$
+  ^Software\s+Version\.+\s+${VERSION}\s*$$
+  ^Hardware\s+Revision\.+\s+${HARDWARE_REVISION}\s*$$ -> Record

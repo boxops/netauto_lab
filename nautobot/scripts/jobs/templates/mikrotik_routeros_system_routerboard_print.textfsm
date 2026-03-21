@@ -1,0 +1,22 @@
+Value ROUTERBOARD (\S+)
+Value BOARD_NAME (.+)
+Value MODEL (.+)
+Value REVISION (.+)
+Value SERIAL_NUMBER (\S+)
+Value FIRMWARE_TYPE (\S+)
+Value FACTORY_FIRMWARE ([\d.]+)
+Value VERSION ([\d.]+)
+Value UPGRADE_FIRMWARE ([\d.]+)
+
+Start
+  ^\s*;;;.* -> Next
+  ^\s*routerboard:\s${ROUTERBOARD}
+  ^\s*board-name:\s${BOARD_NAME}
+  ^\s*model:\s${MODEL}
+  ^\s*revision:\s${REVISION}
+  ^\s*serial-number:\s${SERIAL_NUMBER}
+  ^\s*firmware-type:\s${FIRMWARE_TYPE}
+  ^\s*factory-firmware:\s${FACTORY_FIRMWARE}
+  ^\s*current-firmware:\s${VERSION}
+  ^\s*upgrade-firmware:\s${UPGRADE_FIRMWARE}
+  ^\s*(?:\d{2}:){2}\d{2}\s+echo:\s*.*$$ -> Next

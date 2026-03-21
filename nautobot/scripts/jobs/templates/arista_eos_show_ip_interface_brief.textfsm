@@ -1,0 +1,19 @@
+# TextFSM template for Arista EOS: show ip interface brief
+#
+# Sample output:
+#                                                                                  Address
+# Interface         IP Address             Status       Protocol            MTU    Owner
+# ----------------- ---------------------- ------------ -------------- ----------- -------
+# Ethernet1         10.0.1.1/31            up           up                 1500
+# Loopback0         10.0.0.21/32           up           up                65535
+# Management0       172.20.20.21/24        up           up                 1500
+# Vlan100           192.168.100.1/24       up           up                 1500
+Value INTERFACE (\S+)
+Value IP_ADDRESS (\d[\d./]+)
+
+Start
+  # Match data rows: interface name followed by an IP address (starts with a digit).
+  # Header line "IP Address" and separator "---..." won't match the IP_ADDRESS regex.
+  ^${INTERFACE}\s+${IP_ADDRESS}\s+\S+\s+\S+ -> Record
+
+EOF

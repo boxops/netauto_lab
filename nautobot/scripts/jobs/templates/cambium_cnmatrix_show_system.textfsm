@@ -1,0 +1,50 @@
+Value HW_VERSION (\S+)
+Value FW_VERSION (\S+)
+Value VERSION (\S+)
+Value POE_FW_VERSION (\S+)
+Value CPLD_FW_VERSION (\S+)
+Value MODEL_NAME (.+)
+Value BASE_MAC_ADDRESS (\S+)
+Value SWITCH_MAC_ADDRESS (\S+)
+Value SERIAL_NUMBER (\S+)
+Value MFG_DATE (\S+)
+Value SYS_CONTACT (.+)
+Value SYS_NAME (\S+)
+Value SYS_DESCRIPTION (.+)
+Value SYS_LOCATION (.+)
+Value LOGGING_OPTION (.+)
+Value DEVICE_UPTIME (.+)
+Value AUTH_MODE (.+)
+Value CONFIG_SAVE_STATUS (.+)
+Value REMOTE_SAVE_STATUS (.+)
+Value CONFIG_RESTORE_STATUS (.+)
+Value STARTUP_CONFIG_DATE (.+)
+Value RESET_BUTTON (.+)
+Value REBOOT_COUNT (\d+)
+Value LAST_REBOOT_REASON (.+)
+
+Start
+  ^Hardware Version\s+:\s+${HW_VERSION}
+  ^Firmware Version\s+:\s+${FW_VERSION}
+  ^CNS Software Version\s+:\s+${VERSION}
+  ^PoE Firmware Version\s+:\s+${POE_FW_VERSION}
+  ^CPLD Firmware Version\s+:\s+${CPLD_FW_VERSION}
+  ^Model Name\s+:\s+${MODEL_NAME}
+  ^Base MAC Address\s+:\s+${BASE_MAC_ADDRESS}
+  ^Switch MAC Address\s+:\s+${SWITCH_MAC_ADDRESS}
+  ^Serial Number\s+:\s+${SERIAL_NUMBER}
+  ^Manufacture Date\s+:\s+${MFG_DATE}
+  ^System Contact\s+:\s+${SYS_CONTACT}
+  ^System Name\s+:\s+${SYS_NAME}
+  ^System Description\s+:\s+${SYS_DESCRIPTION}
+  ^System Location\s+:\s+${SYS_LOCATION}
+  ^Logging Option\s+:\s+${LOGGING_OPTION}
+  ^Device Uptime\s+:\s+${DEVICE_UPTIME}
+  ^Login Authentication Mode\s+:\s+${AUTH_MODE}
+  ^Config Save Status\s+:\s+${CONFIG_SAVE_STATUS}
+  ^Remote Save Status\s+:\s+${REMOTE_SAVE_STATUS}
+  ^Config Restore Status\s+:\s+${CONFIG_RESTORE_STATUS}
+  ^Startup-config Date\s+:\s+${STARTUP_CONFIG_DATE}
+  ^Reset Button\s+:\s+${RESET_BUTTON}
+  ^Number of Reboots\s+:\s+${REBOOT_COUNT}
+  ^Last Reboot Reason\s+:\s+${LAST_REBOOT_REASON}

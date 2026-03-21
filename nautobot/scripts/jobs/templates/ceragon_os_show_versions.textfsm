@@ -1,0 +1,7 @@
+Value VERSION (\S+)
+Value DOWNLOADED_VERSION (\S+)
+ 
+Start
+  ^.*Downloaded\s+version:\s+${VERSION}
+  ^.*Installed\s+version:\s+${DOWNLOADED_VERSION} -> Record
+  ^nou\s+${VERSION}\s+${DOWNLOADED_VERSION} -> Record

@@ -1,0 +1,10 @@
+Value CURRENT_BOOT_IMAGE_VERSION (\S+)
+Value CURRENT_RUNNING_IMAGE (\S+)
+Value NEXT_BOOT_IMAGE_VERSION (\S+)
+Value NEXT_RUNNING_IMAGE (\S+)
+
+Start
+  ^\s*The\s+current\s+boot\s+image\s+version\s+is:\s+${CURRENT_BOOT_IMAGE_VERSION}$$
+  ^\s*The\s+current\s+running\s+image\s+is:\s+${CURRENT_RUNNING_IMAGE}$$
+  ^\s*The\s+next\s+time\s+boot\s+image\s+version\s+is:\s+${NEXT_BOOT_IMAGE_VERSION}$$
+  ^\s*The\s+next\s+running\s+image\s+is:\s+${NEXT_RUNNING_IMAGE}$$ -> Record

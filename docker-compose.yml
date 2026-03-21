@@ -23,10 +23,8 @@ networks:
       config:
         - subnet: 172.20.12.0/24
   clab:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.20.0/24
+    external: true
+    name: clab
 
 volumes:
   nautobot-postgres-data:
@@ -120,6 +118,19 @@ services:
         max-size: "5m"
         max-file: "3"
 
+  # ── Nautobot – volume permission init ────────────────────────
+  nautobot-volume-init:
+    image: "busybox"
+    user: "0"
+    command: ["sh", "-c", "chown -R 999:999 /media /static /git-repos"]
+    volumes:
+      - nautobot-media:/media
+      - nautobot-static:/static
+      - nautobot-git-repos:/git-repos
+    networks:
+      - mgmt-network
+    restart: "no"
+
   # ── Nautobot – web server ────────────────────────────────────
   nautobot:
     <<: *nautobot-base
@@ -131,6 +142,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      nautobot-volume-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/"]
       interval: 30s
@@ -375,6 +388,7 @@ services:
       GITEA__database__USER: "${GITEA_DB_USER:-gitea}"
       GITEA__database__PASSWD: "${GITEA_DB_PASSWORD}"
       GITEA__security__SECRET_KEY: "${GITEA_SECRET_KEY}"
+      GITEA__security__INSTALL_LOCK: "true"
       GITEA__server__ROOT_URL: "http://localhost:${GITEA_PORT:-3001}/"
     ports:
       - "${GITEA_PORT:-3001}:3000"

@@ -1,0 +1,20 @@
+Value UPTIME (\S+)
+Value CPU_USAGE (\S+)
+Value MEMORY_USAGE (\S+\s+MB)
+Value MAC_ADDRESS (..:..:..:..:..:..)
+Value IP_ADDRESS (\S+)
+Value IPV6_ADDRESS (\S+)
+Value VERSION (\S+)
+Value MODEL (\S+)
+Value BOARD_REV (\S+)
+
+Start
+  ^\s*Uptime:\s+${UPTIME}\s+seconds\s*$$
+  ^\s*CPU\s+Usage:\s+${CPU_USAGE}\s*$$
+  ^\s*Memory\s+Usage:\s+${MEMORY_USAGE}\s*$$
+  ^\s*MAC\s+Address:\s+${MAC_ADDRESS}\s*$$
+  ^\s*IP\s+Address:\s+${IP_ADDRESS}\s*$$
+  ^\s*IPv6\s+Address:\s+${IPV6_ADDRESS}\s*$$
+  ^\s*Firmware\s+Version:\s+${VERSION}\s*$$
+  ^\s*Model:\s+${MODEL}\s*$$
+  ^\s*Board\s+Rev:\s+${BOARD_REV}\s*$$ -> Record

@@ -1,0 +1,4 @@
+Value HOSTNAME (\S+)
+
+Start
+  ^\s*host-name\s+${HOSTNAME}\s*$$ -> Record
