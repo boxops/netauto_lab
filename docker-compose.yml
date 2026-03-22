@@ -42,7 +42,10 @@ volumes:
 
 # ── Re-usable anchors ────────────────────────────────────────
 x-nautobot-base: &nautobot-base
-  image: "networktocode/nautobot:latest-py3.11"
+  build:
+    context: ./nautobot
+    dockerfile: Dockerfile
+  image: "netauto_lab/nautobot:latest"
   env_file: .env
   environment:
     NAUTOBOT_DB_HOST: nautobot-postgres

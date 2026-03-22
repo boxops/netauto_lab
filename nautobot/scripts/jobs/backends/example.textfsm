@@ -1,0 +1,5 @@
+Value REG_STATUS (REGISTERED|UNREGISTERED)
+
+Start
+  ^Registration:
+  ^\s+Status: ${REG_STATUS}

@@ -1,23 +1,32 @@
-# TextFSM template for Arista EOS: show version
-#
-# Sample output (cEOS Lab):
-#   Arista cEOSLab
-#   Hardware version:
-#   Serial number: BAC6B4F072353C7B0E1B58A70AB8CCCB
-#   ...
-#
-# Sample output (physical hardware):
-#   Arista DCS-7050CX3-32S-F
-#   Hardware version: 20.00
-#   Serial number: JAS12345678
-#   ...
-#
-# MODEL captures the platform identifier after "Arista ", e.g.:
-#   "cEOSLab"          for containerised EOS lab instances
-#   "DCS-7050CX3-32S-F" for real hardware
 Value MODEL (\S+)
+Value SERIAL_NUMBER (\S+)
+Value HW_MAC (\S+\.\S+\.\S+)
+Value SYS_MAC (\S+\.\S+\.\S+)
+Value VERSION (\S+)
+Value ARCHITECTURE (\S+)
+Value BUILD_VER (\S+)
+Value BUILD_ID (\S+)
+Value FORMAT_VER (\S+)
+Value OPTIMIZATION (\S+)
+Value TOOLS_VER (\S+)
+Value KERNEL_VER (\S+)
+Value UPTIME (.+)
+Value TOTAL_MEM (\d+)
+Value FREE_MEM (\d+)
 
 Start
-  ^Arista\s+${MODEL} -> Record
-
-EOF
+  ^Arista\s+${MODEL}
+  ^Serial\snumber:\s+${SERIAL_NUMBER}
+  ^Hardware\sMAC\saddress:\s+${HW_MAC}
+  ^System\sMAC\saddress:\s+${SYS_MAC}
+  ^Software\simage\sversion:\s+${VERSION}
+  ^Architecture:\s+${ARCHITECTURE}
+  ^Internal\sbuild\sversion:\s+${BUILD_VER}
+  ^Internal\sbuild\sID:\s+${BUILD_ID}
+  ^Image\sformat\sversion:\s+${FORMAT_VER}
+  ^Image\soptimization:\s+${OPTIMIZATION}
+  ^cEOS\stools\sversion:\s+${TOOLS_VER}
+  ^Kernel\sversion:\s+${KERNEL_VER}
+  ^Uptime:\s+${UPTIME}
+  ^Total\smemory:\s+${TOTAL_MEM}\skB
+  ^Free\smemory:\s+${FREE_MEM}\skB

@@ -1,10 +1,10 @@
-! Startup-config last modified at Sat Mar 21 18:52:06 2026 by root
+! Startup-config last modified at Sun Mar 22 19:26:30 2026 by root
 ! device: leaf3 (cEOSLab, EOS-4.29.0.1F-29140821.42901F (engineering build))
 !
 no aaa root
 !
-username admin privilege 15 role network-admin secret sha512 $6$AcgQsF6VA.bor.B2$dWBXUxq4XL1MtyzNeC/J0OX4Qjw7gHqZy1/jIzF9ZrneJTarNRJy2B78ehO46BzM9Eegh4Z9aiWeb1pLkshgg/
-username netauto privilege 15 secret sha512 $6$blNfh5YDg3H8ttD/$0.bZ9peNCPktoVGQLFydeMDt18t7c5x0S61zaaap.dceMuwM2yz6hsw/qje8dsJiI95K4QNAYH/3FygDOjlm61
+username admin privilege 15 role network-admin secret sha512 $6$OkcnhOGvLqvHflvy$RhQ7.TvpYeSuF64gHi4w6kple3walLuNpZqeE8iSftb5uqPGZDMWJxqw5NJP2IEZRjnyA0wAluqW9pkCzPy4d1
+username netauto privilege 15 secret sha512 $6$IbZ4PqShPGrrX9Jr$sxtLYcwFloPewprOpLXLyW/Ypi1IYvwwf.Bosx9p6axkwKET257bqd0CTHQpE9/JiuRZAEIRg7Q8f8CV8FlKp0
 !
 transceiver qsfp default-mode 4x10G
 !

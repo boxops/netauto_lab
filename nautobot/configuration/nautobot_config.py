@@ -75,14 +75,15 @@ LOGGING = {
 # To enable, build a custom Nautobot image that pip-installs the plugins,
 # then uncomment the desired entries below.
 PLUGINS = [
-    # "nautobot_golden_config",
-    # "nautobot_device_lifecycle_mgmt",
+    "nautobot_golden_config",
+    "nautobot_device_lifecycle_mgmt",
+    "nautobot_ssot",
     # "nautobot_bgp_models",
     # "nautobot_data_validation_engine",
 ]
 
 PLUGINS_CONFIG = {
-    # "nautobot_golden_config": { ... },
+    "nautobot_golden_config": {},
     # "nautobot_device_lifecycle_mgmt": { ... },
 }
 
