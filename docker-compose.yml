@@ -232,6 +232,26 @@ services:
         max-size: "5m"
         max-file: "3"
 
+  # ── Topology API ─────────────────────────────────────────────
+  topology-api:
+    image: "python:3.11-slim"
+    command: python /app/topology_api.py
+    environment:
+      NAUTOBOT_URL: "http://nautobot:8080"
+      NAUTOBOT_TOKEN: "${NAUTOBOT_SUPERUSER_API_TOKEN}"
+      PORT: "8765"
+    volumes:
+      - ./scripts/topology_api.py:/app/topology_api.py:ro
+    networks:
+      - mgmt-network
+      - monitoring-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   # ── Grafana ──────────────────────────────────────────────────
   grafana:
     image: "grafana/grafana:latest"
@@ -240,7 +260,7 @@ services:
       GF_SECURITY_ADMIN_USER: "${GF_SECURITY_ADMIN_USER:-admin}"
       GF_SECURITY_ADMIN_PASSWORD: "${GF_SECURITY_ADMIN_PASSWORD}"
       GF_SERVER_ROOT_URL: "${GF_SERVER_ROOT_URL:-http://localhost:3000}"
-      GF_INSTALL_PLUGINS: "grafana-worldmap-panel,grafana-piechart-panel,agenty-flowcharting-panel,cloudspout-button-panel"
+      GF_INSTALL_PLUGINS: "grafana-worldmap-panel,grafana-piechart-panel,agenty-flowcharting-panel,cloudspout-button-panel,yesoreyeram-infinity-datasource"
       GF_FEATURE_TOGGLES_ENABLE: "ngalert"
     ports:
       - "${GRAFANA_PORT:-3000}:3000"

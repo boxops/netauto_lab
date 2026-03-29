@@ -32,3 +32,26 @@ datasources:
     editable: false
     jsonData:
       implementation: prometheus
+
+  - name: Nautobot-Infinity
+    type: yesoreyeram-infinity-datasource
+    uid: nautobot-infinity
+    access: proxy
+    editable: false
+    jsonData:
+      auth_method: "apiKey"
+      apiKeyType: "header"
+      apiKeyKey: "Authorization"
+      allowedHosts:
+        - "nautobot:8080"
+    secureJsonData:
+      apiKeyValue: "Token ${NAUTOBOT_SUPERUSER_API_TOKEN}"
+
+  - name: Topology-Infinity
+    type: yesoreyeram-infinity-datasource
+    uid: topology-infinity
+    access: proxy
+    editable: false
+    jsonData:
+      auth_method: "none"
+      allowedHosts: []

@@ -1,0 +1,11 @@
+Value INTERFACE (\S+)
+Value IP_ADDRESS (\S+)
+Value STATUS (\S+)
+Value PROTOCOL (\S+)
+Value MTU (\d+)
+Value ADDRESS_OWNER (\S*)
+
+Start
+  ^${INTERFACE}\s+${IP_ADDRESS}\s+${STATUS}\s+${PROTOCOL}\s+${MTU}\s*${ADDRESS_OWNER}* -> Record
+
+EOF

@@ -1,0 +1,7 @@
+Value IPV4_ADDRESS (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})
+Value AGE (\d+:\d+:\d+)
+Value HARDWARE_ADDR ([a-fA-F0-9]{4}\.[a-fA-F0-9]{4}\.[a-fA-F0-9]{4})
+Value INTERFACE (\S+)
+
+Start
+  ^${IPV4_ADDRESS}\s+${AGE}\s+${HARDWARE_ADDR}\s+${INTERFACE} -> Record

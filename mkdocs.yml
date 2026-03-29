@@ -53,3 +53,4 @@ nav:
     - AI Agents: agents.md
     - Ansible Playbooks: ansible.md
     - Monitoring: monitoring.md
+    - Nautobot Jobs: jobs.md

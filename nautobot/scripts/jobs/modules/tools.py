@@ -14,6 +14,7 @@ import json
 import logging
 import queue
 from django.db.models import Q
+from django.db import close_old_connections
 from logging.handlers import QueueHandler, QueueListener
 
 # from dictdiffer import diff
@@ -297,61 +298,120 @@ def apply_device_filters(
     return all_devices
 
 
-def parallel_execution(task_func, devices, max_workers, logger=None):
-    """Execute tasks in parallel with memory management."""
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
-        for device in devices:
-            futures.append(executor.submit(task_func, device))
+def parallel_execution(task_func, devices, max_workers, job_logger=None):
+    """Execute task_func for each device using a thread pool.
 
-        # Process results as they complete to prevent accumulation
+    Thread-safe logging
+    -------------------
+    Nautobot's job logger writes to the database and is NOT safe to call
+    concurrently from worker threads.  To avoid dropped or interleaved log
+    entries, task functions should use the JobLogBuffer / JobProxy helpers::
+
+        def my_task(dev):
+            buf = JobLogBuffer()
+            MyHelper(job=JobProxy(buf), device=dev).run()
+            return buf   # <-- return the buffer, not None
+
+    parallel_execution drains each buffer to job_logger on the main thread as
+    each future completes, serialising all DB writes.
+
+    Legacy task functions that return None are still supported; any unhandled
+    exception is reported to job_logger.error() when job_logger is provided.
+
+    close_old_connections() is called inside every worker thread automatically
+    so individual task functions do not need to call it themselves.
+
+    Parameters
+    ----------
+    task_func  : callable(device) -> JobLogBuffer | None
+    devices    : iterable of device objects to process
+    max_workers: int -- number of concurrent worker threads
+    job_logger : Nautobot job logger (self.logger in Job.run()), optional
+    """
+    def _thread_wrapper(dev):
+        close_old_connections()
+        return task_func(dev)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_thread_wrapper, dev): dev for dev in devices}
         for future in as_completed(futures):
             try:
-                future.result()  # This will raise any exceptions
+                result = future.result()
+                if isinstance(result, JobLogBuffer) and job_logger is not None:
+                    result.drain_to(job_logger)
             except Exception as e:
-                if logger:
-                    logger.error(f"Error in parallel task: {e}")
-            finally:
-                # Explicit cleanup
-                del future
+                if job_logger:
+                    job_logger.error(f"Error in parallel task: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Thread-safe logging helpers for parallel job execution
+# ---------------------------------------------------------------------------
+
+class JobLogBuffer:
+    """Collects log entries from a worker thread for safe replay on the main thread.
+
+    Nautobot's job logger writes to the database (JobLogEntry.objects.create()),
+    which is not safe to call concurrently from multiple threads.  Each worker
+    thread logs into a JobLogBuffer instead; the main thread (via
+    parallel_execution) drains it to the real logger once the future completes,
+    serialising all DB writes.
+
+    Usage inside a task function::
+
+        def backup_device(dev):
+            buf = JobLogBuffer()
+            DeviceBackup(job=JobProxy(buf), device=dev).backup_config()
+            return buf   # parallel_execution will drain this to self.logger
+
+    See also: JobProxy, parallel_execution
+    """
+
+    def __init__(self):
+        self._entries = []
+
+    def debug(self, msg, *a, **kw):    self._entries.append(("debug",    str(msg)))
+    def info(self, msg, *a, **kw):     self._entries.append(("info",     str(msg)))
+    def warning(self, msg, *a, **kw):  self._entries.append(("warning",  str(msg)))
+    def error(self, msg, *a, **kw):    self._entries.append(("error",    str(msg)))
+    def critical(self, msg, *a, **kw): self._entries.append(("critical", str(msg)))
+
+    def drain_to(self, real_logger):
+        """Replay all buffered entries to real_logger on the calling (main) thread."""
+        for level, msg in self._entries:
+            getattr(real_logger, level)(msg)
+        self._entries.clear()
+
+
+class JobProxy:
+    """Minimal job proxy routing a helper class's self.job.logger to a JobLogBuffer.
+
+    Helper classes (e.g. DeviceBackup, ErrorChecker) accept a ``job`` argument
+    and write logs via ``self.job.logger``.  Pass a JobProxy in place of the
+    real Job object so that all log output is captured thread-safely in a
+    JobLogBuffer and replayed on the main thread.
+
+    Usage::
+
+        buf = JobLogBuffer()
+        MyHelper(job=JobProxy(buf), device=dev).run()
+        return buf
+
+    See also: JobLogBuffer, parallel_execution
+    """
+
+    def __init__(self, log_buf):
+        self.logger = log_buf
+
+
+# ---------------------------------------------------------------------------
+# Legacy implementation -- kept for reference only
+# ---------------------------------------------------------------------------
 # def parallel_execution(function, devices, max_workers, *args):
-#     """
-#     Execute a function for each device in a list using a thread pool.
-
-#     Parameters:
-#         function (function): Function to execute
-#         devices (list): List of devices to process
-#         *args: Additional arguments to pass to the function
-
-#     Example:
-#         execute_function_for_devices(devices, function, *args, logger=logger)
-
-#     Returns:
-#         None
-#     """
 #     with ThreadPoolExecutor(max_workers=max_workers) as executor:
 #         futures = [executor.submit(function, device, *args) for device in devices]
 #         for future in as_completed(futures):
 #             future.result()
-
-#     # # Set up a queue for logging
-#     # log_queue = queue.Queue()
-#     # queue_handler = QueueHandler(log_queue)
-#     # listener = QueueListener(log_queue, *logging.getLogger().handlers)
-#     # listener.start()
-
-#     # # Add the queue handler to the root logger
-#     # logging.getLogger().addHandler(queue_handler)
-
-#     # with ThreadPoolExecutor(max_workers=max_workers) as executor:
-#     #     futures = [executor.submit(function, device, *args) for device in devices]
-#     #     for future in as_completed(futures):
-#     #         future.result()
-
-#     # # Remember to stop the listener when done
-#     # listener.stop()
 
 
 class DeviceFormEntry:

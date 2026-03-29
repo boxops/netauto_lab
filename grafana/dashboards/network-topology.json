@@ -1,0 +1,159 @@
+{
+    "__inputs": [],
+    "__elements": {},
+    "__requires": [
+        {
+            "type": "panel",
+            "id": "nodeGraph",
+            "name": "Node Graph",
+            "version": ""
+        },
+        {
+            "type": "datasource",
+            "id": "yesoreyeram-infinity-datasource",
+            "name": "Infinity",
+            "version": "1.0.0"
+        }
+    ],
+    "annotations": {
+        "list": [
+            {
+                "builtIn": 1,
+                "datasource": {
+                    "type": "grafana",
+                    "uid": "-- Grafana --"
+                },
+                "enable": true,
+                "hide": true,
+                "iconColor": "rgba(0, 211, 255, 1)",
+                "name": "Annotations & Alerts",
+                "type": "dashboard"
+            }
+        ]
+    },
+    "editable": true,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 0,
+    "id": null,
+    "links": [],
+    "panels": [
+        {
+            "datasource": {
+                "type": "yesoreyeram-infinity-datasource",
+                "uid": "topology-infinity"
+            },
+            "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 24,
+                "w": 24,
+                "x": 0,
+                "y": 0
+            },
+            "id": 1,
+            "options": {
+                "nodes": {}
+            },
+            "targets": [
+                {
+                    "refId": "nodes",
+                    "datasource": {
+                        "type": "yesoreyeram-infinity-datasource",
+                        "uid": "topology-infinity"
+                    },
+                    "type": "json",
+                    "source": "url",
+                    "format": "node-graph-nodes",
+                    "url": "http://topology-api:8765/nodes?layout=${layout:raw}",
+                    "url_options": {
+                        "method": "GET",
+                        "headers": [],
+                        "body_type": "none",
+                        "body_content_type": "text/plain"
+                    },
+                    "parser": "backend",
+                    "root_selector": "nodes",
+                    "columns": [],
+                    "filters": []
+                },
+                {
+                    "refId": "edges",
+                    "datasource": {
+                        "type": "yesoreyeram-infinity-datasource",
+                        "uid": "topology-infinity"
+                    },
+                    "type": "json",
+                    "source": "url",
+                    "format": "node-graph-edges",
+                    "url": "http://topology-api:8765/edges",
+                    "url_options": {
+                        "method": "GET",
+                        "headers": [],
+                        "body_type": "none",
+                        "body_content_type": "text/plain"
+                    },
+                    "parser": "backend",
+                    "root_selector": "edges",
+                    "columns": [],
+                    "filters": []
+                }
+            ],
+            "title": "Network Topology",
+            "description": "Live network topology from Nautobot cable records. Run the LLDP Neighbor Discovery job to refresh.",
+            "type": "nodeGraph"
+        }
+    ],
+    "refresh": "5m",
+    "schemaVersion": 39,
+    "tags": [
+        "topology",
+        "network",
+        "nautobot"
+    ],
+    "templating": {
+        "list": [
+            {
+                "current": {
+                    "selected": true,
+                    "text": "force",
+                    "value": "force"
+                },
+                "hide": 0,
+                "includeAll": false,
+                "multi": false,
+                "name": "layout",
+                "options": [
+                    {
+                        "selected": true,
+                        "text": "Force-directed",
+                        "value": "force"
+                    },
+                    {
+                        "selected": false,
+                        "text": "Hierarchical",
+                        "value": "hierarchical"
+                    },
+                    {
+                        "selected": false,
+                        "text": "Circular",
+                        "value": "circular"
+                    }
+                ],
+                "query": "force,hierarchical,circular",
+                "type": "custom",
+                "label": "Layout"
+            }
+        ]
+    },
+    "time": {
+        "from": "now-1h",
+        "to": "now"
+    },
+    "timepicker": {},
+    "timezone": "browser",
+    "title": "Network Topology",
+    "uid": "network-topology",
+    "version": 2
+}

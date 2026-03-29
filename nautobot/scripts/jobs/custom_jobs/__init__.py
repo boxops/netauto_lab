@@ -24,81 +24,143 @@ for _alias, _real in [
             pass
 del _sys, _importlib
 
-# Custom Configuration
-from .custom_configuration.backup_configurations import CustomDeviceBackup
-from .custom_configuration.intended_configurations import CustomDeviceIntended
-from .custom_configuration.configuration_compliance import CustomDeviceCompliance
-from .custom_configuration.deploy_configurations import DeployConfigurations
-from .custom_configuration.run_all_compliance_jobs import RunAllConfigComplianceJobs
+# ── Configuration ──────────────────────────────────────────────────────────────
+from .configuration.backup_configurations import CustomDeviceBackup
+from .configuration.intended_configurations import CustomDeviceIntended
+from .configuration.configuration_compliance import CustomDeviceCompliance
+from .configuration.deploy_configurations import DeployConfigurations
+from .configuration.run_all_compliance_jobs import RunAllConfigComplianceJobs
+from .configuration.ntp_compliance import NTPComplianceCheck
+from .configuration.banner_compliance import BannerComplianceCheck
+from .configuration.snmp_validation import SNMPValidation
 
-# Custom Monitoring
-from .custom_monitoring.provision_nodes_on_solarwinds import ProvisionNodesOnSolarWinds
+# ── Inventory ─────────────────────────────────────────────────────────────────
+from .inventory.lldp_neighbor_discovery import LLDPNeighborDiscovery
+from .inventory.arp_mac_sync import ARPMACSync
+from .inventory.interface_capacity_audit import InterfaceCapacityAudit
+from .inventory.optics_transceiver_inventory import OpticsTransceiverInventory
 
-# Custom Onboarding
-from .custom_onboarding.onboard_device import CustomDeviceOnboarding
-from .custom_onboarding.onboard_software_version import GetShowVersion
-from .custom_onboarding.onboard_serial_numbers import OnboardSerialNumbers
-from .custom_onboarding.capture_network_device_data import CustomCaptureDeviceData
+# ── Monitoring ────────────────────────────────────────────────────────────────
+from .monitoring.provision_nodes_on_solarwinds import ProvisionNodesOnSolarWinds
+from .monitoring.prometheus_target_sync import PrometheusTargetSync
+from .monitoring.reachability_sweep import ReachabilitySweep
+from .monitoring.interface_error_alerting import InterfaceErrorAlerting
 
-# Custom Operations
-from .custom_operations.command_runner import CommandRunner
-from .custom_operations.password_prober import PasswordProber
-from .custom_operations.send_email import SendEmail
-from .custom_operations.reboot_devices import CustomDeviceReboot
-from .custom_operations.oxidized_inventory import OxidizedInventoryGenerator
+# ── Onboarding ────────────────────────────────────────────────────────────────
+from .onboarding.onboard_device import CustomDeviceOnboarding
+from .onboarding.onboard_software_version import GetShowVersion
+from .onboarding.onboard_serial_numbers import OnboardSerialNumbers
+from .onboarding.capture_network_device_data import CustomCaptureDeviceData
 
-# Custom Reporting
-from .custom_reporting.check_device_serial_numbers import SerialNumberReport
-from .custom_reporting.hostname_validation import ValidateHostname
-from .custom_reporting.hardware_eos_alert import HardwareEOLAlert
-from .custom_reporting.generate_solarwinds_undp_reports import SolarWindsUNDPReport
-from .custom_reporting.check_cisco_package_compliance import CiscoPackageCompliance
-from .custom_reporting.backup_state_checker import BackupStateChecker
+# ── Operations ────────────────────────────────────────────────────────────────
+from .operations.command_runner import CommandRunner
+from .operations.password_prober import PasswordProber
+from .operations.send_email import SendEmail
+from .operations.reboot_devices import CustomDeviceReboot
+from .operations.oxidized_inventory import OxidizedInventoryGenerator
+from .operations.maintenance_window import MaintenanceWindow
+from .operations.vlan_provisioning import VLANProvisioning
+from .operations.ip_address_allocation import IPAddressAllocation
 
-# Custom Syncing
-from .custom_syncing.ssot_example_data_source import ExampleDataSource
-from .custom_syncing.ssot_example_data_target import ExampleDataTarget
-from .custom_syncing.ssot_example_data_target_two import SyncTenants
-from .custom_syncing.sync_network_data import SyncNetworkData
+# ── Orchestration ─────────────────────────────────────────────────────────────
+from .orchestration.change_window_orchestrator import ChangeWindowOrchestrator
+from .orchestration.mass_rollback import MassRollback
 
-# Custom Upgrading
-from .custom_upgrading.firmware_upgrade import FirmwareUpgrade
+# ── Reporting ─────────────────────────────────────────────────────────────────
+from .reporting.check_device_serial_numbers import SerialNumberReport
+from .reporting.hostname_validation import ValidateHostname
+from .reporting.hardware_eos_alert import HardwareEOLAlert
+from .reporting.generate_solarwinds_undp_reports import SolarWindsUNDPReport
+from .reporting.check_cisco_package_compliance import CiscoPackageCompliance
+from .reporting.backup_state_checker import BackupStateChecker
+from .reporting.cve_vulnerability_scanner import CVEVulnerabilityScanner
+from .reporting.software_version_compliance import SoftwareVersionComplianceReport
 
-# from .custom_upgrading.readiness_check import ReadinessCheck
+# ── Security ──────────────────────────────────────────────────────────────────
+from .security.ssh_audit import SSHAudit
+from .security.unused_port_shutdown import UnusedPortShutdown
+from .security.aaa_compliance import AAAComplianceCheck
+
+# ── Syncing ───────────────────────────────────────────────────────────────────
+from .syncing.ssot_example_data_source import ExampleDataSource
+from .syncing.ssot_example_data_target import ExampleDataTarget
+from .syncing.ssot_example_data_target_two import SyncTenants
+from .syncing.sync_network_data import SyncNetworkData
+
+# ── Troubleshooting ───────────────────────────────────────────────────────────
+from .troubleshooting.packet_capture import PacketCapture
+from .troubleshooting.trace_route_analyzer import TraceRouteAnalyzer
+from .troubleshooting.mtu_mismatch_detector import MTUMismatchDetector
+from .troubleshooting.bgp_prefix_anomaly import BGPPrefixAnomalyDetector
+
+# ── Upgrading ─────────────────────────────────────────────────────────────────
+from .upgrading.firmware_upgrade import FirmwareUpgrade
+from .upgrading.readiness_check import ReadinessCheck
+from .upgrading.device_decommission import DeviceDecommission
 
 
 __all__ = [
-    ### Custom Configuration
+    ### Configuration
     "CustomDeviceBackup",
     "CustomDeviceIntended",
     "CustomDeviceCompliance",
     "DeployConfigurations",
     "RunAllConfigComplianceJobs",
-    ### Custom Monitoring
+    "NTPComplianceCheck",
+    "BannerComplianceCheck",
+    "SNMPValidation",
+    ### Inventory
+    "LLDPNeighborDiscovery",
+    "ARPMACSync",
+    "InterfaceCapacityAudit",
+    "OpticsTransceiverInventory",
+    ### Monitoring
     "ProvisionNodesOnSolarWinds",
-    ### Custom Onboarding
+    "PrometheusTargetSync",
+    "ReachabilitySweep",
+    "InterfaceErrorAlerting",
+    ### Onboarding
     "CustomDeviceOnboarding",
     "GetShowVersion",
     "OnboardSerialNumbers",
     "CustomCaptureDeviceData",
-    ### Custom Operations
+    ### Operations
     "CommandRunner",
     "PasswordProber",
     "SendEmail",
     "CustomDeviceReboot",
-    ### Custom Reporting
+    "OxidizedInventoryGenerator",
+    "MaintenanceWindow",
+    "VLANProvisioning",
+    "IPAddressAllocation",
+    ### Orchestration
+    "ChangeWindowOrchestrator",
+    "MassRollback",
+    ### Reporting
     "SerialNumberReport",
     "ValidateHostname",
     "HardwareEOLAlert",
     "SolarWindsUNDPReport",
     "CiscoPackageCompliance",
     "BackupStateChecker",
-    ### Custom Syncing
+    "CVEVulnerabilityScanner",
+    "SoftwareVersionComplianceReport",
+    ### Security
+    "SSHAudit",
+    "UnusedPortShutdown",
+    "AAAComplianceCheck",
+    ### Syncing
     "ExampleDataSource",
     "ExampleDataTarget",
     "SyncTenants",
     "SyncNetworkData",
-    ### Custom Upgrading
+    ### Troubleshooting
+    "PacketCapture",
+    "TraceRouteAnalyzer",
+    "MTUMismatchDetector",
+    "BGPPrefixAnomalyDetector",
+    ### Upgrading
     "FirmwareUpgrade",
-    # "ReadinessCheck",
+    "ReadinessCheck",
+    "DeviceDecommission",
 ]
