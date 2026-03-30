@@ -64,6 +64,7 @@ x-nautobot-base: &nautobot-base
     - nautobot-media:/opt/nautobot/media
     - nautobot-static:/opt/nautobot/static
     - nautobot-git-repos:/opt/nautobot/git-repos
+    - ./prometheus/file_sd:/opt/nautobot/prometheus_file_sd
   networks:
     - mgmt-network
   restart: unless-stopped
@@ -125,11 +126,12 @@ services:
   nautobot-volume-init:
     image: "busybox"
     user: "0"
-    command: ["sh", "-c", "chown -R 999:999 /media /static /git-repos"]
+    command: ["sh", "-c", "chown -R 999:999 /media /static /git-repos && chmod 775 /file_sd"]
     volumes:
       - nautobot-media:/media
       - nautobot-static:/static
       - nautobot-git-repos:/git-repos
+      - ./prometheus/file_sd:/file_sd
     networks:
       - mgmt-network
     restart: "no"
@@ -191,6 +193,7 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/alerts:/etc/prometheus/alerts:ro
       - ./prometheus/recording_rules:/etc/prometheus/recording_rules:ro
+      - ./prometheus/file_sd:/etc/prometheus/file_sd:ro
       - prometheus-data:/prometheus
     networks:
       - monitoring-network

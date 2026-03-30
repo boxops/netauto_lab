@@ -1,5 +1,6 @@
 """Purpose: ICMP + SNMP reachability sweep across all devices; update device status in Nautobot."""
 
+import shutil
 import subprocess
 import threading
 
@@ -7,7 +8,7 @@ from nautobot.apps.jobs import Job, register_jobs, BooleanVar, IntegerVar
 from nautobot.extras.models import Status
 from nautobot.dcim.models import Device
 
-from custom_jobs.modules.tools import apply_device_filters, DeviceFormEntry, parallel_execution
+from custom_jobs.modules.tools import apply_device_filters, DeviceFormEntry, parallel_execution, JobLogBuffer
 
 name = "Monitoring"
 
@@ -104,13 +105,15 @@ class ReachabilitySweep(Job, DeviceFormEntry):
         offline_status = Status.objects.filter(name="Offline").first()
 
         def sweep_device(dev):
+            buf = JobLogBuffer()
             if not dev.primary_ip4:
-                self.logger.warning(f"{dev} No primary IP, skipping.")
-                return
+                buf.warning(f"{dev} No primary IP, skipping.")
+                return buf
             ip = dev.primary_ip4.host
+            ping_bin = shutil.which("ping") or "/bin/ping"
             try:
                 result = subprocess.run(
-                    ["ping", "-c", str(ping_count), "-W", "2", ip],
+                    [ping_bin, "-c", str(ping_count), "-W", "2", ip],
                     capture_output=True,
                     timeout=ping_count * 3,
                 )
@@ -119,22 +122,23 @@ class ReachabilitySweep(Job, DeviceFormEntry):
                 is_up = False
 
             if is_up:
-                self.logger.info(f"{dev} ({ip}) REACHABLE")
+                buf.info(f"{dev} ({ip}) REACHABLE")
                 with results_lock:
                     reachable.append(dev.name)
                 if update_status and active_status and dev.status != active_status:
                     dev.status = active_status
                     dev.validated_save()
             else:
-                self.logger.warning(f"{dev} ({ip}) UNREACHABLE")
+                buf.warning(f"{dev} ({ip}) UNREACHABLE")
                 with results_lock:
                     unreachable.append(dev.name)
                 if update_status and offline_status:
                     dev.status = offline_status
                     dev.validated_save()
+            return buf
 
         if parallel_task:
-            parallel_execution(sweep_device, all_devices, max_workers=max_workers)
+            parallel_execution(sweep_device, all_devices, max_workers=max_workers, job_logger=self.logger)
         else:
             for dev in all_devices:
                 sweep_device(dev)

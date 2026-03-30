@@ -83,6 +83,13 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox-exporter:9115
 
+  # Nautobot dynamic targets (written by PrometheusTargetSync job)
+  - job_name: nautobot-devices
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/file_sd/*.yml
+        refresh_interval: 1m
+
   # HTTP blackbox probes
   - job_name: http-probes
     metrics_path: /probe

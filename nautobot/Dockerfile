@@ -2,9 +2,9 @@ FROM networktocode/nautobot:latest-py3.11
 
 USER root
 
-# Install tshark (required by pyshark for packet capture jobs)
+# Install tshark (required by pyshark for packet capture jobs) and iputils-ping
 RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tshark && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tshark iputils-ping && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \

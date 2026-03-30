@@ -135,6 +135,7 @@ class PortShutdown:
         "cisco_ios": "cisco_ios_show_ip_interface_brief.textfsm",
         "cisco_xe": "cisco_xe_show_ip_interface_brief.textfsm",
         "cisco_nxos": "cisco_nxos_show_ip_interface_brief.textfsm",
+        "arista_eos": "arista_eos_show_ip_interface_brief.textfsm",
     }
 
     def __init__(self, job, device, idle_days, dry_run):

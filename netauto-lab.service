@@ -1,0 +1,63 @@
+[Unit]
+Description=Network Automation Lab Stack (ContainerLab + Docker Compose)
+Documentation=file:///home/ubuntu/netauto_lab/README.md
+# Start after Docker is ready
+After=docker.service
+Requires=docker.service
+# Do not start if Docker fails
+BindsTo=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/ubuntu/netauto_lab
+# Run as the ubuntu user so docker/clab_admins group memberships apply
+User=ubuntu
+Group=ubuntu
+
+# ── Startup ───────────────────────────────────────────────────────────────────
+# 1. Deploy (or redeploy) the clab topology – this creates/recreates the clab
+#    network with its current ID before any compose containers try to join it.
+ExecStart=/bin/bash -c '\
+  echo "[netauto-lab] Deploying ContainerLab topology..." && \
+  sudo /usr/bin/containerlab deploy \
+    --topo /home/ubuntu/netauto_lab/containerlab/topologies/spine-leaf.clab.yml \
+    --reconfigure 2>&1 | /usr/bin/logger -t netauto-lab || true'
+
+# 2. Remove any stopped compose containers that still carry a stale clab
+#    network endpoint (the old network ID is baked into the container config).
+ExecStart=/bin/bash -c '\
+  echo "[netauto-lab] Removing stale compose containers..." && \
+  cd /home/ubuntu/netauto_lab && \
+  /usr/bin/docker compose rm -f telegraf ansible 2>&1 | /usr/bin/logger -t netauto-lab || true'
+
+# 3. Bring up the full compose stack.
+ExecStart=/bin/bash -c '\
+  echo "[netauto-lab] Starting Docker Compose stack..." && \
+  cd /home/ubuntu/netauto_lab && \
+  /usr/bin/docker compose up -d 2>&1 | /usr/bin/logger -t netauto-lab'
+
+# ── Shutdown ──────────────────────────────────────────────────────────────────
+# Stop compose first (graceful), then destroy the lab topology.
+# Using SIGTERM timeout of 120s to let Nautobot shut down cleanly.
+ExecStop=/bin/bash -c '\
+  echo "[netauto-lab] Stopping Docker Compose stack..." && \
+  cd /home/ubuntu/netauto_lab && \
+  /usr/bin/docker compose stop --timeout 30 2>&1 | /usr/bin/logger -t netauto-lab || true'
+
+ExecStop=/bin/bash -c '\
+  echo "[netauto-lab] Destroying ContainerLab topology..." && \
+  sudo /usr/bin/containerlab destroy \
+    --topo /home/ubuntu/netauto_lab/containerlab/topologies/spine-leaf.clab.yml \
+    --cleanup 2>&1 | /usr/bin/logger -t netauto-lab || true'
+
+# Give the stack enough time to start (Nautobot is slow)
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+# Restart the service on failure (e.g., transient Docker errors at boot)
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -24,6 +24,9 @@ for _alias, _real in [
             pass
 del _sys, _importlib
 
+# ── Documentation ────────────────────────────────────────────────────────────
+from .documentation.generate_site_docs import GenerateSiteDocs
+
 # ── Configuration ──────────────────────────────────────────────────────────────
 from .configuration.backup_configurations import CustomDeviceBackup
 from .configuration.intended_configurations import CustomDeviceIntended
@@ -159,6 +162,8 @@ __all__ = [
     "TraceRouteAnalyzer",
     "MTUMismatchDetector",
     "BGPPrefixAnomalyDetector",
+    ### Documentation
+    "GenerateSiteDocs",
     ### Upgrading
     "FirmwareUpgrade",
     "ReadinessCheck",

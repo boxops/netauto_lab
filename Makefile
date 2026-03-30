@@ -43,6 +43,21 @@ init:  ## Initialize environment (first-time setup)
 	@echo -e "$(GREEN)Initializing Network Automation Stack...$(NC)"
 	@bash setup.sh
 
+init-service:  ## Install and enable netauto-lab.service (auto-start on VM boot)
+	@echo -e "$(GREEN)Installing netauto-lab systemd service...$(NC)"
+	@sudo cp $(PROJECT_DIR)/netauto-lab.service /etc/systemd/system/netauto-lab.service
+	@sudo systemctl daemon-reload
+	@sudo systemctl enable netauto-lab.service
+	@echo -e "$(GREEN)Service installed and enabled. The stack will start automatically on next boot.$(NC)"
+	@echo -e "$(CYAN)Manage with: sudo systemctl {start|stop|status} netauto-lab$(NC)"
+
+remove-service:  ## Disable and remove netauto-lab.service
+	@echo -e "$(YELLOW)Removing netauto-lab systemd service...$(NC)"
+	@sudo systemctl disable --now netauto-lab.service || true
+	@sudo rm -f /etc/systemd/system/netauto-lab.service
+	@sudo systemctl daemon-reload
+	@echo -e "$(GREEN)Service removed.$(NC)"
+
 start:  ## Start all services
 	@echo -e "$(GREEN)Starting all services...$(NC)"
 	@docker network inspect clab >/dev/null 2>&1 \

@@ -570,30 +570,49 @@ class BackupStateChecker(Job, DeviceFormEntry):
         return "; ".join(reasons) if reasons else "unknown reason"
 
     def _check_backup_file_exists(self, device):
-        """Check if the backup file exists on disk."""
+        """Check if a backup exists for the device.
+
+        Tries the on-disk path via the configured backup repository first.
+        If no repository is configured (backups stored in DB), falls back to
+        checking whether the GoldenConfig record has non-empty backup_config.
+        """
         try:
-            # Get backup directory and file path
             backup_dynamic_groups = DynamicGroup.objects.exclude(
                 golden_config_setting__isnull=True
             )
             if not backup_dynamic_groups.exists():
-                return False
+                # No golden config setting at all — fall back to DB check
+                return self._backup_exists_in_db(device)
 
-            backup_dynamic_group = backup_dynamic_groups.first()
-            backup_directory = (
-                backup_dynamic_group.golden_config_setting.backup_repository.filesystem_path
-            )
+            setting = backup_dynamic_groups.first().golden_config_setting
+            repository = getattr(setting, "backup_repository", None)
+
+            if repository is None:
+                # Repository not configured — backups are stored in the DB
+                return self._backup_exists_in_db(device)
+
+            filesystem_path = getattr(repository, "filesystem_path", None)
+            if not filesystem_path:
+                return self._backup_exists_in_db(device)
+
             backup_path_template_obj = render_jinja2(
-                template_code=backup_dynamic_group.golden_config_setting.backup_path_template,
+                template_code=setting.backup_path_template,
                 context={"obj": device},
             )
-            backup_file = os.path.join(backup_directory, backup_path_template_obj)
-
+            backup_file = os.path.join(filesystem_path, backup_path_template_obj)
             return os.path.exists(backup_file)
         except Exception as e:
             self.logger.debug(
                 f"Could not check backup file existence for {device.name}: {e}"
             )
+            return False
+
+    def _backup_exists_in_db(self, device):
+        """Return True if a non-empty backup_config is stored in GoldenConfig."""
+        try:
+            gc = GoldenConfig.objects.get(device=device)
+            return bool(gc.backup_config)
+        except GoldenConfig.DoesNotExist:
             return False
 
     def _generate_summary_report(

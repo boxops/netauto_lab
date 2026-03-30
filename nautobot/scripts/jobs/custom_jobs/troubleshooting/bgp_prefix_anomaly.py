@@ -152,15 +152,30 @@ class BGPChecker:
     BGP_COMMANDS = {
         "cisco_ios": "show ip bgp summary",
         "cisco_xe": "show ip bgp summary",
-        "cisco_xr": "show bgp ipv4 unicast summary",
-        "cisco_nxos": "show bgp ipv4 unicast summary",
+        "cisco_xr": "show ip bgp summary",
+        "cisco_nxos": "show ip bgp summary",
         "arista_eos": "show ip bgp summary",
     }
     BGP_TEMPLATES = {
         "cisco_ios": "cisco_ios_show_ip_bgp_summary.textfsm",
         "cisco_xe": "cisco_ios_show_ip_bgp_summary.textfsm",
         "cisco_nxos": "cisco_nxos_show_ip_bgp_summary.textfsm",
+        "cisco_xr": "cisco_xr_show_ip_bgp_summary.textfsm",
+        "arista_eos": "arista_eos_show_ip_bgp_summary.textfsm",
     }
+
+    # Templates where STATE and prefix count are in a single combined field.
+    # The field contains a digit string when established, or a state word when not.
+    COMBINED_STATE_FIELD = {
+        "cisco_ios": "STATE_OR_PREFIXES_RECEIVED",
+        "cisco_xe": "STATE_OR_PREFIXES_RECEIVED",
+        "cisco_nxos": "STATE_PFXRCD",
+        "cisco_xr": "STATE_PFXRCD",
+    }
+    # Arista EOS has separate STATE and STATE_PFXRCD fields.
+
+    # All state strings that mean "session is up"
+    ESTABLISHED_STATES = {"established", "estab"}
 
     def __init__(self, job, device, deviation_percent, min_prefix_threshold):
         self.job = job
@@ -169,7 +184,6 @@ class BGPChecker:
         self.min_prefix_threshold = min_prefix_threshold
 
     def run(self):
-        import re
         platform = self.device.platform.network_driver
         command = self.BGP_COMMANDS.get(platform)
         if not command:
@@ -191,18 +205,15 @@ class BGPChecker:
             try:
                 neighbors = parse_command_output(output, template)
                 for neighbor in neighbors:
-                    neighbor_ip = neighbor.get("BGPNEIGHBOR") or neighbor.get("neighbor", "")
-                    state = neighbor.get("STATE") or neighbor.get("state", "")
-                    prefixes = neighbor.get("PREFIXRECEIVED") or neighbor.get("prefix_received", "0")
-                    try:
-                        prefix_count = int(prefixes)
-                    except ValueError:
-                        prefix_count = 0
+                    neighbor_ip, state, prefix_count = self._extract_fields(
+                        neighbor, platform
+                    )
 
                     alert_msgs = []
-                    state_lower = state.lower()
-                    if "established" not in state_lower and not state.isdigit():
-                        alert_msgs.append(f"BGP session not established (state: {state})")
+                    if state.lower() not in self.ESTABLISHED_STATES:
+                        alert_msgs.append(
+                            f"BGP session not established (state: {state})"
+                        )
                     if prefix_count < self.min_prefix_threshold:
                         alert_msgs.append(
                             f"Prefix count {prefix_count} below minimum {self.min_prefix_threshold}"
@@ -232,6 +243,36 @@ class BGPChecker:
         # Fallback: log raw output
         self.job.logger.info(f"{self.device} BGP summary:\n{output[:2000]}")
         return []
+
+    def _extract_fields(self, neighbor: dict, platform: str):
+        """Return (neighbor_ip, state, prefix_count) normalised across all platforms."""
+        # Neighbor IP — BGP_NEIGH (arista/nxos/xr) or BGP_NEIGHBOR (ios/xe)
+        neighbor_ip = (
+            neighbor.get("BGP_NEIGH")
+            or neighbor.get("BGP_NEIGHBOR")
+            or ""
+        )
+
+        combined_field = self.COMBINED_STATE_FIELD.get(platform)
+        if combined_field:
+            # IOS / XR / NXOS: one field holds either state word or prefix count
+            raw = neighbor.get(combined_field, "0")
+            if raw.isdigit():
+                state = "Established"
+                prefix_count = int(raw)
+            else:
+                state = raw or "Unknown"
+                prefix_count = 0
+        else:
+            # Arista EOS: separate STATE and STATE_PFXRCD fields
+            state = neighbor.get("STATE", "Unknown")
+            pfx_raw = neighbor.get("STATE_PFXRCD", "0")
+            try:
+                prefix_count = int(pfx_raw)
+            except (ValueError, TypeError):
+                prefix_count = 0
+
+        return neighbor_ip, state, prefix_count
 
 
 register_jobs(BGPPrefixAnomalyDetector)

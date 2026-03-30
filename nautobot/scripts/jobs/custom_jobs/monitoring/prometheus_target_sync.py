@@ -10,7 +10,7 @@ from custom_jobs.modules.tools import apply_device_filters, DeviceFormEntry
 
 name = "Monitoring"
 
-DEFAULT_OUTPUT_PATH = "/etc/prometheus/file_sd/nautobot_targets.yml"
+DEFAULT_OUTPUT_PATH = "/opt/nautobot/prometheus_file_sd/nautobot_targets.yml"
 
 
 class PrometheusTargetSync(Job, DeviceFormEntry):
@@ -116,7 +116,7 @@ class PrometheusTargetSync(Job, DeviceFormEntry):
 
             labels = {
                 "device": dev.name,
-                "job": dev.role.slug if dev.role else "unknown",
+                "job": dev.role.name.lower().replace(" ", "-") if dev.role else "unknown",
                 "platform": dev.platform.network_driver if dev.platform else "unknown",
                 "location": dev.location.name if dev.location else "unknown",
             }
