@@ -439,9 +439,9 @@ FSCOM Firmware Upgrade Steps:
 
 2. SCP copy the image to the switch:
 If 24S2Q in show version output:
-- copy ftp://routers:h2dtA4wEoV@185.130.156.13/FS/S5850-24S2Q-Switches-FSOS-V7.4.5.R.bin flash:/boot
+- copy ftp://username:password@10.1.1.1/FS/S5850-24S2Q-Switches-FSOS-V7.4.5.R.bin flash:/boot
 If 32S2Q in show version output:
-- copy ftp://routers:h2dtA4wEoV@185.130.156.13/FS/S5850-32S2Q-Switches-FSOS-V7.4.5.R.bin flash:/boot
+- copy ftp://username:password@10.1.1.1/FS/S5850-32S2Q-Switches-FSOS-V7.4.5.R.bin flash:/boot
 
 3. Validate the next time boot image: 
 - show boot = output
@@ -656,7 +656,7 @@ class Fiberstore_FSOS:
 
 ### https://forum.mikrotik.com/viewtopic.php?t=175781
 ## Copy over the image to the device:
-# scp /home/bal/routeros-tile-6.49.13.npk rconfig@10.3.255.25:/routeros-tile-6.49.13.npk
+# scp /home/user/routeros-tile-6.49.13.npk username@10.1.1.1:/routeros-tile-6.49.13.npk
 
 
 # TODO: Add support for different versions of Mikrotik OS
@@ -771,7 +771,7 @@ class Mikrotik_RouterOS:
         if not os.path.exists(local_path):
             try:
                 subprocess.run(["mkdir", "-p", PERSISTENT_DIR], check=True)
-                # curl -u routers:h2dtA4wEoV ftp://185.130.156.13:/Mikrotik/mikrotik-6.47.9.npk -o /opt/nautobot/firmware_images/mikrotik-6.47.9.npk
+                # curl -u username:password ftp://10.1.1.1:/Mikrotik/mikrotik-6.47.9.npk -o /opt/nautobot/firmware_images/mikrotik-6.47.9.npk
                 self.job.logger.info(
                     f"{self.device} Downloading {self.software_image_location} to {local_path}..."
                 )
@@ -805,7 +805,7 @@ class Mikrotik_RouterOS:
             return
 
         try:
-            # sshpass -p 0IoRD2uPdW scp -o StrictHostKeyChecking=no /opt/nautobot/firmware_images/mikrotik-6.47.9.npk rconfig@185.130.156.13:/mikrotik-6.47.9.npk
+            # sshpass -p password scp -o StrictHostKeyChecking=no /opt/nautobot/firmware_images/mikrotik-6.47.9.npk username@10.1.1.1:/mikrotik-6.47.9.npk
             self.job.logger.info(
                 f"{self.device} Uploading {self.firmware_image_path} to device"
             )
@@ -987,7 +987,7 @@ class Netonix_OS:
         if not os.path.exists(local_path):
             try:
                 subprocess.run(["mkdir", "-p", PERSISTENT_DIR], check=True)
-                # curl -u routers:h2dtA4wEoV ftp://185.130.156.13:/Netonix/wispswitch-1.5.17rc2.bin -o /opt/nautobot/firmware_images/wispswitch-1.5.17rc2.bin
+                # curl -u username:password ftp://10.1.1.1:/Netonix/wispswitch-1.5.17rc2.bin -o /opt/nautobot/firmware_images/wispswitch-1.5.17rc2.bin
                 self.job.logger.info(
                     f"{self.device} Downloading {self.software_image_location} to {local_path}..."
                 )

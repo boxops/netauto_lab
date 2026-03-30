@@ -62,6 +62,7 @@ start:  ## Start all services
 	@echo -e "$(GREEN)Starting all services...$(NC)"
 	@docker network inspect clab >/dev/null 2>&1 \
 	  || docker network create clab --subnet 172.20.20.0/24 >/dev/null
+	@$(COMPOSE) rm -f 2>/dev/null || true
 	$(COMPOSE) up -d
 	@echo -e "$(GREEN)Services started. Run 'make status' to verify.$(NC)"
 

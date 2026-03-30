@@ -6,13 +6,14 @@ from nautobot.apps.jobs import register_jobs, Job, IntegerVar, BooleanVar
 from custom_jobs.modules.tools import apply_device_filters
 from custom_jobs.modules.tools import DeviceFormEntry
 from custom_jobs.modules.tools import parallel_execution
+from custom_jobs.modules.tools import JobLogBuffer
+from custom_jobs.modules.tools import JobProxy
 
 from custom_jobs.configuration.backup_configurations import DeviceBackup
 from custom_jobs.configuration.intended_configurations import DeviceIntent
 from custom_jobs.configuration.configuration_compliance import (
     DeviceCompliance,
 )
-from custom_jobs.modules.git import gc_repos
 
 name = "Configuration"
 
@@ -28,6 +29,7 @@ SUPPORTED_PLATFORMS = [
     # "cisco_s300",
     # "ubiquiti_airos",
     # "siklu_os",
+    "arista_eos",
 ]
 
 
@@ -59,7 +61,7 @@ class RunAllConfigComplianceJobs(Job, DeviceFormEntry):
             "bulk",
         ]
 
-    @gc_repos
+    # @gc_repos  # Uncomment to re-enable Git repository sync once repos are configured.
     def run(
         self,
         tenant_group=None,
@@ -96,24 +98,26 @@ class RunAllConfigComplianceJobs(Job, DeviceFormEntry):
         if device:
             all_devices.update(device)
 
-        def compliance_config(device):
+        def compliance_config(dev):
+            buf = JobLogBuffer()
             try:
-                if device.platform.network_driver not in SUPPORTED_PLATFORMS:
-                    self.logger.info(
-                        f"{device} Platform {device.platform.network_driver} is not supported. Skipping..."
+                if dev.platform.network_driver not in SUPPORTED_PLATFORMS:
+                    buf.info(
+                        f"{dev} Platform {dev.platform.network_driver} is not supported. Skipping..."
                     )
-                    return
-                self.logger.info(f"{device} Processing device...")
-                task = AllConfigComplianceJobs(job=self, device=device)
+                    return buf
+                buf.info(f"{dev} Processing device...")
+                task = AllConfigComplianceJobs(job=JobProxy(buf), device=dev)
                 task.run_jobs()
             except Exception as e:
-                self.logger.error(f"{device} Error processing device: {e}")
+                buf.error(f"{dev} Error processing device: {e}")
+            return buf
 
         if parallel_task:
-            parallel_execution(compliance_config, all_devices, max_workers=max_workers)
+            parallel_execution(compliance_config, all_devices, max_workers=max_workers, job_logger=self.logger)
         else:
-            for device in all_devices:
-                compliance_config(device)
+            for dev in all_devices:
+                compliance_config(dev).drain_to(self.logger)
 
 
 class AllConfigComplianceJobs:

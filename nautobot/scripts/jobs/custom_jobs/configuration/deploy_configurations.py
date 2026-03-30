@@ -6,12 +6,19 @@ from django.conf import settings
 from netmiko import ConnectHandler
 from deepdiff import DeepDiff
 
-from nautobot.apps.jobs import Job, TextVar, BooleanVar, IntegerVar, register_jobs
+from nautobot.apps.jobs import Job, TextVar, BooleanVar, IntegerVar, MultiObjectVar, register_jobs
+from nautobot_golden_config.models import ComplianceFeature, ConfigCompliance, GoldenConfig
 
 from custom_jobs.modules.tools import get_device_connection_info
 from custom_jobs.modules.tools import apply_device_filters
 from custom_jobs.modules.tools import DeviceFormEntry
 from custom_jobs.modules.tools import parallel_execution
+from custom_jobs.modules.tools import JobLogBuffer
+from custom_jobs.modules.tools import JobProxy
+
+from custom_jobs.configuration.backup_configurations import DeviceBackup
+from custom_jobs.configuration.intended_configurations import DeviceIntent
+from custom_jobs.configuration.configuration_compliance import DeviceCompliance
 
 name = "Configuration"
 
@@ -25,6 +32,7 @@ SUPPORTED_PLATFORMS = [
     "cisco_xe",
     "cisco_nxos",
     "cisco_s300",
+    "arista_eos",
 ]
 
 
@@ -129,42 +137,33 @@ class DeployConfigurations(Job, DeviceFormEntry):
         #     except Exception as e:
         #         self.logger.error(f"Error processing device {device}: {e}")
 
-        def deploy_configuration(device):
+        def deploy_configuration(dev):
+            buf = JobLogBuffer()
             try:
-                self.logger.info(f"{device} Checking platform compatibility...")
+                if not hasattr(dev, "platform") or not dev.platform:
+                    buf.error(f"{dev} Device has no platform assigned")
+                    return buf
 
-                if not hasattr(device, "platform") or not device.platform:
-                    self.logger.error(f"{device} Device has no platform assigned")
-                    return
-
-                if not hasattr(device.platform, "network_driver"):
-                    self.logger.error(
-                        f"{device} Platform {device.platform} has no network_driver"
+                if dev.platform.network_driver not in SUPPORTED_PLATFORMS:
+                    buf.warning(
+                        f"{dev} Platform {dev.platform.network_driver} is not supported."
                     )
-                    return
+                    return buf
 
-                if device.platform.network_driver not in SUPPORTED_PLATFORMS:
-                    self.logger.warning(
-                        f"{device} Platform {device.platform.network_driver} is not supported. Supported: {SUPPORTED_PLATFORMS}"
-                    )
-                    return
-
-                self.logger.info(
-                    f"{device} Platform {device.platform.network_driver} is supported"
-                )
-                self.logger.info(f"{device} Processing device...")
-                task = Deploy(self, device, configuration, pre_and_post_checks)
+                buf.info(f"{dev} Processing device...")
+                task = Deploy(JobProxy(buf), dev, configuration, pre_and_post_checks)
                 task.configure()
             except Exception as e:
-                self.logger.error(f"{device} Error processing device: {e}")
+                buf.error(f"{dev} Error processing device: {e}")
+            return buf
 
         if parallel_task:
             parallel_execution(
-                deploy_configuration, all_devices, max_workers=max_workers
+                deploy_configuration, all_devices, max_workers=max_workers, job_logger=self.logger
             )
         else:
-            for device in all_devices:
-                deploy_configuration(device)
+            for dev in all_devices:
+                deploy_configuration(dev).drain_to(self.logger)
 
 
 class Deploy:
@@ -243,3 +242,205 @@ class Deploy:
 
 
 register_jobs(DeployConfigurations)
+
+
+class RemediateCompliance(Job, DeviceFormEntry):
+    """Push remediation commands derived from ConfigCompliance deviations.
+
+    Intent-driven flow:
+        Backup (running) ──┐
+                           ├──► Compliance diff ──► missing / extra lines
+        Intended (template)┘                              │
+                                                          ▼
+                                               Remediate (push missing → device)
+
+    'missing' lines (in intended, absent in running) are safe to push — they
+    bring the device closer to the desired state.
+
+    'extra' lines (in running, absent in intended) require explicit opt-in via
+    include_removals because removing config lines is destructive.
+    """
+
+    dry_run = BooleanVar(
+        description="Preview remediation commands without pushing them to the device",
+        label="Dry run (preview only)",
+        default=True,
+    )
+    include_removals = BooleanVar(
+        description=(
+            "Also generate 'no <line>' commands for extra lines found in the running config "
+            "but absent from the intended config. DESTRUCTIVE — review carefully."
+        ),
+        label="Include config removals (destructive)",
+        default=False,
+        required=False,
+    )
+    refresh_compliance = BooleanVar(
+        description="Re-run backup → intended → compliance after a successful push",
+        label="Refresh compliance after push",
+        default=True,
+        required=False,
+    )
+    rules_filter = MultiObjectVar(
+        model=ComplianceFeature,
+        description="Select one or more compliance rules to remediate. Leave blank to remediate all non-compliant rules.",
+        label="Limit to rules (optional)",
+        required=False,
+    )
+    parallel_task = BooleanVar(
+        description="Remediate devices in parallel",
+        default=False,
+        required=False,
+    )
+    max_workers = IntegerVar(
+        description="Number of parallel workers",
+        default=10,
+        min_value=1,
+        max_value=20,
+        required=False,
+    )
+
+    class Meta:
+        name = "Remediate Configuration Compliance"
+        description = (
+            "Push missing configuration lines (and optionally remove extra lines) "
+            f"derived from ConfigCompliance deviations. Supported platforms: {SUPPORTED_PLATFORMS}"
+        )
+        has_sensitive_variables = False
+        soft_time_limit = 1800
+        time_limit = 2400
+        task_queues = [
+            settings.CELERY_TASK_DEFAULT_QUEUE,
+            "priority",
+            "bulk",
+        ]
+
+    def run(
+        self,
+        tenant_group=None,
+        tenant=None,
+        location=None,
+        rack_group=None,
+        rack=None,
+        role=None,
+        manufacturer=None,
+        platform=None,
+        device_type=None,
+        device=None,
+        tags=None,
+        status=None,
+        dry_run=True,
+        include_removals=False,
+        refresh_compliance=True,
+        rules_filter=None,
+        parallel_task=False,
+        max_workers=10,
+    ):
+        # Capture selected rule features once so the closure can reference them
+        selected_features = rules_filter if rules_filter is not None else None
+        if selected_features is not None and selected_features.exists():
+            self.logger.info(f"Limiting remediation to rules: {sorted(selected_features.values_list('slug', flat=True))}")
+
+        all_devices = apply_device_filters(
+            set(),
+            tenant_group=tenant_group,
+            tenant=tenant,
+            location=location,
+            rack_group=rack_group,
+            rack=rack,
+            role=role,
+            manufacturer=manufacturer,
+            platform=platform,
+            device_type=device_type,
+            tags=tags,
+            status=status,
+        )
+        if device:
+            all_devices.update(device)
+
+        if not all_devices:
+            self.logger.warning("No devices matched the selected filters.")
+            return
+
+        def remediate_device(dev):
+            buf = JobLogBuffer()
+            try:
+                if not dev.platform or dev.platform.network_driver not in SUPPORTED_PLATFORMS:
+                    drv = dev.platform.network_driver if dev.platform else "none"
+                    buf.warning(f"{dev} Platform '{drv}' not supported, skipping.")
+                    return buf
+
+                non_compliant = ConfigCompliance.objects.filter(device=dev, compliance=False)
+                if selected_features is not None and selected_features.exists():
+                    non_compliant = non_compliant.filter(rule__feature__in=selected_features)
+                if not non_compliant.exists():
+                    buf.info(f"{dev} All selected rules compliant — nothing to remediate.")
+                    return buf
+
+                commands = []
+                for comp in non_compliant.order_by("rule__feature__slug"):
+                    buf.info(f"{dev} Non-compliant rule: {comp.rule.feature.slug}")
+                    if comp.missing:
+                        for raw in comp.missing.splitlines():
+                            line = raw.strip()
+                            if line:
+                                commands.append(line)
+                    if include_removals and comp.extra:
+                        for raw in comp.extra.splitlines():
+                            line = raw.strip()
+                            # Skip comment/blank lines and interface/section headers
+                            # already handled by a 'no' at the parent level
+                            if line and not line.startswith("!") and not line.startswith("interface "):
+                                commands.append(f"no {line}")
+
+                if not commands:
+                    buf.info(f"{dev} No remediation commands generated.")
+                    return buf
+
+                # Attach commands as a file regardless of dry_run so they can be reviewed
+                from datetime import datetime
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"remediation_{dev.name}_{ts}.txt"
+                cmd_text = "\n".join(commands)
+
+                buf.info(f"{dev} Remediation commands ({len(commands)}):")
+                for cmd in commands:
+                    buf.info(f"  {cmd}")
+
+                if dry_run:
+                    buf.warning(f"{dev} Dry run — commands NOT pushed to device.")
+                    return buf
+
+                # Push to device
+                device_info = get_device_connection_info(dev)
+                with ConnectHandler(**device_info) as session:
+                    session.enable()
+                    result = session.send_config_set(commands)
+                    buf.info(f"{dev} Push result:\n{result}")
+
+                buf.info(f"{dev} Remediation complete.")
+
+                # Optionally refresh backup → intended → compliance
+                if refresh_compliance:
+                    buf.info(f"{dev} Refreshing backup → intended → compliance...")
+                    proxy = JobProxy(buf)
+                    DeviceBackup(job=proxy, device=dev).backup_config()
+                    DeviceIntent(job=proxy, device=dev).generate_config()
+                    DeviceCompliance(job=proxy, device=dev).run_compliance()
+
+            except Exception as exc:
+                buf.error(f"{dev} Remediation failed: {exc}")
+            return buf
+
+        if parallel_task:
+            parallel_execution(
+                remediate_device, all_devices,
+                max_workers=max_workers,
+                job_logger=self.logger,
+            )
+        else:
+            for dev in all_devices:
+                remediate_device(dev).drain_to(self.logger)
+
+
+register_jobs(RemediateCompliance)

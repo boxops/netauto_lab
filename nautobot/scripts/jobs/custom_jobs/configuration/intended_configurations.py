@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from django.conf import settings
+import ipaddress
 import os
 
 from nautobot.apps.jobs import register_jobs, Job, IntegerVar, BooleanVar
@@ -13,9 +14,16 @@ from nautobot_golden_config.utilities.graphql import graph_ql_query
 from custom_jobs.modules.tools import apply_device_filters
 from custom_jobs.modules.tools import DeviceFormEntry
 from custom_jobs.modules.tools import parallel_execution
-from custom_jobs.modules.git import gc_repos
+from custom_jobs.modules.tools import JobLogBuffer
+from custom_jobs.modules.tools import JobProxy
 
 name = "Configuration"
+
+# Fallback directory for rendered intended configs when no Git repo is configured.
+DEFAULT_INTENDED_ROOT = getattr(settings, "INTENDED_ROOT", "/opt/nautobot/intended")
+
+# Fallback directory for Jinja templates (scripts volume is mounted here).
+DEFAULT_JINJA_ROOT = getattr(settings, "JINJA_ROOT", "/opt/nautobot/scripts/jinja_templates")
 
 SUPPORTED_PLATFORMS = [
     "keymile_nos",
@@ -29,6 +37,7 @@ SUPPORTED_PLATFORMS = [
     # "cisco_s300",
     # "ubiquiti_airos",
     # "siklu_os",
+    "arista_eos",
 ]
 
 
@@ -60,7 +69,7 @@ class CustomDeviceIntended(Job, DeviceFormEntry):
             "bulk",
         ]
 
-    @gc_repos
+    # @gc_repos  # Uncomment to re-enable Git repository sync once repos are configured.
     def run(
         self,
         tenant_group=None,
@@ -97,24 +106,26 @@ class CustomDeviceIntended(Job, DeviceFormEntry):
         if device:
             all_devices.update(device)
 
-        def intended_config(device):
+        def intended_config(dev):
+            buf = JobLogBuffer()
             try:
-                if device.platform.network_driver not in SUPPORTED_PLATFORMS:
-                    self.logger.info(
-                        f"{device} Platform {device.platform.network_driver} is not supported. Skipping..."
+                if dev.platform.network_driver not in SUPPORTED_PLATFORMS:
+                    buf.info(
+                        f"{dev} Platform {dev.platform.network_driver} is not supported. Skipping..."
                     )
-                    return
-                self.logger.info(f"{device} Processing device...")
-                task = DeviceIntent(job=self, device=device)
+                    return buf
+                buf.info(f"{dev} Processing device...")
+                task = DeviceIntent(job=JobProxy(buf), device=dev)
                 task.generate_config()
             except Exception as e:
-                self.logger.error(f"{device} Error processing device: {e}")
+                buf.error(f"{dev} Error processing device: {e}")
+            return buf
 
         if parallel_task:
-            parallel_execution(intended_config, all_devices, max_workers=max_workers)
+            parallel_execution(intended_config, all_devices, max_workers=max_workers, job_logger=self.logger)
         else:
-            for device in all_devices:
-                intended_config(device)
+            for dev in all_devices:
+                intended_config(dev).drain_to(self.logger)
 
 
 class DeviceIntent:
@@ -122,85 +133,214 @@ class DeviceIntent:
         self.job = job
         self.device = device
 
+    def _resolve_intended_path(self, setting):
+        """Return the full path for the intended config file.
+
+        Uses the Golden Config setting's intended repository when configured,
+        otherwise falls back to DEFAULT_INTENDED_ROOT/<hostname>.txt.
+        """
+        if setting is not None and setting.intended_repository is not None and setting.intended_path_template:
+            directory = setting.intended_repository.filesystem_path
+            relative_path = render_jinja2(
+                template_code=setting.intended_path_template,
+                context={"obj": self.device},
+            )
+            return os.path.join(directory, relative_path)
+
+        self.job.logger.warning(
+            f"{self.device} No Golden Config intended repository configured. "
+            f"Writing to fallback directory: {DEFAULT_INTENDED_ROOT}"
+        )
+        return os.path.join(DEFAULT_INTENDED_ROOT, f"{self.device.name}.txt")
+
+    def _resolve_jinja_path(self, setting):
+        """Return the path to the Jinja template for this device.
+
+        Uses the Golden Config setting's jinja repository when configured,
+        otherwise falls back to DEFAULT_JINJA_ROOT/<platform>.j2.
+        """
+        if setting is not None and setting.jinja_repository is not None and setting.jinja_path_template:
+            directory = setting.jinja_repository.filesystem_path
+            relative_path = render_jinja2(
+                template_code=setting.jinja_path_template,
+                context={"obj": self.device},
+            )
+            return os.path.join(directory, relative_path)
+
+        driver = (self.device.platform.network_driver if self.device.platform else "unknown")
+        fallback = os.path.join(DEFAULT_JINJA_ROOT, f"{driver}.j2")
+        self.job.logger.warning(
+            f"{self.device} No Golden Config jinja repository configured. "
+            f"Using local template: {fallback}"
+        )
+        return fallback
+
+    def _build_device_context(self, setting):
+        """Build the Jinja2 rendering context.
+
+        Uses the SOT aggregation GraphQL query when configured,
+        otherwise returns a minimal context built from the ORM.
+        """
+        if setting is not None and setting.sot_agg_query is not None:
+            self.job.request.user = self.job.user
+            _, device_data = graph_ql_query(
+                self.job.request, self.device, setting.sot_agg_query.query
+            )
+            return device_data
+
+        return self._build_enriched_context()
+
+    def _build_enriched_context(self):
+        """Build a rich Jinja2 context from Nautobot ORM — no Git repo required.
+
+        Shared infrastructure config (NTP, SNMP, logging, BGP max-paths) is sourced
+        from Nautobot config contexts so it can be managed centrally per platform/role.
+        Per-device unique values (BGP ASN, router-ID, neighbors) are derived from the ORM.
+        """
+        from nautobot.ipam.models import VLAN
+
+        device = self.device
+        # Merged config context (platform + role + location hierarchy)
+        cc = device.get_config_context()
+
+        context = {"obj": device, "cc": cc}
+
+        # Role (lower-cased name, e.g. 'leaf' or 'spine')
+        context["role"] = device.role.name.lower() if device.role else ""
+
+        # ── VLANs ────────────────────────────────────────────────────────────
+        # Derive from Vlan-prefixed interfaces present on the device.
+        vlan_vids = []
+        for iface in device.interfaces.filter(name__startswith="Vlan"):
+            try:
+                vlan_vids.append(int(iface.name[4:]))
+            except ValueError:
+                pass
+        device_vlans = []
+        for v in VLAN.objects.filter(vid__in=vlan_vids).order_by("vid"):
+            device_vlans.append({"vid": v.vid, "name": v.name})
+        context["device_vlans"] = device_vlans
+
+        # ── BGP ──────────────────────────────────────────────────────────────
+        # BGP ASN is per-device — sourced from custom field (unique scalar,
+        # not suitable for config context hierarchy which has no device-level scope
+        # in Nautobot 3.x without per-device dynamic groups).
+        bgp_asn = device.cf.get("bgp_asn")
+        context["bgp_asn"] = bgp_asn
+
+        # Router-ID from Loopback0
+        lo_iface = device.interfaces.filter(name="Loopback0").first()
+        lo_ip_obj = lo_iface.ip_addresses.first() if lo_iface else None
+        lo_ip = str(lo_ip_obj.address).split("/")[0] if lo_ip_obj else None
+        context["bgp_router_id"] = lo_ip
+
+        # max-paths from config context (set per role: leaf=2, spine=4)
+        context["bgp_max_paths"] = cc.get("bgp", {}).get("max_paths", 2)
+
+        # Neighbors: derive from /31 Ethernet IPs by finding the peer in the IP table
+        bgp_neighbors = []
+        for eth in device.interfaces.filter(name__startswith="Ethernet"):
+            for ip_obj in eth.ip_addresses.all():
+                try:
+                    net = ipaddress.ip_interface(str(ip_obj.address)).network
+                except ValueError:
+                    continue
+                if net.prefixlen != 31:
+                    continue
+                my_ip = ipaddress.ip_interface(str(ip_obj.address)).ip
+                hosts = list(net.hosts())
+                peer_ip = str(hosts[0] if my_ip == hosts[1] else hosts[1])
+                # Resolve peer's ASN via host/mask_length lookup on IPAddress
+                peer_asn = None
+                try:
+                    from nautobot.ipam.models import IPAddress as NBIPAddress
+                    peer_ip_obj = NBIPAddress.objects.filter(
+                        host=peer_ip, mask_length=net.prefixlen
+                    ).first()
+                    if peer_ip_obj:
+                        peer_iface = peer_ip_obj.interfaces.first()
+                        if peer_iface:
+                            peer_asn = peer_iface.device.cf.get("bgp_asn")
+                except Exception:
+                    pass
+                bgp_neighbors.append({"ip": peer_ip, "remote_as": peer_asn})
+        # Sort by neighbor IP for deterministic output
+        bgp_neighbors.sort(key=lambda n: ipaddress.ip_address(n["ip"]))
+        context["bgp_neighbors"] = bgp_neighbors
+
+        # BGP networks to advertise
+        bgp_networks = []
+        for iface in device.interfaces.filter(name__startswith="Vlan"):
+            for ip_obj in iface.ip_addresses.all():
+                try:
+                    net = ipaddress.ip_interface(str(ip_obj.address)).network
+                    bgp_networks.append(str(net))
+                except ValueError:
+                    pass
+        # Spines: no SVIs — advertise the loopback /24 summary
+        if not bgp_networks and lo_ip:
+            try:
+                lo_net = ipaddress.ip_network(lo_ip)
+                bgp_networks.append(str(lo_net.supernet(new_prefix=24)))
+            except Exception:
+                pass
+        bgp_networks.sort()
+        context["bgp_networks"] = bgp_networks
+
+        return context
+
     def generate_config(self):
         """Generate intended configuration for the device."""
-
-        intended_obj = GoldenConfig.objects.filter(device=self.device).first()
-        if not intended_obj:
-            intended_obj = GoldenConfig.objects.create(device=self.device)
-
+        intended_obj, _ = GoldenConfig.objects.get_or_create(device=self.device)
         intended_obj.intended_last_attempt_date = datetime.now()
         intended_obj.save()
 
-        intended_dynamic_groups = DynamicGroup.objects.exclude(
-            golden_config_setting__isnull=True
-        )
-        intended_dynamic_group = intended_dynamic_groups[0]
-        intended_directory = (
-            intended_dynamic_group.golden_config_setting.intended_repository.filesystem_path
-        )
-
-        intended_path_template_obj = render_jinja2(
-            template_code=intended_dynamic_group.golden_config_setting.intended_path_template,
-            context={"obj": self.device},
-        )
-        intended_file = os.path.join(intended_directory, intended_path_template_obj)
-
-        # Create intended_directory if it does not exist
-        if not os.path.exists(os.path.dirname(intended_file)):
-            os.makedirs(os.path.dirname(intended_file))
-
-        self.job.logger.info(f"{self.device} Intent file: {intended_file}")
-        # TODO: Commit and push local Git repository to remote repository
-
-        jinja_template = render_jinja2(
-            template_code=intended_dynamic_group.golden_config_setting.jinja_path_template,
-            context={"obj": self.device},
-        )
-        jinja_directory = (
-            intended_dynamic_group.golden_config_setting.jinja_repository.filesystem_path
-        )
-        jinja_file = os.path.join(jinja_directory, jinja_template)
-
-        self.job.request.user = self.job.user
-        status, device_data = graph_ql_query(
-            self.job.request,
-            self.device,
-            intended_dynamic_group.golden_config_setting.sot_agg_query.query,
-        )
-
-        # self.job.logger.info(f"Jinja Template: {jinja_template}")
-        # self.job.logger.info(f"SOT Agg Query Status: {status}")
-        # self.job.logger.info(f"Device Data: {device_data}")
+        groups = DynamicGroup.objects.exclude(golden_config_setting__isnull=True)
+        setting = groups[0].golden_config_setting if groups.exists() else None
 
         try:
-            with open(jinja_file) as file:
-                jinja_template_contents = file.read()
-
-            rendered_config = render_jinja2(
-                template_code=jinja_template_contents,
-                context=device_data,
-            )
+            intended_file = self._resolve_intended_path(setting)
         except Exception as e:
-            self.job.logger.error(f"Failed to render Jinja template: {e}")
+            self.job.logger.error(f"{self.device} Could not resolve intended path: {e}")
             return
 
-        # self.job.logger.info(f"Rendered Config: {rendered_config}")
+        try:
+            jinja_file = self._resolve_jinja_path(setting)
+        except Exception as e:
+            self.job.logger.error(f"{self.device} Could not resolve jinja path: {e}")
+            return
 
-        # Save the rendered configuration to disk
-        with open(intended_file, "w") as file:
-            file.write(rendered_config)
+        os.makedirs(os.path.dirname(intended_file), exist_ok=True)
+        self.job.logger.info(f"{self.device} Intent file: {intended_file}")
 
-        self.job.logger.info(
-            f"{self.device} Saved intended configuration to file {intended_file}"
-        )
+        device_data = self._build_device_context(setting)
+
+        try:
+            with open(jinja_file) as f:
+                template_code = f.read()
+            rendered_config = render_jinja2(
+                template_code=template_code,
+                context=device_data,
+            )
+        except FileNotFoundError:
+            self.job.logger.error(
+                f"{self.device} Jinja template not found: {jinja_file}. "
+                f"Create the template at {DEFAULT_JINJA_ROOT}/<platform>.j2"
+            )
+            return
+        except Exception as e:
+            self.job.logger.error(f"{self.device} Failed to render Jinja template: {e}")
+            return
+
+        with open(intended_file, "w") as f:
+            f.write(rendered_config)
 
         intended_obj.intended_last_success_date = datetime.now()
         intended_obj.intended_config = rendered_config
         intended_obj.save()
 
         self.job.logger.info(
-            f"{self.device} Successfully generated intended configuration."
+            f"{self.device} Successfully generated intended configuration → {intended_file}"
         )
 
 

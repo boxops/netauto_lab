@@ -40,9 +40,13 @@ class PacketCapture(Job, DeviceFormEntry):
     """
 
     interface = StringVar(
-        description="Device interface to capture on (e.g. Ethernet1, Management0)",
+        description=(
+            "Linux kernel interface name to capture on. "
+            "For Arista cEOS use 'eth0' (management) or 'eth1'/'eth2' (data). "
+            "For Cisco XR use the Linux interface name (e.g. 'MgmtEth0_RP0_CPU0_0')."
+        ),
         label="Interface",
-        default="Management0",
+        default="eth0",
     )
     duration = IntegerVar(
         description="Capture duration in seconds",
@@ -95,7 +99,7 @@ class PacketCapture(Job, DeviceFormEntry):
         device=None,
         tags=None,
         status=None,
-        interface="Management0",
+        interface="eth0",
         duration=10,
         capture_filter="",
         parallel_task=False,

@@ -31,7 +31,7 @@ from .documentation.generate_site_docs import GenerateSiteDocs
 from .configuration.backup_configurations import CustomDeviceBackup
 from .configuration.intended_configurations import CustomDeviceIntended
 from .configuration.configuration_compliance import CustomDeviceCompliance
-from .configuration.deploy_configurations import DeployConfigurations
+from .configuration.deploy_configurations import DeployConfigurations, RemediateCompliance
 from .configuration.run_all_compliance_jobs import RunAllConfigComplianceJobs
 from .configuration.ntp_compliance import NTPComplianceCheck
 from .configuration.banner_compliance import BannerComplianceCheck
@@ -108,6 +108,7 @@ __all__ = [
     "CustomDeviceIntended",
     "CustomDeviceCompliance",
     "DeployConfigurations",
+    "RemediateCompliance",
     "RunAllConfigComplianceJobs",
     "NTPComplianceCheck",
     "BannerComplianceCheck",

@@ -30,14 +30,19 @@ from custom_jobs.modules.tools import DeviceFormEntry
 from custom_jobs.modules.tools import parallel_execution
 from custom_jobs.modules.tools import diff_files
 from custom_jobs.modules.tools import _open_file_config
+from custom_jobs.modules.tools import JobLogBuffer
+from custom_jobs.modules.tools import JobProxy
 from custom_jobs.configuration.custom_netutils.compliance import (
     section_config,
     _check_configs_differences,
     feature_compliance,
 )
-from custom_jobs.modules.git import gc_repos
 
 name = "Configuration"
+
+# Fallback directories — must match the values used by the backup/intended jobs.
+DEFAULT_BACKUP_ROOT   = getattr(settings, "BACKUP_ROOT",   "/opt/nautobot/backups")
+DEFAULT_INTENDED_ROOT = getattr(settings, "INTENDED_ROOT", "/opt/nautobot/intended")
 
 SUPPORTED_PLATFORMS = [
     "keymile_nos",
@@ -169,7 +174,7 @@ class CustomDeviceCompliance(Job, DeviceFormEntry):
             "bulk",
         ]
 
-    @gc_repos
+    # @gc_repos  # Uncomment to re-enable Git repository sync once repos are configured.
     def run(
         self,
         tenant_group=None,
@@ -203,25 +208,29 @@ class CustomDeviceCompliance(Job, DeviceFormEntry):
             tags=tags,
             status=status,
         )
+        if device:
+            all_devices.update(device)
 
-        def compliance_config(device):
+        def compliance_config(dev):
+            buf = JobLogBuffer()
             try:
-                if device.platform.network_driver not in SUPPORTED_PLATFORMS:
-                    self.logger.info(
-                        f"{device} Platform {device.platform.network_driver} is not supported. Skipping..."
+                if dev.platform.network_driver not in SUPPORTED_PLATFORMS:
+                    buf.info(
+                        f"{dev} Platform {dev.platform.network_driver} is not supported. Skipping..."
                     )
-                    return
-                self.logger.info(f"{device} Processing device...")
-                task = DeviceCompliance(job=self, device=device)
+                    return buf
+                buf.info(f"{dev} Processing device...")
+                task = DeviceCompliance(job=JobProxy(buf), device=dev)
                 task.run_compliance()
             except Exception as e:
-                self.logger.error(f"{device} Error processing device: {e}")
+                buf.error(f"{dev} Error processing device: {e}")
+            return buf
 
         if parallel_task:
-            parallel_execution(compliance_config, all_devices, max_workers=max_workers)
+            parallel_execution(compliance_config, all_devices, max_workers=max_workers, job_logger=self.logger)
         else:
-            for device in all_devices:
-                compliance_config(device)
+            for dev in all_devices:
+                compliance_config(dev).drain_to(self.logger)
 
 
 class DeviceCompliance:
@@ -238,40 +247,45 @@ class DeviceCompliance:
         config = config.replace("--", "")
         return config
 
+    def _resolve_file_path(self, repo_attr, template_attr, fallback_root, setting):
+        """Resolve a config file path from GoldenConfig setting or fall back to a local dir."""
+        if (
+            setting is not None
+            and getattr(setting, repo_attr, None) is not None
+            and getattr(setting, template_attr, "")
+        ):
+            directory = getattr(setting, repo_attr).filesystem_path
+            relative = render_jinja2(
+                template_code=getattr(setting, template_attr),
+                context={"obj": self.device},
+            )
+            return os.path.join(directory, relative)
+        return os.path.join(fallback_root, f"{self.device.name}.txt")
+
     def run_compliance(self):
         """Generate compliance configuration for the device."""
 
         compliance_obj = GoldenConfig.objects.filter(device=self.device).first()
-        self.job.logger.info(f"{self.device} Compliance object: {compliance_obj}")
 
         dynamic_groups = DynamicGroup.objects.exclude(
             golden_config_setting__isnull=True
         )
-        dynamic_group = dynamic_groups[0]
+        setting = dynamic_groups[0].golden_config_setting if dynamic_groups.exists() else None
 
-        intended_directory = (
-            dynamic_group.golden_config_setting.intended_repository.filesystem_path
+        intended_file = self._resolve_file_path(
+            "intended_repository", "intended_path_template", DEFAULT_INTENDED_ROOT, setting
         )
-        intended_path_template_obj = render_jinja2(
-            template_code=dynamic_group.golden_config_setting.intended_path_template,
-            context={"obj": self.device},
-        )
-        intended_file = os.path.join(intended_directory, intended_path_template_obj)
 
         if not os.path.exists(intended_file):
             self.job.logger.error(
-                f"{self.device} Intended file not found: {intended_file}"
+                f"{self.device} Intended file not found: {intended_file}. "
+                f"Run the Generate Intended Configurations job first."
             )
             return
 
-        backup_directory = (
-            dynamic_group.golden_config_setting.backup_repository.filesystem_path
+        backup_file = self._resolve_file_path(
+            "backup_repository", "backup_path_template", DEFAULT_BACKUP_ROOT, setting
         )
-        backup_path_template_obj = render_jinja2(
-            template_code=dynamic_group.golden_config_setting.backup_path_template,
-            context={"obj": self.device},
-        )
-        backup_file = os.path.join(backup_directory, backup_path_template_obj)
 
         if not os.path.exists(backup_file):
             self.job.logger.error(f"{self.device} Backup file not found: {backup_file}")
@@ -285,8 +299,6 @@ class DeviceCompliance:
                 f"{self.device} No compliance rules found for {platform}"
             )
             return
-
-        rules.get(platform)
 
         backup_cfg = _open_file_config(backup_file)
         intended_cfg = _open_file_config(intended_file)

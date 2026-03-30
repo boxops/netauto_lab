@@ -1,10 +1,10 @@
-! Startup-config last modified at Mon Mar 30 12:03:24 2026 by root
+! Startup-config last modified at Mon Mar 30 15:10:05 2026 by root
 ! device: spine2 (cEOSLab, EOS-4.29.0.1F-29140821.42901F (engineering build))
 !
 no aaa root
 !
-username admin privilege 15 role network-admin secret sha512 $6$A47qCUUGcQpxYPIP$CegoDwcBcsg.zD8/Q90dJLa8F9CAcTf/1LdFP.PYRAHmZz8Xod3CiSL.psFjDVgG.Z5KEYY5OpGnPGZGnQZLv/
-username netauto privilege 15 secret sha512 $6$N5MO4RKL7UBfmt4a$gBe7G/g6Nq4leg/shgKJhgHR/qjERdqsr.UTIuxeuGLgt00QCq8o/gSGQH.MmG.gnRAukva4i04g2X/3AVXcl.
+username admin privilege 15 role network-admin secret sha512 $6$Tehb.fT6/qY9Y0As$H9zK04Tr.xiU/BnTOtQtRzQKnpXRTN8zFcXSmZMxqYHNzTWPKYmUwhEHiiBsvf4OI0i6MidMupN/3WwSIlgtI/
+username netauto privilege 15 secret sha512 $6$UweDDDFYnqI795du$Npf8yQi3bN4tjz3l94Uuc/4jFmrtPPmn5rJvuaPDH16AauGyeq9zgnoQaGw35rofRHFyZuZt2HuwzM6AbEI.60
 !
 transceiver qsfp default-mode 4x10G
 !

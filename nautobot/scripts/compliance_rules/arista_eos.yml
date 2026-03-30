@@ -1,0 +1,122 @@
+- feature_slug: "aaa"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    aaa
+    no aaa
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "username"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    username
+    no username
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "service"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    service
+    no service
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "hostname"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    hostname
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "spanning-tree"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    spanning-tree
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "system"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    system
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "management"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    management
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "interface"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    interface
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "ip"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    ip
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "ipv6"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    ipv6
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "snmp-server"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    snmp-server
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "logging"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    logging
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "ntp"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    ntp
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "vlan"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    vlan
+  config_type: "cli"
+  config_remediation: true
+
+- feature_slug: "routing"
+  platform_network_driver: "arista_eos"
+  config_ordered: false
+  match_config: |
+    router
+  config_type: "cli"
+  config_remediation: true
