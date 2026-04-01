@@ -33,37 +33,29 @@ from .configuration.intended_configurations import CustomDeviceIntended
 from .configuration.configuration_compliance import CustomDeviceCompliance
 from .configuration.deploy_configurations import DeployConfigurations, RemediateCompliance
 from .configuration.run_all_compliance_jobs import RunAllConfigComplianceJobs
-from .configuration.ntp_compliance import NTPComplianceCheck
-from .configuration.banner_compliance import BannerComplianceCheck
-from .configuration.snmp_validation import SNMPValidation
 
 # ── Inventory ─────────────────────────────────────────────────────────────────
 from .inventory.lldp_neighbor_discovery import LLDPNeighborDiscovery
 from .inventory.arp_mac_sync import ARPMACSync
 from .inventory.interface_capacity_audit import InterfaceCapacityAudit
 from .inventory.optics_transceiver_inventory import OpticsTransceiverInventory
+from .inventory.capture_network_device_data import CustomCaptureDeviceData
+from .inventory.onboard_device import CustomDeviceOnboarding
 
 # ── Monitoring ────────────────────────────────────────────────────────────────
-from .monitoring.provision_nodes_on_solarwinds import ProvisionNodesOnSolarWinds
 from .monitoring.prometheus_target_sync import PrometheusTargetSync
 from .monitoring.reachability_sweep import ReachabilitySweep
 from .monitoring.interface_error_alerting import InterfaceErrorAlerting
-
-# ── Onboarding ────────────────────────────────────────────────────────────────
-from .onboarding.onboard_device import CustomDeviceOnboarding
-from .onboarding.onboard_software_version import GetShowVersion
-from .onboarding.onboard_serial_numbers import OnboardSerialNumbers
-from .onboarding.capture_network_device_data import CustomCaptureDeviceData
 
 # ── Operations ────────────────────────────────────────────────────────────────
 from .operations.command_runner import CommandRunner
 from .operations.password_prober import PasswordProber
 from .operations.send_email import SendEmail
 from .operations.reboot_devices import CustomDeviceReboot
-from .operations.oxidized_inventory import OxidizedInventoryGenerator
 from .operations.maintenance_window import MaintenanceWindow
 from .operations.vlan_provisioning import VLANProvisioning
 from .operations.ip_address_allocation import IPAddressAllocation
+from .operations.device_decommission import DeviceDecommission
 
 # ── Orchestration ─────────────────────────────────────────────────────────────
 from .orchestration.change_window_orchestrator import ChangeWindowOrchestrator
@@ -99,7 +91,6 @@ from .troubleshooting.bgp_prefix_anomaly import BGPPrefixAnomalyDetector
 # ── Upgrading ─────────────────────────────────────────────────────────────────
 from .upgrading.firmware_upgrade import FirmwareUpgrade
 from .upgrading.readiness_check import ReadinessCheck
-from .upgrading.device_decommission import DeviceDecommission
 
 
 __all__ = [
@@ -110,33 +101,27 @@ __all__ = [
     "DeployConfigurations",
     "RemediateCompliance",
     "RunAllConfigComplianceJobs",
-    "NTPComplianceCheck",
-    "BannerComplianceCheck",
-    "SNMPValidation",
     ### Inventory
     "LLDPNeighborDiscovery",
     "ARPMACSync",
     "InterfaceCapacityAudit",
     "OpticsTransceiverInventory",
     ### Monitoring
-    "ProvisionNodesOnSolarWinds",
     "PrometheusTargetSync",
     "ReachabilitySweep",
     "InterfaceErrorAlerting",
     ### Onboarding
     "CustomDeviceOnboarding",
-    "GetShowVersion",
-    "OnboardSerialNumbers",
     "CustomCaptureDeviceData",
     ### Operations
     "CommandRunner",
     "PasswordProber",
     "SendEmail",
     "CustomDeviceReboot",
-    "OxidizedInventoryGenerator",
     "MaintenanceWindow",
     "VLANProvisioning",
     "IPAddressAllocation",
+    "DeviceDecommission",
     ### Orchestration
     "ChangeWindowOrchestrator",
     "MassRollback",
@@ -168,5 +153,4 @@ __all__ = [
     ### Upgrading
     "FirmwareUpgrade",
     "ReadinessCheck",
-    "DeviceDecommission",
 ]

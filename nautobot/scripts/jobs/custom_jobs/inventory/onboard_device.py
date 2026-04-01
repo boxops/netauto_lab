@@ -48,13 +48,23 @@ from nautobot.apps.jobs import (
 )
 from nautobot.dcim.choices import InterfaceTypeChoices
 
-from custom_jobs.modules.tools import parse_command_output
-from custom_jobs.modules.tools import convert_flat_config_to_dict
+from custom_jobs.modules.tools import parse_command_output, convert_flat_config_to_dict, get_device_connection_info
 from custom_jobs.backends.airosapi import AirOS8API
 from custom_jobs.backends.tachyon import Tachyon
-from custom_jobs.onboarding.capture_network_device_data import CaptureDeviceData, PLATFORM_CONFIG as CAPTURE_PLATFORM_CONFIG
+from custom_jobs.inventory.capture_network_device_data import (
+    CaptureDeviceData,
+    OnboardSerial,
+    OnboardVersion,
+    LLDPDiscovery,
+    ARPMACCollector,
+    SUPPORTED_PLATFORMS_INTERFACES,
+    SUPPORTED_PLATFORMS_SERIAL,
+    SUPPORTED_PLATFORMS_VERSION,
+    SUPPORTED_PLATFORMS_LLDP,
+    SUPPORTED_PLATFORMS_ARP,
+)
 
-name = "Onboarding"
+name = "Inventory"
 
 SUPPORTED_PLATFORMS = [
     "keymile_nos",
@@ -110,8 +120,11 @@ class CustomDeviceOnboarding(Job):
     platform = ObjectVar(model=Platform, required=False)
     role = ObjectVar(model=Role, required=False)
     device_type = ObjectVar(model=DeviceType, description="Optional", required=False)
-    capture_interface_data = BooleanVar(
-        description="Run interface capture after onboarding (cisco_xr and arista_eos only)",
+    run_capture_job = BooleanVar(
+        description=(
+            "After onboarding, connect to the device and capture interfaces, VLANs, "
+            "serial number, software version, LLDP neighbors, and ARP/MAC table."
+        ),
         default=True,
         required=False,
     )
@@ -138,7 +151,7 @@ class CustomDeviceOnboarding(Job):
         role,
         device_type,
         csv_file=None,
-        capture_interface_data=False,
+        run_capture_job=True,
     ):
         failed_devices = []
 
@@ -155,7 +168,7 @@ class CustomDeviceOnboarding(Job):
                         platform=device_data["platform"],
                         role=device_data["role"],
                         device_type=device_data["device_type"],
-                        capture_interface_data=capture_interface_data,
+                        run_capture_job=run_capture_job,
                     )
                 except Exception as e:
                     failed_devices.append(
@@ -174,7 +187,7 @@ class CustomDeviceOnboarding(Job):
                             platform,
                             role,
                             device_type,
-                            capture_interface_data,
+                            run_capture_job,
                         )
                     except Exception as e:
                         failed_devices.append({"ip_address": ip_address, "error": e})
@@ -189,7 +202,7 @@ class CustomDeviceOnboarding(Job):
                         platform,
                         role,
                         device_type,
-                        capture_interface_data,
+                        run_capture_job,
                     )
                 except Exception as e:
                     failed_devices.append({"ip_address": ip_addresses, "error": e})
@@ -225,7 +238,7 @@ class CustomDeviceOnboarding(Job):
 
     def _create_onboard_task(
         self, location, ip_address, port, credential, platform, role, device_type,
-        capture_interface_data=False,
+        run_capture_job=True,
     ):
         try:
             if not platform:
@@ -239,7 +252,7 @@ class CustomDeviceOnboarding(Job):
                 platform=platform,
                 role=role,
                 device_type=device_type,
-                capture_interface_data=capture_interface_data,
+                run_capture_job=run_capture_job,
             )
             task.onboard()
         except Exception as e:
@@ -258,10 +271,10 @@ class OnboardDevice:
         platform,
         role,
         device_type,
-        capture_interface_data=False,
+        run_capture_job=True,
     ):
         self.job = job
-        self.capture_interface_data = capture_interface_data
+        self.run_capture_job = run_capture_job
         self.location = Location.objects.get(name=location)
         self.ip_address = ip_address
         self.port = port
@@ -888,6 +901,26 @@ class OnboardDevice:
             self.session.disconnect()
             self.job.logger.info("Disconnected from device")
 
+    def _run_full_capture(self):
+        """Open a single SSH session and run all applicable capture operations."""
+        driver = self.device.platform.network_driver
+        self.job.logger.info(f"{self.device} Starting full device capture.")
+        try:
+            with ConnectHandler(**get_device_connection_info(self.device)) as session:
+                session.enable()
+                if driver in SUPPORTED_PLATFORMS_INTERFACES:
+                    CaptureDeviceData(self.job, self.device).execute(session)
+                if driver in SUPPORTED_PLATFORMS_SERIAL:
+                    OnboardSerial(self.job, self.device).onboard(session)
+                if driver in SUPPORTED_PLATFORMS_VERSION:
+                    OnboardVersion(self.job, self.device).onboard(session)
+                if driver in SUPPORTED_PLATFORMS_LLDP:
+                    LLDPDiscovery(self.job, self.device).run(session)
+                if driver in SUPPORTED_PLATFORMS_ARP:
+                    ARPMACCollector(self.job, self.device).run(session)
+        except Exception as exc:
+            self.job.logger.error(f"{self.device} Full capture failed: {exc}")
+
     def onboard(self):
         try:
             if self.platform.network_driver == "keymile_nos":
@@ -943,18 +976,8 @@ class OnboardDevice:
         self.get_or_create_prefix()
         self.get_or_create_ip_address()
 
-        if self.capture_interface_data:
-            if self.device.platform.network_driver in CAPTURE_PLATFORM_CONFIG:
-                self.job.logger.info(f"{self.device} Running interface capture.")
-                try:
-                    CaptureDeviceData(self.job, self.device).execute()
-                except Exception as exc:
-                    self.job.logger.error(f"{self.device} Interface capture failed: {exc}")
-            else:
-                self.job.logger.warning(
-                    f"{self.device} Platform {self.device.platform.network_driver} "
-                    f"not supported for interface capture, skipping."
-                )
+        if self.run_capture_job:
+            self._run_full_capture()
 
         self.job.logger.info(
             "Device onboarded successfully: %s",

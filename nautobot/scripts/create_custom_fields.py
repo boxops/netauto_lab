@@ -104,6 +104,30 @@ CUSTOM_FIELDS = [
     },
 
     # ──────────────────────────────────────────────────────────────────────────
+    # Device fields — BGP
+    # Used by: configuration/intended_configurations.py (migrate_bgp_to_config_context.py
+    #          reads this field and copies its value into local_config_context_data;
+    #          after migration the intended-config job reads from config context instead).
+    # DEPRECATED: bgp_asn will be retired once all devices have been migrated to
+    #             local config context (bgp.asn).  Do not add new references to
+    #             device.cf["bgp_asn"] — use device.get_config_context()["bgp"]["asn"].
+    # ──────────────────────────────────────────────────────────────────────────
+    {
+        "key":           "bgp_asn",
+        "label":         "BGP ASN (deprecated)",
+        "type":          CustomFieldTypeChoices.TYPE_INTEGER,
+        "content_types": [ct_device],
+        "default":       None,
+        "description":   (
+            "Per-device BGP Autonomous System Number. "
+            "DEPRECATED: migrate values to the device local config context under "
+            "bgp.asn using nautobot/scripts/migrate_bgp_to_config_context.py, "
+            "then clear this field."
+        ),
+        "weight":        290,
+    },
+
+    # ──────────────────────────────────────────────────────────────────────────
     # Device fields — SolarWinds integration
     # Used by: monitoring/provision_nodes_on_solarwinds.py
     # NOTE: snmpcommunity stores a plain-text string. For production environments

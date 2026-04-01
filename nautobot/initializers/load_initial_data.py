@@ -44,9 +44,18 @@ def main():
     site_type = create_or_get(
         nb.dcim.location_types, {"name": "Site"},
         {"name": "Site", "nestable": False, "parent": region_type.id,
-         "content_types": ["dcim.device"]},
+         "content_types": ["dcim.device", "ipam.vlan"]},
     )
     print("  LocationType: Site")
+
+    # Ensure ipam.vlan is present on existing Site LocationTypes (idempotent patch).
+    existing_cts = [
+        (ct if isinstance(ct, str) else f"{ct['app_label']}.{ct['model']}")
+        for ct in (site_type.content_types or [])
+    ]
+    if "ipam.vlan" not in existing_cts:
+        site_type.update({"content_types": existing_cts + ["ipam.vlan"]})
+        print("  Updated Site LocationType: added ipam.vlan content type")
 
     # ── Regions (top-level Locations) ─────────────────────────────────────────
     for name in ("North America", "Europe"):
@@ -144,6 +153,59 @@ def main():
         if not nb.ipam.vlans.filter(vid=vlan["vid"]):
             nb.ipam.vlans.create(vlan)
         print(f"  VLAN: {vlan['vid']} - {vlan['name']}")
+
+    # ── Config Contexts ───────────────────────────────────────────────────────
+    # Global context: shared NTP, logging, and SNMP values consumed by every
+    # Jinja template via {{ cc.<key> }}.  Values here are lab defaults; override
+    # per-site or per-role by creating additional contexts with a higher weight.
+    global_cc_data = {
+        "ntp": {
+            "servers": ["10.0.0.1", "10.0.0.2"],
+        },
+        "logging": {
+            "buffered": {"size": 10000, "level": "informational"},
+            "hosts": ["10.0.0.10"],
+        },
+        "snmp": {
+            "community": "lab-ro",
+            "trap_host": "10.0.0.10",
+        },
+    }
+    global_cc = create_or_get(
+        nb.extras.config_contexts,
+        {"name": "global-lab-defaults"},
+        {
+            "name": "global-lab-defaults",
+            "weight": 100,
+            "is_active": True,
+            "description": "Shared NTP / logging / SNMP defaults for all lab devices",
+            "data": global_cc_data,
+        },
+    )
+    print("  ConfigContext: global-lab-defaults")
+
+    # Role-scoped contexts: set bgp.max_paths per spine / leaf role so the
+    # Jinja template can read {{ cc.bgp.max_paths }} without a custom field.
+    arista_platform = nb.dcim.platforms.get(name="Arista EOS")
+    for role_name, max_paths in (("Spine", 4), ("Leaf", 2), ("Border-Leaf", 2)):
+        role_obj = nb.extras.roles.get(name=role_name)
+        if not role_obj:
+            continue
+        cc_name = f"bgp-{role_name.lower().replace('-', '')}-defaults"
+        create_or_get(
+            nb.extras.config_contexts,
+            {"name": cc_name},
+            {
+                "name": cc_name,
+                "weight": 200,
+                "is_active": True,
+                "description": f"BGP defaults for {role_name} devices",
+                "roles": [role_obj.id],
+                "platforms": [arista_platform.id] if arista_platform else [],
+                "data": {"bgp": {"max_paths": max_paths}},
+            },
+        )
+        print(f"  ConfigContext: {cc_name}")
 
     # ── Custom Fields ─────────────────────────────────────────────────────────
     for cf in [

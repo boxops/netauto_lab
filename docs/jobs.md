@@ -16,13 +16,13 @@ nautobot/scripts/jobs/
 │   ├── inventory/                # LLDP, ARP, optics inventory
 │   ├── monitoring/               # Reachability, interface errors, Prometheus sync
 │   ├── onboarding/               # Device onboarding, show version capture
-│   ├── operations/               # Command runner, password prober, VLAN provisioning
+│   ├── operations/               # Command runner, password prober, VLAN provisioning, decommission
 │   ├── orchestration/            # Change window, mass rollback
 │   ├── reporting/                # Serial numbers, EOS alerts, CVE scanner
 │   ├── security/                 # SSH audit, AAA compliance, port shutdown
 │   ├── syncing/                  # SSoT integration jobs
 │   ├── troubleshooting/          # MTU mismatch, packet capture, BGP anomaly
-│   └── upgrading/                # Firmware upgrade, readiness check, decommission
+│   └── upgrading/                # Firmware upgrade, readiness check
 ├── modules/
 │   └── tools.py                  # Shared utilities (see Shared Utilities)
 └── backends/
@@ -63,13 +63,16 @@ from .monitoring.bgp_session_audit import BGPSessionAudit
 
 Nautobot's job loader discovers jobs via `register_jobs()` at the bottom of the module file **and** via the import in `__init__.py`. Both are required.
 
-### Step 4 — Restart the worker
+### Step 4 — Refresh job records and restart
 
 ```bash
+docker compose exec nautobot nautobot-server post_upgrade
 docker compose restart nautobot nautobot-worker nautobot-scheduler
 ```
 
-If startup succeeds, the job appears in **Jobs → Jobs** in the Nautobot UI.
+`post_upgrade` refreshes the job database records so Nautobot recognises added or renamed classes. The container restart reloads the module. Both are required when adding a new job.
+
+> **Note:** New jobs are **disabled by default**. After the job appears in **Jobs → Jobs**, click Edit on the record and check **Enabled** before it can be run.
 
 ---
 
@@ -292,7 +295,7 @@ class MyHelper:
 |---|---|
 | `apply_device_filters(**kwargs)` | Returns a `set` of `Device` objects matching the given filters |
 | `get_device_connection_info(device)` | Returns a Netmiko-compatible `dict` with `host`, `username`, `password`, `device_type`, etc. |
-| `parse_command_output(raw, command, platform)` | Parses CLI text via TextFSM; returns a list of dicts |
+| `parse_command_output(command_output, template_file)` | Parses CLI text via a TextFSM template file path; returns a list of dicts |
 | `ping_device(host)` | Returns `True` if the host responds to a single ICMP ping |
 | `xml_to_dict(xml_string)` | Converts an XML string to a nested Python dict |
 | `diff_files(backup, intended)` | Yields unified diff lines between two config files |
@@ -387,6 +390,7 @@ Always prefix log messages with the device name: `f"{dev} <message>"`.
 | Monitoring | Prometheus Target Sync | `PrometheusTargetSync` | Sync active devices to Prometheus static file targets |
 | Onboarding | Onboard Device | `CustomDeviceOnboarding` | Create Device + interfaces from discovered data |
 | Onboarding | Get Show Version | `GetShowVersion` | Capture and store software version strings |
+| Operations | Device Decommission | `DeviceDecommission` | Bulk decommission workflow with backup and Nautobot cleanup |
 | Operations | Command Runner | `CommandRunner` | Run an arbitrary command on a device set |
 | Operations | Password Prober | `PasswordProber` | Test credential reachability across devices |
 | Reporting | Backup State Checker | `BackupStateChecker` | Alert on devices missing recent backup records |
@@ -398,7 +402,6 @@ Always prefix log messages with the device name: `f"{dev} <message>"`.
 | Troubleshooting | BGP Prefix Anomaly | `BGPPrefixAnomalyDetector` | Detect unexpected prefix count changes |
 | Upgrading | Firmware Upgrade | `FirmwareUpgrade` | Orchestrate staged firmware upgrade |
 | Upgrading | Readiness Check | `ReadinessCheck` | Pre-upgrade health check |
-| Upgrading | Device Decommission | `DeviceDecommission` | Remove device records and revoke credentials |
 
 ---
 

@@ -222,10 +222,11 @@ class DeviceIntent:
         context["device_vlans"] = device_vlans
 
         # ── BGP ──────────────────────────────────────────────────────────────
-        # BGP ASN is per-device — sourced from custom field (unique scalar,
-        # not suitable for config context hierarchy which has no device-level scope
-        # in Nautobot 3.x without per-device dynamic groups).
-        bgp_asn = device.cf.get("bgp_asn")
+        # BGP ASN is per-device — stored in the device's local config context
+        # under bgp.asn (set by migrate_bgp_to_config_context.py).  The merged
+        # config context (cc) already includes local_config_context_data so a
+        # single lookup is sufficient.
+        bgp_asn = cc.get("bgp", {}).get("asn")
         context["bgp_asn"] = bgp_asn
 
         # Router-ID from Loopback0
@@ -260,7 +261,7 @@ class DeviceIntent:
                     if peer_ip_obj:
                         peer_iface = peer_ip_obj.interfaces.first()
                         if peer_iface:
-                            peer_asn = peer_iface.device.cf.get("bgp_asn")
+                            peer_asn = peer_iface.device.get_config_context().get("bgp", {}).get("asn")
                 except Exception:
                     pass
                 bgp_neighbors.append({"ip": peer_ip, "remote_as": peer_asn})

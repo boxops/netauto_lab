@@ -79,6 +79,10 @@ restart:  ## Restart all services (or specific: make restart SVC=grafana)
 	  $(COMPOSE) restart; \
 	fi
 
+clab-inspect:
+	@echo -e "$(CYAN)Inspecting Containerlab topology...$(NC)"
+	@sudo containerlab inspect --topo containerlab/topologies/spine-leaf.clab.yml
+
 logs:  ## Tail logs for all services (or specific: make logs SVC=nautobot)
 	@if [ -n "$(SVC)" ]; then \
 	  $(COMPOSE) logs -f $(SVC); \
@@ -142,6 +146,10 @@ deploy-lab:  ## Deploy Containerlab spine-leaf topology
 destroy-lab:  ## Destroy Containerlab topology
 	@echo -e "$(YELLOW)Destroying Containerlab topology...$(NC)"
 	@sudo containerlab destroy --topo containerlab/topologies/spine-leaf.clab.yml --cleanup 2>&1 || true
+
+redeploy-lab:  ## Redeploy Containerlab topology (destroy + deploy)
+	@make destroy-lab
+	@make deploy-lab
 
 sync-inventory:  ## Sync Containerlab devices to Nautobot
 	@echo -e "$(GREEN)Syncing inventory to Nautobot...$(NC)"

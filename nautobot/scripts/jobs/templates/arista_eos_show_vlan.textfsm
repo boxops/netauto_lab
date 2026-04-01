@@ -1,0 +1,16 @@
+Value Required VLAN_ID (\d+)
+Value VLAN_NAME (\S+)
+Value STATUS (\S+)
+
+Start
+  # Header rows — skip
+  ^VLAN\s+Name -> Continue
+  ^-{4} -> Continue
+  # Data row: vid  name  status  [ports...]
+  ^\s*${VLAN_ID}\s+${VLAN_NAME}\s+${STATUS} -> Record
+  # Port-continuation lines (lines that start with whitespace and no number)
+  ^\s+\S
+  # Anything else
+  ^.*
+
+EOF

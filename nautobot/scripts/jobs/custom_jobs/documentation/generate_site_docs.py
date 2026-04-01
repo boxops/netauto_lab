@@ -3,8 +3,9 @@ Generate documentation for a site based on the device settings that are part of 
 
 Produces a Markdown report covering:
   1. Site Overview       – location metadata, tenant, status, contact
-  2. Device Inventory    – all devices with type, serial, status, primary IP, rack position
-  3. Software Versions   – per-device platform and software version
+  2. Device Inventory    – all devices with type, serial, status, primary IP, rack position,
+                           platform, and software version
+  3. Device Interfaces   – per-device interface list with type, mode, IPs, MTU, and description
   4. Connectivity        – cables between site devices, VLANs, IP prefixes
   5. Rack Layouts        – per-rack device placement (U position)
   6. Additional Notes    – custom site description / comments
@@ -87,8 +88,9 @@ class GenerateSiteDocs(Job):
     class Meta:
         name = "Generate Site Documentation"
         description = (
-            "Produce a Markdown report for a selected site covering device inventory, "
-            "software versions, cabling, rack layouts, VLANs, and IP prefixes."
+            "Produce a Markdown report for a selected site covering device inventory "
+            "(including platform and software version), device interfaces, cabling, "
+            "rack layouts, VLANs, and IP prefixes."
         )
         has_sensitive_variables = False
 
@@ -109,7 +111,7 @@ class GenerateSiteDocs(Job):
         sections = [
             self._section_overview(site),
             self._section_device_inventory(devices),
-            self._section_software_versions(devices),
+            self._section_device_interfaces(devices),
             self._section_connectivity(cables, vlans, prefixes),
             self._section_rack_layouts(racks, devices),
             self._section_notes(site),
@@ -198,6 +200,7 @@ class GenerateSiteDocs(Job):
         headers = [
             "Device Name", "Role", "Manufacturer", "Model",
             "Serial Number", "Status", "Primary IP", "Rack / Position",
+            "Platform", "Software Version",
         ]
         rows = [
             [
@@ -209,6 +212,8 @@ class GenerateSiteDocs(Job):
                 d.status.name if d.status else "—",
                 _primary_ip(d),
                 _rack_position(d),
+                d.platform.name if d.platform else "—",
+                _software_version(d),
             ]
             for d in sorted(device_list, key=lambda x: x.name)
         ]
@@ -216,23 +221,43 @@ class GenerateSiteDocs(Job):
         lines.append(f"\n_Total: {len(rows)} device(s)._")
         return "\n".join(lines)
 
-    def _section_software_versions(self, devices) -> str:
-        lines = ["## 3. Software Versions", ""]
-        device_list = list(devices)
+    def _section_device_interfaces(self, devices) -> str:
+        lines = ["## 3. Device Interfaces", ""]
+        device_list = sorted(devices, key=lambda d: d.name)
         if not device_list:
             lines.append("_No devices found at this site._")
             return "\n".join(lines)
 
-        headers = ["Device Name", "Platform", "Software Version"]
-        rows = [
-            [
-                d.name,
-                d.platform.name if d.platform else "—",
-                _software_version(d),
-            ]
-            for d in sorted(device_list, key=lambda x: x.name)
+        headers = [
+            "Device", "Interface", "Type", "Enabled", "Mode",
+            "IP Addresses", "MAC Address", "MTU", "Description",
         ]
-        lines.append(_md_table(headers, rows))
+        rows = []
+        for device in device_list:
+            ifaces = device.interfaces.prefetch_related(
+                "ip_addresses", "tagged_vlans", "untagged_vlan"
+            ).select_related("lag").order_by("name")
+            for iface in ifaces:
+                ip_list = ", ".join(
+                    str(ip.address) for ip in iface.ip_addresses.all()
+                ) or "—"
+                rows.append([
+                    device.name,
+                    iface.name,
+                    iface.get_type_display() if hasattr(iface, "get_type_display") else (iface.type or "—"),
+                    "Yes" if iface.enabled else "No",
+                    iface.get_mode_display() if hasattr(iface, "get_mode_display") and iface.mode else "—",
+                    ip_list,
+                    str(iface.mac_address) if iface.mac_address else "—",
+                    str(iface.mtu) if iface.mtu else "—",
+                    iface.description or "—",
+                ])
+
+        if rows:
+            lines.append(_md_table(headers, rows))
+            lines.append(f"\n_Total: {len(rows)} interface(s) across {len(device_list)} device(s)._")
+        else:
+            lines.append("_No interfaces found for devices at this site._")
         return "\n".join(lines)
 
     def _section_connectivity(self, cables, vlans, prefixes) -> str:
