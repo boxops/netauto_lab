@@ -78,7 +78,7 @@ What `setup.sh` does:
 4. Pulls Docker images
 5. Builds custom images (Ansible, AI Agents)
 6. Starts core services (PostgreSQL, Redis, Nautobot)
-7. Initializes Nautobot (migrations, superuser, initial data load)
+7. Prepares Nautobot (migrations, superuser, data load)
 8. Starts all remaining services
 9. Runs a final health check
 

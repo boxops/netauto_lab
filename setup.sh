@@ -278,14 +278,14 @@ docker_compose_cmd exec -T nautobot nautobot-server shell < /tmp/nautobot_superu
 log "Collecting static files..."
 docker_compose_cmd exec -T nautobot nautobot-server collectstatic --no-input 2>&1 | tee -a "${LOG_FILE}"
 
-log "Loading initial data..."
+log "Loading data..."
 docker_compose_cmd exec -T nautobot pip install pynautobot --quiet 2>&1 | tee -a "${LOG_FILE}" || true
 
 # Give Nautobot a moment to fully start
 sleep 5
 
-docker_compose_cmd exec -T nautobot python /opt/nautobot/initializers/load_initial_data.py 2>&1 \
-  | tee -a "${LOG_FILE}" || warn "Initial data load failed. You can run it manually later."
+docker_compose_cmd exec -T nautobot python /opt/nautobot/data_loader/load_data.py 2>&1 \
+  | tee -a "${LOG_FILE}" || warn "Data load failed. You can run it manually later."
 
 log "✓ Nautobot initialized"
 
@@ -398,7 +398,7 @@ echo -e "  make agent-chat      - CLI chat with AI agent"
 echo -e "  make deploy-lab      - Deploy Containerlab topology"
 echo -e ""
 echo -e "${YELLOW}Next steps:${NC}"
-echo -e "  1. Open Nautobot and verify initial data was loaded"
+echo -e "  1. Open Nautobot and verify data was loaded"
 echo -e "  2. Configure Nautobot Golden Config with your Git repo"
 echo -e "  3. Deploy Containerlab: make deploy-lab"
 echo -e "  4. Sync inventory: make sync-inventory"

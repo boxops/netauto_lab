@@ -108,7 +108,7 @@ make backup-data     # Backup all data
 ├── .env.example                # Environment template
 ├── Makefile                    # All operational commands
 ├── setup.sh                    # Automated first-run setup
-├── nautobot/                   # Nautobot configuration & init scripts
+├── nautobot/                   # Nautobot configuration, data loader, and scripts
 ├── prometheus/                 # Prometheus config, alerts, recording rules
 ├── grafana/                    # Dashboards & provisioning
 ├── telegraf/                   # Telegraf metrics collection config

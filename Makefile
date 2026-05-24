@@ -27,8 +27,9 @@ NC     := \033[0m
         deploy-lab destroy-lab \
         ansible-shell run-playbook sync-inventory \
         agent-chat update health-check \
-	lint test load-initial-data lint-initial-data \
-	test-initial-data-unit test-initial-data-integration
+	lint test load-data lint-data \
+	test-data-unit test-data-integration \
+	prune-data plan-data test-data-crud
 
 ## ── Setup & lifecycle ─────────────────────────────────────────────────────────
 
@@ -186,27 +187,48 @@ lint:  ## Lint Ansible playbooks and configs
 	@echo -e "$(GREEN)Linting Ansible playbooks...$(NC)"
 	$(COMPOSE) exec ansible ansible-lint /ansible/playbooks/ || true
 	@echo -e "$(GREEN)Validating YAML configs...$(NC)"
-	@find prometheus loki promtail grafana telegraf nautobot/initializers -name '*.yml' -o -name '*.yaml' 2>/dev/null \
+	@find prometheus loki promtail grafana telegraf nautobot/data_loader -name '*.yml' -o -name '*.yaml' 2>/dev/null \
 	  | xargs python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" 2>&1 \
 	  && echo "YAML validation: OK" || echo "YAML validation: check errors above"
 
-load-initial-data:  ## Load Nautobot seed data from nautobot/initializers/data.yml
+load-data:  ## Load Nautobot data from nautobot/data_loader/data.yml
 	@set -e; \
-	echo -e "$(GREEN)Loading Nautobot initial data...$(NC)"; \
-	($(COMPOSE) exec -T nautobot python /opt/nautobot/initializers/load_initial_data.py \
-	  --data-file /opt/nautobot/initializers/data.yml \
-	  || sudo docker compose exec -T nautobot python /opt/nautobot/initializers/load_initial_data.py \
-	  --data-file /opt/nautobot/initializers/data.yml); \
-	echo -e "$(GREEN)Initial data load complete.$(NC)"
+	echo -e "$(GREEN)Loading Nautobot data...$(NC)"; \
+	($(COMPOSE) exec -T nautobot python /opt/nautobot/data_loader/load_data.py \
+	  --data-file /opt/nautobot/data_loader/data.yml --mode apply \
+	  || sudo docker compose exec -T nautobot python /opt/nautobot/data_loader/load_data.py \
+	  --data-file /opt/nautobot/data_loader/data.yml --mode apply); \
+	echo -e "$(GREEN)Data load complete.$(NC)"
 
-lint-initial-data:  ## Validate nautobot/initializers/data.yml
-	@python3 -c "import yaml; yaml.safe_load(open('nautobot/initializers/data.yml', encoding='utf-8')); print('data.yml lint: OK')"
+prune-data:  ## Reconcile and prune managed device/interface/ip/cable state from data.yml
+	@set -e; \
+	echo -e "$(YELLOW)Pruning managed Nautobot data scope...$(NC)"; \
+	($(COMPOSE) exec -T nautobot python /opt/nautobot/data_loader/load_data.py \
+	  --data-file /opt/nautobot/data_loader/data.yml --mode prune \
+	  || sudo docker compose exec -T nautobot python /opt/nautobot/data_loader/load_data.py \
+	  --data-file /opt/nautobot/data_loader/data.yml --mode prune); \
+	echo -e "$(GREEN)Managed scope prune complete.$(NC)"
 
-test-initial-data-unit:  ## Run unit tests for initial data loader
-	@python3 -m pytest tests/test_initial_data_loader.py -m unit -v --tb=short
+plan-data:  ## Show planned create/update/delete actions without mutating Nautobot
+	@set -e; \
+	echo -e "$(CYAN)Planning Nautobot data reconciliation (dry-run)...$(NC)"; \
+	($(COMPOSE) exec -T nautobot python /opt/nautobot/data_loader/load_data.py \
+	  --data-file /opt/nautobot/data_loader/data.yml --mode plan \
+	  || sudo docker compose exec -T nautobot python /opt/nautobot/data_loader/load_data.py \
+	  --data-file /opt/nautobot/data_loader/data.yml --mode plan); \
+	echo -e "$(GREEN)Dry-run planning complete.$(NC)"
 
-test-initial-data-integration:  ## Run integration tests for initial data loader
-	@python3 -m pytest tests/test_initial_data_loader.py -m integration -v --tb=short
+lint-data:  ## Validate nautobot/data_loader/data.yml
+	@python3 -c "import yaml; yaml.safe_load(open('nautobot/data_loader/data.yml', encoding='utf-8')); print('data.yml lint: OK')"
+
+test-data-unit:  ## Run unit tests for data loader
+	@python3 -m pytest tests/test_data_loader.py -m unit -v --tb=short
+
+test-data-integration:  ## Run integration tests for data loader
+	@python3 -m pytest tests/test_data_loader.py -m integration -v --tb=short
+
+test-data-crud:  ## Run integration CRUD-focused tests for data loader modes
+	@python3 -m pytest tests/test_data_loader.py -m integration -k "crud or plan_mode" -v --tb=short
 
 ## ── Nautobot Jobs ──────────────────────────────────────────────────────
 

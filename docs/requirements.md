@@ -598,7 +598,7 @@ health-check   - Run comprehensive health check
 6. Start core services
 7. Wait for services to be healthy
 8. Initialize Nautobot (run migrations, create superuser)
-9. Load Nautobot initial data (sites, device roles, platforms)
+9. Load Nautobot data model (sites, device roles, platforms)
 10. Configure Prometheus targets
 11. Import Grafana dashboards
 12. Display access information and next steps
@@ -810,7 +810,7 @@ The AI agent must create a complete, runnable project with:
 │   └── ...
 ├── nautobot/
 │   ├── configuration/
-│   ├── initializers/
+│   ├── data_loader/
 │   └── scripts/
 ├── ansible/
 │   ├── ansible.cfg
@@ -857,7 +857,7 @@ The AI agent must create a complete, runnable project with:
 
 On initial deployment (`make init && make start`):
 - All services healthy and accessible
-- Nautobot populated with initial data
+- Nautobot populated with source data
 - Prometheus scraping configured services
 - Grafana with pre-loaded dashboards
 - Syslog collector receiving logs

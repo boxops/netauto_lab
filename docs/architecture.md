@@ -53,7 +53,7 @@ Four isolated Docker networks are created:
 - **Cache/Queue**: Redis 7 (single instance, two DBs: 0 = cache, 1 = Celery)
 - **Workers**: `nautobot-worker` (Celery) + `nautobot-scheduler` (beat scheduler)
 - **Plugins**: Golden Config, Device Lifecycle, BGP Models, Data Validation Engine
-- **Initial Data**: Regions, sites, device roles, platforms (EOS/IOS/JunOS), VLANs, IP prefixes loaded via `nautobot/initializers/load_initial_data.py`
+- **Data Loader**: Regions, sites, device roles, platforms (EOS/IOS/JunOS), VLANs, IP prefixes loaded via `nautobot/data_loader/load_data.py`
 
 ### Gitea
 

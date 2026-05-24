@@ -20,6 +20,7 @@ Welcome to the documentation for the **Intermediate Network Automation Stack** â
 |---------|-------------|
 | [Installation](installation.md) | Prerequisites and step-by-step setup |
 | [Architecture](architecture.md) | Service topology and design decisions |
+| [Data Loader](data-loader.md) | Declarative Nautobot data reconciliation and CRUD workflow |
 | [AI Agents](agents.md) | Ops and Engineering agent capabilities |
 | [Ansible Playbooks](ansible.md) | Automation playbooks reference |
 | [Monitoring](monitoring.md) | Dashboards, alerts, and metrics reference |

@@ -93,7 +93,7 @@ def sync_to_nautobot(
 
     location = nb.dcim.locations.get(name=site_slug)
     if not location:
-        print(f"ERROR: Location '{site_slug}' not found in Nautobot. Run the initializer first.")
+        print(f"ERROR: Location '{site_slug}' not found in Nautobot. Run the data loader first.")
         sys.exit(1)
 
     # Nautobot 3.x requires a namespace for IP addresses

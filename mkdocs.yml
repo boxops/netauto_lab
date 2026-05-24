@@ -50,6 +50,7 @@ nav:
     - Installation: installation.md
     - Architecture: architecture.md
   - Services:
+    - Data Loader: data-loader.md
     - AI Agents: agents.md
     - Ansible Playbooks: ansible.md
     - Monitoring: monitoring.md

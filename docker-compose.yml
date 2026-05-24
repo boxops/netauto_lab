@@ -60,7 +60,7 @@ x-nautobot-base: &nautobot-base
   volumes:
     - ./nautobot/configuration/nautobot_config.py:/opt/nautobot/nautobot_config.py:ro
     - ./nautobot/scripts:/opt/nautobot/scripts
-    - ./nautobot/initializers:/opt/nautobot/initializers
+    - ./nautobot/data_loader:/opt/nautobot/data_loader
     - nautobot-media:/opt/nautobot/media
     - nautobot-static:/opt/nautobot/static
     - nautobot-git-repos:/opt/nautobot/git-repos
