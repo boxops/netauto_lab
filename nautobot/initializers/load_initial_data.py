@@ -23,11 +23,32 @@ def device_primary_ip_field(address: str) -> str:
 
 
 def validate_device_definitions(data: dict[str, Any]) -> None:
-    required = {"name", "role", "device_type", "location", "platform", "primary_ip", "secrets_group"}
+    required = {"name", "role", "device_type", "location", "platform", "secrets_group"}
     for device in data.get("devices", []):
         missing = sorted(required - set(device.keys()))
         if missing:
             raise ValueError(f"Device '{device.get('name', '<unknown>')}' is missing required keys: {', '.join(missing)}")
+
+        for iface in device.get("interfaces", []):
+            missing_iface = sorted({"name", "status", "type"} - set(iface.keys()))
+            if missing_iface:
+                raise ValueError(
+                    f"Device '{device['name']}' has interface missing required keys: {', '.join(missing_iface)}"
+                )
+
+            for ip_item in iface.get("ip_addresses", []):
+                if "address" not in ip_item:
+                    raise ValueError(
+                        f"Device '{device['name']}' interface '{iface['name']}' has ip_addresses entry without 'address'"
+                    )
+
+
+def validate_cable_definitions(data: dict[str, Any]) -> None:
+    required = {"a_device", "a_interface", "b_device", "b_interface"}
+    for idx, cable in enumerate(data.get("cables", []), start=1):
+        missing = sorted(required - set(cable.keys()))
+        if missing:
+            raise ValueError(f"Cable #{idx} is missing required keys: {', '.join(missing)}")
 
 
 class NautobotDataLoader:
@@ -54,6 +75,61 @@ class NautobotDataLoader:
         if not matches:
             raise RuntimeError(f"DeviceType model '{model}' not found")
         return matches[0]
+
+    def get_interface(self, device_id: str, interface_name: str) -> Any:
+        matches = self.nb.dcim.interfaces.filter(device_id=device_id, name=interface_name)
+        if not matches:
+            raise RuntimeError(f"Interface '{interface_name}' not found on device id '{device_id}'")
+        return matches[0]
+
+    def ensure_interface(self, device_id: str, interface_def: dict[str, Any]) -> Any:
+        payload = {
+            "device": device_id,
+            "name": interface_def["name"],
+            "type": interface_def["type"],
+            "status": interface_def["status"],
+            "enabled": bool(interface_def.get("enabled", True)),
+        }
+
+        # Optional fields aligned with Nautobot API payload keys.
+        for key in ["description", "mtu", "mode", "mac_address", "label"]:
+            if key in interface_def:
+                payload[key] = interface_def[key]
+
+        return self.create_or_get(
+            self.nb.dcim.interfaces,
+            {"device_id": device_id, "name": interface_def["name"]},
+            payload,
+        )
+
+    def ensure_interface_ip(self, interface: Any, ip_item: dict[str, Any]) -> Any:
+        address = ip_item["address"]
+        ip_obj = None
+        for candidate in self.nb.ipam.ip_addresses.filter(address=address):
+            assigned_obj = getattr(candidate, "assigned_object", None)
+            if assigned_obj and getattr(assigned_obj, "id", None) == interface.id:
+                ip_obj = candidate
+                break
+
+        if ip_obj is None:
+            payload = {
+                "address": address,
+                "namespace": self.namespace.id,
+                "status": ip_item.get("status", "Active"),
+            }
+            if "role" in ip_item:
+                payload["role"] = ip_item["role"]
+            if "dns_name" in ip_item:
+                payload["dns_name"] = ip_item["dns_name"]
+
+            ip_obj = self.create_or_get(self.nb.ipam.ip_addresses, {"address": address}, payload)
+
+        self.create_or_get(
+            self.nb.ipam.ip_address_to_interface,
+            {"ip_address": ip_obj.id, "interface": interface.id},
+            {"ip_address": ip_obj.id, "interface": interface.id},
+        )
+        return ip_obj
 
     def ensure_namespace(self) -> None:
         namespace_name = self.data.get("ipam_namespace", "Global")
@@ -246,56 +322,76 @@ class NautobotDataLoader:
             }
             device = self.create_or_get(self.nb.dcim.devices, {"name": item["name"]}, payload)
 
-            interface_name = item.get("management_interface", "Management0")
-            interface = self.create_or_get(
-                self.nb.dcim.interfaces,
-                {"device_id": device.id, "name": interface_name},
-                {
-                    "device": device.id,
-                    "name": interface_name,
-                    "type": item.get("management_interface_type", "1000base-t"),
-                    "status": "Active",
-                    "enabled": True,
-                },
-            )
+            ip_by_address: dict[str, Any] = {}
+            for interface_def in item.get("interfaces", []):
+                interface = self.ensure_interface(device.id, interface_def)
+                for ip_item in interface_def.get("ip_addresses", []):
+                    ip_obj = self.ensure_interface_ip(interface, ip_item)
+                    ip_by_address[ip_item["address"]] = ip_obj
 
-            primary_ip = item["primary_ip"]
-            ip_obj = None
-            existing_ips = list(self.nb.ipam.ip_addresses.filter(address=primary_ip))
-            for candidate in existing_ips:
-                assigned_obj = getattr(candidate, "assigned_object", None)
-                if assigned_obj and getattr(assigned_obj, "id", None) == interface.id:
-                    ip_obj = candidate
-                    break
+            update_payload = {"platform": platform.id, "secrets_group": secrets_group.id}
 
-            if ip_obj is None:
-                for candidate in existing_ips:
-                    try:
-                        candidate.delete()
-                    except Exception:
-                        pass
+            primary_ip4 = item.get("primary_ip4")
+            if primary_ip4:
+                ip_obj = ip_by_address.get(primary_ip4)
+                if not ip_obj:
+                    raise RuntimeError(f"Device '{item['name']}' primary_ip4 '{primary_ip4}' is not in any interface ip_addresses")
+                update_payload["primary_ip4"] = ip_obj.id
 
-                ip_obj = self.nb.ipam.ip_addresses.create(
-                    {
-                        "address": primary_ip,
-                        "namespace": self.namespace.id,
-                        "status": "Active",
-                    }
-                )
+            primary_ip6 = item.get("primary_ip6")
+            if primary_ip6:
+                ip_obj = ip_by_address.get(primary_ip6)
+                if not ip_obj:
+                    raise RuntimeError(f"Device '{item['name']}' primary_ip6 '{primary_ip6}' is not in any interface ip_addresses")
+                update_payload["primary_ip6"] = ip_obj.id
 
-            self.create_or_get(
-                self.nb.ipam.ip_address_to_interface,
-                {"ip_address": ip_obj.id, "interface": interface.id},
-                {"ip_address": ip_obj.id, "interface": interface.id},
-            )
+            # Backward-compatible fallback for older YAML while transitioning to API-like keys.
+            if (not primary_ip4) and (not primary_ip6) and item.get("primary_ip"):
+                fallback_addr = item["primary_ip"]
+                ip_obj = ip_by_address.get(fallback_addr)
+                if not ip_obj:
+                    raise RuntimeError(
+                        f"Device '{item['name']}' primary_ip '{fallback_addr}' is not in any interface ip_addresses"
+                    )
+                update_payload[device_primary_ip_field(fallback_addr)] = ip_obj.id
 
-            update_payload = {
-                "platform": platform.id,
-                "secrets_group": secrets_group.id,
-                device_primary_ip_field(primary_ip): ip_obj.id,
-            }
             device.update(update_payload)
-            print(f"  Device: {item['name']} ({primary_ip})")
+            display_primary = primary_ip4 or primary_ip6 or item.get("primary_ip", "none")
+            print(f"  Device: {item['name']} ({display_primary})")
+
+    def ensure_cables(self) -> None:
+        for item in self.data.get("cables", []):
+            a_device = self.get_by_name(self.nb.dcim.devices, item["a_device"], "Device")
+            b_device = self.get_by_name(self.nb.dcim.devices, item["b_device"], "Device")
+            a_intf = self.get_interface(a_device.id, item["a_interface"])
+            b_intf = self.get_interface(b_device.id, item["b_interface"])
+
+            payload = {
+                "termination_a_type": "dcim.interface",
+                "termination_a_id": a_intf.id,
+                "termination_b_type": "dcim.interface",
+                "termination_b_id": b_intf.id,
+                "status": item.get("status", "Connected"),
+                "type": item.get("type", "cat6"),
+            }
+
+            try:
+                self.nb.dcim.cables.create(payload)
+            except Exception as exc:
+                msg = str(exc).lower()
+                # Idempotency: if cable already exists or interface is already connected, continue.
+                if (
+                    "already" not in msg
+                    and "connected" not in msg
+                    and "duplicate" not in msg
+                    and "unique set" not in msg
+                ):
+                    raise
+
+            print(
+                f"  Cable: {item['a_device']}:{item['a_interface']} <-> "
+                f"{item['b_device']}:{item['b_interface']}"
+            )
 
     def run(self) -> None:
         self.ensure_location_types()
@@ -311,6 +407,7 @@ class NautobotDataLoader:
         self.ensure_custom_fields()
         self.ensure_secrets_and_group()
         self.ensure_devices()
+        self.ensure_cables()
 
 
 def parse_args() -> argparse.Namespace:
@@ -325,6 +422,7 @@ def main() -> int:
     args = parse_args()
     data = load_data(args.data_file)
     validate_device_definitions(data)
+    validate_cable_definitions(data)
 
     nautobot_url = os.getenv("NAUTOBOT_URL", "http://localhost:8080")
     nautobot_token = os.getenv("NAUTOBOT_SUPERUSER_API_TOKEN", "")

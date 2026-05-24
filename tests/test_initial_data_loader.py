@@ -40,6 +40,66 @@ def test_validate_device_definitions_rejects_missing_fields():
 
 
 @pytest.mark.unit
+def test_validate_device_definitions_rejects_incomplete_interface():
+    bad = {
+        "devices": [
+            {
+                "name": "leaf99",
+                "role": "Leaf",
+                "device_type": "cEOS",
+                "location": "site-lab",
+                "platform": "Arista EOS",
+                "secrets_group": "lab-ssh-creds",
+                "interfaces": [{"name": "Eth0"}],
+            }
+        ]
+    }
+    with pytest.raises(ValueError):
+        loader.validate_device_definitions(bad)
+
+
+@pytest.mark.unit
+def test_validate_device_definitions_rejects_interface_ip_without_address():
+    bad = {
+        "devices": [
+            {
+                "name": "leaf99",
+                "role": "Leaf",
+                "device_type": "cEOS",
+                "location": "site-lab",
+                "platform": "Arista EOS",
+                "secrets_group": "lab-ssh-creds",
+                "interfaces": [
+                    {
+                        "name": "Eth0",
+                        "status": "Active",
+                        "type": "1000base-t",
+                        "ip_addresses": [{"status": "Active"}],
+                    }
+                ],
+            }
+        ]
+    }
+    with pytest.raises(ValueError):
+        loader.validate_device_definitions(bad)
+
+
+@pytest.mark.unit
+def test_validate_cable_definitions_rejects_missing_fields():
+    bad = {
+        "cables": [
+            {
+                "a_device": "spine1",
+                "a_interface": "Eth1",
+                "b_device": "leaf1",
+            }
+        ]
+    }
+    with pytest.raises(ValueError):
+        loader.validate_cable_definitions(bad)
+
+
+@pytest.mark.unit
 def test_device_primary_ip_field():
     assert loader.device_primary_ip_field("10.10.10.1/32") == "primary_ip4"
     assert loader.device_primary_ip_field("2001:db8::10/128") == "primary_ip6"
@@ -72,3 +132,25 @@ def test_loader_integration_devices_are_automation_ready():
         assert (obj.get("primary_ip4") is not None) or (obj.get("primary_ip6") is not None), (
             f"device {dev['name']} missing primary IP"
         )
+
+        for iface in dev.get("interfaces", []):
+            i_resp = requests.get(
+                f"{nautobot_url}/api/dcim/interfaces/",
+                params={"device_id": obj["id"], "name": iface["name"]},
+                headers=headers,
+                timeout=15,
+            )
+            assert i_resp.status_code == 200, f"interface query failed for {dev['name']}:{iface['name']}"
+            i_payload = i_resp.json()
+            assert i_payload.get("count", 0) >= 1, f"interface {dev['name']}:{iface['name']} not created"
+
+    if data.get("cables"):
+        c_resp = requests.get(
+            f"{nautobot_url}/api/dcim/cables/",
+            params={"limit": 1000},
+            headers=headers,
+            timeout=15,
+        )
+        assert c_resp.status_code == 200, "cable query failed"
+        c_payload = c_resp.json()
+        assert c_payload.get("count", 0) >= len(data["cables"]), "expected cable records not found"
