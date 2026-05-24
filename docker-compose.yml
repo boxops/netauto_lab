@@ -311,6 +311,7 @@ services:
   # ── Node Exporter ────────────────────────────────────────────
   node-exporter:
     image: "prom/node-exporter:latest"
+    profiles: ["host-metrics"]
     command:
       - "--path.rootfs=/host"
       - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"

@@ -55,7 +55,20 @@ cd netauto_lab
 The `setup.sh` script handles everything: environment generation, secret creation, image builds, and service initialization.
 
 ```bash
+bash setup.sh --auto-install-docker
+```
+
+If Docker is already installed, you can still use:
+
+```bash
 bash setup.sh
+```
+
+If you see Docker permission errors after install, apply group membership in the current shell:
+
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
 ```
 
 What `setup.sh` does:
@@ -77,6 +90,12 @@ make status
 ```
 
 All services should show as `healthy` or `running`.
+
+Note: `node-exporter` is now optional on hosts that don't support required mount propagation. To enable it explicitly:
+
+```bash
+docker compose --profile host-metrics up -d node-exporter
+```
 
 ### Step 4: Access Services
 

@@ -1,0 +1,244 @@
+ipam_namespace: Global
+
+location_types:
+  - name: Region
+    nestable: true
+  - name: Site
+    nestable: false
+    parent: Region
+    content_types:
+      - dcim.device
+      - ipam.vlan
+
+locations:
+  - name: North America
+    location_type: Region
+    status: Active
+  - name: Europe
+    location_type: Region
+    status: Active
+  - name: site-nyc
+    location_type: Site
+    parent: North America
+    status: Active
+  - name: site-sfo
+    location_type: Site
+    parent: North America
+    status: Active
+  - name: site-lab
+    location_type: Site
+    parent: North America
+    status: Active
+
+roles:
+  - name: Spine
+    color: aa1409
+    content_types: [dcim.device]
+  - name: Leaf
+    color: 4caf50
+    content_types: [dcim.device]
+  - name: Border-Leaf
+    color: 2196f3
+    content_types: [dcim.device]
+  - name: Router
+    color: ff9800
+    content_types: [dcim.device]
+  - name: Firewall
+    color: 9c27b0
+    content_types: [dcim.device]
+  - name: Server
+    color: 607d8b
+    content_types: [dcim.device]
+
+manufacturers:
+  - Arista Networks
+  - Cisco Systems
+  - Juniper Networks
+  - Nokia
+
+device_types:
+  - model: cEOS
+    manufacturer: Arista Networks
+    u_height: 1
+  - model: cEOS-lab
+    manufacturer: Cisco Systems
+    u_height: 1
+  - model: vMX
+    manufacturer: Juniper Networks
+    u_height: 1
+  - model: SR Linux
+    manufacturer: Nokia
+    u_height: 1
+
+platforms:
+  - name: Arista EOS
+    manufacturer: Arista Networks
+    network_driver: arista_eos
+  - name: Cisco IOS
+    manufacturer: Cisco Systems
+    network_driver: cisco_ios
+  - name: Cisco IOS-XE
+    manufacturer: Cisco Systems
+    network_driver: cisco_xe
+  - name: Cisco IOS-XR
+    manufacturer: Cisco Systems
+    network_driver: cisco_xr
+  - name: Cisco NX-OS
+    manufacturer: Cisco Systems
+    network_driver: cisco_nxos
+  - name: Juniper JunOS
+    manufacturer: Juniper Networks
+    network_driver: juniper_junos
+  - name: Nokia SR Linux
+    manufacturer: Nokia
+    network_driver: nokia_srl
+
+prefixes:
+  - prefix: 10.0.0.0/8
+    status: Active
+    description: Lab supernet
+  - prefix: 10.10.0.0/16
+    status: Active
+    description: Lab management
+  - prefix: 172.16.0.0/12
+    status: Reserved
+    description: RFC1918 block
+  - prefix: 192.168.0.0/16
+    status: Reserved
+    description: RFC1918 block
+
+vlans:
+  - vid: 1
+    name: default
+    status: Active
+  - vid: 100
+    name: management
+    status: Active
+  - vid: 200
+    name: servers
+    status: Active
+  - vid: 300
+    name: transit
+    status: Active
+
+config_contexts:
+  - name: global-lab-defaults
+    weight: 100
+    is_active: true
+    description: Shared NTP / logging / SNMP defaults for all lab devices
+    data:
+      ntp:
+        servers: [10.0.0.1, 10.0.0.2]
+      logging:
+        buffered:
+          size: 10000
+          level: informational
+        hosts: [10.0.0.10]
+      snmp:
+        community: lab-ro
+        trap_host: 10.0.0.10
+  - name: bgp-spine-defaults
+    weight: 200
+    is_active: true
+    description: BGP defaults for Spine devices
+    roles: [Spine]
+    platforms: [Arista EOS]
+    data:
+      bgp:
+        max_paths: 4
+  - name: bgp-leaf-defaults
+    weight: 200
+    is_active: true
+    description: BGP defaults for Leaf devices
+    roles: [Leaf]
+    platforms: [Arista EOS]
+    data:
+      bgp:
+        max_paths: 2
+  - name: bgp-borderleaf-defaults
+    weight: 200
+    is_active: true
+    description: BGP defaults for Border-Leaf devices
+    roles: [Border-Leaf]
+    platforms: [Arista EOS]
+    data:
+      bgp:
+        max_paths: 2
+
+custom_fields:
+  - name: snmp_community
+    label: SNMP Community
+    type: text
+    content_types: [dcim.device]
+    default: public
+  - name: oob_ip
+    label: OOB Management IP
+    type: text
+    content_types: [dcim.device]
+
+secrets:
+  - name: lab-admin-username
+    variable: ADMIN_USERNAME
+    description: SSH username for lab devices
+  - name: lab-admin-password
+    variable: ADMIN_PASSWORD
+    description: SSH password for lab devices
+  - name: lab-admin-secret
+    variable: ADMIN_SECRET
+    description: SSH enable/secret password for lab devices
+
+secrets_group:
+  name: lab-ssh-creds
+  description: Generic SSH credentials for lab devices (admin/admin)
+  associations:
+    - secret: lab-admin-username
+      access_type: Generic
+      secret_type: username
+    - secret: lab-admin-password
+      access_type: Generic
+      secret_type: password
+    - secret: lab-admin-secret
+      access_type: Generic
+      secret_type: secret
+
+devices:
+  - name: spine1
+    role: Spine
+    device_type: cEOS
+    location: site-lab
+    platform: Arista EOS
+    status: Active
+    primary_ip: 10.10.100.11/32
+    secrets_group: lab-ssh-creds
+  - name: spine2
+    role: Spine
+    device_type: cEOS
+    location: site-lab
+    platform: Arista EOS
+    status: Active
+    primary_ip: 10.10.100.12/32
+    secrets_group: lab-ssh-creds
+  - name: leaf1
+    role: Leaf
+    device_type: cEOS
+    location: site-lab
+    platform: Arista EOS
+    status: Active
+    primary_ip: 10.10.100.21/32
+    secrets_group: lab-ssh-creds
+  - name: leaf2
+    role: Leaf
+    device_type: cEOS
+    location: site-lab
+    platform: Arista EOS
+    status: Active
+    primary_ip: 10.10.100.22/32
+    secrets_group: lab-ssh-creds
+  - name: leaf3
+    role: Leaf
+    device_type: cEOS
+    location: site-lab
+    platform: Arista EOS
+    status: Active
+    primary_ip: 10.10.100.23/32
+    secrets_group: lab-ssh-creds

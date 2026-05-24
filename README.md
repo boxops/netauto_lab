@@ -65,8 +65,8 @@ A production-ready, containerized network automation and observability platform 
 git clone <repo-url> netauto_lab
 cd netauto_lab
 
-# 2. Run setup (creates .env, generates secrets, starts all services)
-bash setup.sh
+# 2. One-command setup (installs Docker if needed, creates .env, starts all services)
+bash setup.sh --auto-install-docker
 
 # 3. Check services are healthy
 make health-check

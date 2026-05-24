@@ -1,273 +1,344 @@
 #!/usr/bin/env python3
-"""
-Nautobot initial data loader – Nautobot 3.x compatible.
-Run once after `nautobot-server migrate` to seed the database
-with locations, roles, platforms, and common config.
+"""Load Nautobot seed data from YAML and create automation-ready devices."""
 
-Key Nautobot 3.x changes vs 2.x:
-  - Region + Site  →  LocationType + Location
-  - dcim.device_roles  →  extras.roles
-  - slug fields removed from most models; filter by name instead
-  - napalm_driver moved off Platform (use napalm plugin if needed)
-"""
+from __future__ import annotations
 
+import argparse
 import os
-import sys
+from pathlib import Path
+from typing import Any
 
-import pynautobot
+import yaml
 
-NAUTOBOT_URL = os.getenv("NAUTOBOT_URL", "http://localhost:8080")
-NAUTOBOT_TOKEN = os.getenv("NAUTOBOT_SUPERUSER_API_TOKEN", "")
-
-nb = pynautobot.api(NAUTOBOT_URL, token=NAUTOBOT_TOKEN)
+DEFAULT_DATA_FILE = Path(__file__).with_name("data.yml")
 
 
-def create_or_get(endpoint, filter_kwargs: dict, data: dict):
-    """Return the first matching object or create it."""
-    existing = endpoint.filter(**filter_kwargs)
-    if existing:
-        return existing[0]
-    return endpoint.create(data)
+def load_data(data_file: str | Path) -> dict[str, Any]:
+    with open(data_file, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
 
-def main():
+def device_primary_ip_field(address: str) -> str:
+    return "primary_ip6" if ":" in address else "primary_ip4"
+
+
+def validate_device_definitions(data: dict[str, Any]) -> None:
+    required = {"name", "role", "device_type", "location", "platform", "primary_ip", "secrets_group"}
+    for device in data.get("devices", []):
+        missing = sorted(required - set(device.keys()))
+        if missing:
+            raise ValueError(f"Device '{device.get('name', '<unknown>')}' is missing required keys: {', '.join(missing)}")
+
+
+class NautobotDataLoader:
+    def __init__(self, nb: Any, data: dict[str, Any]):
+        self.nb = nb
+        self.data = data
+        self.namespace = None
+
+    @staticmethod
+    def create_or_get(endpoint: Any, filter_kwargs: dict[str, Any], data: dict[str, Any]) -> Any:
+        existing = endpoint.filter(**filter_kwargs)
+        if existing:
+            return existing[0]
+        return endpoint.create(data)
+
+    def get_by_name(self, endpoint: Any, name: str, label: str) -> Any:
+        obj = endpoint.get(name=name)
+        if not obj:
+            raise RuntimeError(f"{label} '{name}' not found")
+        return obj
+
+    def get_device_type_by_model(self, model: str) -> Any:
+        matches = self.nb.dcim.device_types.filter(model=model)
+        if not matches:
+            raise RuntimeError(f"DeviceType model '{model}' not found")
+        return matches[0]
+
+    def ensure_namespace(self) -> None:
+        namespace_name = self.data.get("ipam_namespace", "Global")
+        self.namespace = self.create_or_get(self.nb.ipam.namespaces, {"name": namespace_name}, {"name": namespace_name})
+        print(f"  Namespace: {namespace_name}")
+
+    def ensure_location_types(self) -> None:
+        location_type_ids: dict[str, Any] = {}
+        for item in self.data.get("location_types", []):
+            payload = {
+                "name": item["name"],
+                "nestable": bool(item.get("nestable", False)),
+            }
+            parent_name = item.get("parent")
+            if parent_name:
+                parent_id = location_type_ids.get(parent_name)
+                if not parent_id:
+                    parent_obj = self.nb.dcim.location_types.get(name=parent_name)
+                    if not parent_obj:
+                        raise RuntimeError(f"LocationType parent '{parent_name}' must exist before '{item['name']}'")
+                    parent_id = parent_obj.id
+                payload["parent"] = parent_id
+
+            if item.get("content_types"):
+                payload["content_types"] = item["content_types"]
+
+            obj = self.create_or_get(self.nb.dcim.location_types, {"name": item["name"]}, payload)
+            location_type_ids[item["name"]] = obj.id
+
+            if item.get("content_types"):
+                existing_cts = [
+                    ct if isinstance(ct, str) else f"{ct['app_label']}.{ct['model']}"
+                    for ct in (obj.content_types or [])
+                ]
+                merged = sorted(set(existing_cts + item["content_types"]))
+                if merged != sorted(existing_cts):
+                    obj.update({"content_types": merged})
+
+            print(f"  LocationType: {item['name']}")
+
+    def ensure_locations(self) -> None:
+        for item in self.data.get("locations", []):
+            location_type = self.get_by_name(self.nb.dcim.location_types, item["location_type"], "LocationType")
+            payload = {
+                "name": item["name"],
+                "location_type": location_type.id,
+                "status": item.get("status", "Active"),
+            }
+            if item.get("parent"):
+                payload["parent"] = self.get_by_name(self.nb.dcim.locations, item["parent"], "Location").id
+
+            self.create_or_get(
+                self.nb.dcim.locations,
+                {"name": item["name"], "location_type": location_type.id},
+                payload,
+            )
+            print(f"  Location: {item['name']}")
+
+    def ensure_roles(self) -> None:
+        for item in self.data.get("roles", []):
+            self.create_or_get(self.nb.extras.roles, {"name": item["name"]}, item)
+            print(f"  Role: {item['name']}")
+
+    def ensure_manufacturers(self) -> None:
+        for name in self.data.get("manufacturers", []):
+            self.create_or_get(self.nb.dcim.manufacturers, {"name": name}, {"name": name})
+            print(f"  Manufacturer: {name}")
+
+    def ensure_device_types(self) -> None:
+        for item in self.data.get("device_types", []):
+            manufacturer = self.get_by_name(self.nb.dcim.manufacturers, item["manufacturer"], "Manufacturer")
+            payload = {
+                "model": item["model"],
+                "manufacturer": manufacturer.id,
+                "u_height": item.get("u_height", 1),
+            }
+            self.create_or_get(
+                self.nb.dcim.device_types,
+                {"model": item["model"], "manufacturer": manufacturer.id},
+                payload,
+            )
+            print(f"  DeviceType: {item['model']}")
+
+    def ensure_platforms(self) -> None:
+        for item in self.data.get("platforms", []):
+            manufacturer = self.get_by_name(self.nb.dcim.manufacturers, item["manufacturer"], "Manufacturer")
+            payload = {
+                "name": item["name"],
+                "manufacturer": manufacturer.id,
+                "network_driver": item.get("network_driver", ""),
+            }
+            self.create_or_get(self.nb.dcim.platforms, {"name": item["name"]}, payload)
+            print(f"  Platform: {item['name']}")
+
+    def ensure_prefixes(self) -> None:
+        for item in self.data.get("prefixes", []):
+            payload = dict(item)
+            payload["namespace"] = self.namespace.id
+            self.create_or_get(self.nb.ipam.prefixes, {"prefix": item["prefix"], "namespace": self.namespace.id}, payload)
+            print(f"  Prefix: {item['prefix']}")
+
+    def ensure_vlans(self) -> None:
+        for item in self.data.get("vlans", []):
+            self.create_or_get(self.nb.ipam.vlans, {"vid": item["vid"]}, item)
+            print(f"  VLAN: {item['vid']} - {item['name']}")
+
+    def ensure_config_contexts(self) -> None:
+        for item in self.data.get("config_contexts", []):
+            payload = {
+                "name": item["name"],
+                "weight": item.get("weight", 100),
+                "is_active": bool(item.get("is_active", True)),
+                "description": item.get("description", ""),
+                "data": item.get("data", {}),
+            }
+            if item.get("roles"):
+                payload["roles"] = [self.get_by_name(self.nb.extras.roles, n, "Role").id for n in item["roles"]]
+            if item.get("platforms"):
+                payload["platforms"] = [self.get_by_name(self.nb.dcim.platforms, n, "Platform").id for n in item["platforms"]]
+            self.create_or_get(self.nb.extras.config_contexts, {"name": item["name"]}, payload)
+            print(f"  ConfigContext: {item['name']}")
+
+    def ensure_custom_fields(self) -> None:
+        for item in self.data.get("custom_fields", []):
+            try:
+                self.nb.extras.custom_fields.create(item)
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "already exists" not in msg and "duplicate" not in msg:
+                    raise
+            print(f"  CustomField: {item['name']}")
+
+    def ensure_secrets_and_group(self) -> None:
+        secret_objs = {}
+        for item in self.data.get("secrets", []):
+            payload = {
+                "name": item["name"],
+                "provider": "environment-variable",
+                "parameters": {"variable": item["variable"]},
+                "description": item.get("description", ""),
+            }
+            secret_objs[item["name"]] = self.create_or_get(self.nb.extras.secrets, {"name": item["name"]}, payload)
+            print(f"  Secret: {item['name']}")
+
+        sg_cfg = self.data.get("secrets_group", {})
+        if not sg_cfg:
+            return
+
+        sg = self.create_or_get(
+            self.nb.extras.secrets_groups,
+            {"name": sg_cfg["name"]},
+            {"name": sg_cfg["name"], "description": sg_cfg.get("description", "")},
+        )
+        print(f"  SecretsGroup: {sg_cfg['name']}")
+
+        for assoc in sg_cfg.get("associations", []):
+            secret_name = assoc["secret"]
+            self.create_or_get(
+                self.nb.extras.secrets_groups_associations,
+                {
+                    "secrets_group": sg.id,
+                    "access_type": assoc["access_type"],
+                    "secret_type": assoc["secret_type"],
+                },
+                {
+                    "secrets_group": sg.id,
+                    "access_type": assoc["access_type"],
+                    "secret_type": assoc["secret_type"],
+                    "secret": secret_objs[secret_name].id,
+                },
+            )
+            print(f"  SecretsGroupAssociation: {assoc['access_type']}/{assoc['secret_type']} -> {secret_name}")
+
+    def ensure_devices(self) -> None:
+        for item in self.data.get("devices", []):
+            role = self.get_by_name(self.nb.extras.roles, item["role"], "Role")
+            device_type = self.get_device_type_by_model(item["device_type"])
+            location = self.get_by_name(self.nb.dcim.locations, item["location"], "Location")
+            platform = self.get_by_name(self.nb.dcim.platforms, item["platform"], "Platform")
+            secrets_group = self.get_by_name(self.nb.extras.secrets_groups, item["secrets_group"], "SecretsGroup")
+
+            payload = {
+                "name": item["name"],
+                "role": role.id,
+                "device_type": device_type.id,
+                "location": location.id,
+                "status": item.get("status", "Active"),
+                "platform": platform.id,
+                "secrets_group": secrets_group.id,
+            }
+            device = self.create_or_get(self.nb.dcim.devices, {"name": item["name"]}, payload)
+
+            interface_name = item.get("management_interface", "Management0")
+            interface = self.create_or_get(
+                self.nb.dcim.interfaces,
+                {"device_id": device.id, "name": interface_name},
+                {
+                    "device": device.id,
+                    "name": interface_name,
+                    "type": item.get("management_interface_type", "1000base-t"),
+                    "status": "Active",
+                    "enabled": True,
+                },
+            )
+
+            primary_ip = item["primary_ip"]
+            ip_obj = None
+            existing_ips = list(self.nb.ipam.ip_addresses.filter(address=primary_ip))
+            for candidate in existing_ips:
+                assigned_obj = getattr(candidate, "assigned_object", None)
+                if assigned_obj and getattr(assigned_obj, "id", None) == interface.id:
+                    ip_obj = candidate
+                    break
+
+            if ip_obj is None:
+                for candidate in existing_ips:
+                    try:
+                        candidate.delete()
+                    except Exception:
+                        pass
+
+                ip_obj = self.nb.ipam.ip_addresses.create(
+                    {
+                        "address": primary_ip,
+                        "namespace": self.namespace.id,
+                        "status": "Active",
+                    }
+                )
+
+            self.create_or_get(
+                self.nb.ipam.ip_address_to_interface,
+                {"ip_address": ip_obj.id, "interface": interface.id},
+                {"ip_address": ip_obj.id, "interface": interface.id},
+            )
+
+            update_payload = {
+                "platform": platform.id,
+                "secrets_group": secrets_group.id,
+                device_primary_ip_field(primary_ip): ip_obj.id,
+            }
+            device.update(update_payload)
+            print(f"  Device: {item['name']} ({primary_ip})")
+
+    def run(self) -> None:
+        self.ensure_location_types()
+        self.ensure_locations()
+        self.ensure_roles()
+        self.ensure_manufacturers()
+        self.ensure_device_types()
+        self.ensure_platforms()
+        self.ensure_namespace()
+        self.ensure_prefixes()
+        self.ensure_vlans()
+        self.ensure_config_contexts()
+        self.ensure_custom_fields()
+        self.ensure_secrets_and_group()
+        self.ensure_devices()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Load Nautobot initial data from YAML.")
+    parser.add_argument("--data-file", default=str(DEFAULT_DATA_FILE), help="Path to YAML seed data file")
+    return parser.parse_args()
+
+
+def main() -> int:
+    import pynautobot
+
+    args = parse_args()
+    data = load_data(args.data_file)
+    validate_device_definitions(data)
+
+    nautobot_url = os.getenv("NAUTOBOT_URL", "http://localhost:8080")
+    nautobot_token = os.getenv("NAUTOBOT_SUPERUSER_API_TOKEN", "")
+    nb = pynautobot.api(nautobot_url, token=nautobot_token)
+
     print("=== Nautobot initializer starting ===")
+    print(f"  Data file: {args.data_file}")
 
-    # ── Location Types ────────────────────────────────────────────────────────
-    # Nautobot 3.x replaces Region/Site with a flexible LocationType hierarchy.
-    region_type = create_or_get(
-        nb.dcim.location_types, {"name": "Region"},
-        {"name": "Region", "nestable": True},
-    )
-    print("  LocationType: Region")
-
-    site_type = create_or_get(
-        nb.dcim.location_types, {"name": "Site"},
-        {"name": "Site", "nestable": False, "parent": region_type.id,
-         "content_types": ["dcim.device", "ipam.vlan"]},
-    )
-    print("  LocationType: Site")
-
-    # Ensure ipam.vlan is present on existing Site LocationTypes (idempotent patch).
-    existing_cts = [
-        (ct if isinstance(ct, str) else f"{ct['app_label']}.{ct['model']}")
-        for ct in (site_type.content_types or [])
-    ]
-    if "ipam.vlan" not in existing_cts:
-        site_type.update({"content_types": existing_cts + ["ipam.vlan"]})
-        print("  Updated Site LocationType: added ipam.vlan content type")
-
-    # ── Regions (top-level Locations) ─────────────────────────────────────────
-    for name in ("North America", "Europe"):
-        create_or_get(
-            nb.dcim.locations, {"name": name, "location_type": region_type.id},
-            {"name": name, "location_type": region_type.id, "status": "Active"},
-        )
-        print(f"  Region: {name}")
-
-    na_region = nb.dcim.locations.get(name="North America", location_type=region_type.id)
-
-    # ── Sites (child Locations) ───────────────────────────────────────────────
-    for site_name in ("site-nyc", "site-sfo", "site-lab"):
-        create_or_get(
-            nb.dcim.locations, {"name": site_name, "location_type": site_type.id},
-            {"name": site_name, "location_type": site_type.id,
-             "status": "Active", "parent": na_region.id},
-        )
-        print(f"  Site: {site_name}")
-
-    # ── Roles (replaces dcim.device_roles in Nautobot 3.x) ───────────────────
-    roles = [
-        {"name": "Spine",       "color": "aa1409", "content_types": ["dcim.device"]},
-        {"name": "Leaf",        "color": "4caf50", "content_types": ["dcim.device"]},
-        {"name": "Border-Leaf", "color": "2196f3", "content_types": ["dcim.device"]},
-        {"name": "Router",      "color": "ff9800", "content_types": ["dcim.device"]},
-        {"name": "Firewall",    "color": "9c27b0", "content_types": ["dcim.device"]},
-        {"name": "Server",      "color": "607d8b", "content_types": ["dcim.device"]},
-    ]
-    for role in roles:
-        create_or_get(nb.extras.roles, {"name": role["name"]}, role)
-        print(f"  Role: {role['name']}")
-
-    # ── Manufacturers ─────────────────────────────────────────────────────────
-    for mfr_name in ("Arista Networks", "Cisco Systems", "Juniper Networks", "Nokia"):
-        create_or_get(nb.dcim.manufacturers, {"name": mfr_name}, {"name": mfr_name})
-        print(f"  Manufacturer: {mfr_name}")
-
-    arista  = nb.dcim.manufacturers.get(name="Arista Networks")
-    cisco   = nb.dcim.manufacturers.get(name="Cisco Systems")
-    juniper = nb.dcim.manufacturers.get(name="Juniper Networks")
-    nokia   = nb.dcim.manufacturers.get(name="Nokia")
-
-    # ── Device Types ─────────────────────────────────────────────────────────
-    device_types = [
-        {"model": "cEOS",     "manufacturer": arista.id,  "u_height": 1},
-        {"model": "cEOS-lab", "manufacturer": cisco.id,   "u_height": 1},
-        {"model": "vMX",      "manufacturer": juniper.id, "u_height": 1},
-        {"model": "SR Linux", "manufacturer": nokia.id,   "u_height": 1},
-    ]
-    for dt in device_types:
-        create_or_get(
-            nb.dcim.device_types,
-            {"model": dt["model"], "manufacturer": dt["manufacturer"]},
-            dt,
-        )
-        print(f"  Device Type: {dt['model']}")
-
-    # ── Platforms ─────────────────────────────────────────────────────────────
-    # napalm_driver was removed from the base Platform model in Nautobot 3.x.
-    # network_driver maps to the Netmiko device_type used by onboard_device job.
-    platforms = [
-        {"name": "Arista EOS",     "manufacturer": arista.id,  "network_driver": "arista_eos"},
-        {"name": "Cisco IOS",      "manufacturer": cisco.id,   "network_driver": "cisco_ios"},
-        {"name": "Cisco IOS-XE",   "manufacturer": cisco.id,   "network_driver": "cisco_xe"},
-        {"name": "Cisco IOS-XR",   "manufacturer": cisco.id,   "network_driver": "cisco_xr"},
-        {"name": "Cisco NX-OS",    "manufacturer": cisco.id,   "network_driver": "cisco_nxos"},
-        {"name": "Juniper JunOS",  "manufacturer": juniper.id, "network_driver": "juniper_junos"},
-        {"name": "Nokia SR Linux", "manufacturer": nokia.id,   "network_driver": "nokia_srl"},
-    ]
-    for p in platforms:
-        create_or_get(nb.dcim.platforms, {"name": p["name"]}, p)
-        print(f"  Platform: {p['name']}")
-
-    # ── Prefixes ──────────────────────────────────────────────────────────────
-    prefixes = [
-        {"prefix": "10.0.0.0/8",    "status": "Active", "description": "Lab supernet"},
-        {"prefix": "10.10.0.0/16",  "status": "Active", "description": "Lab management"},
-        {"prefix": "172.16.0.0/12", "status": "Reserved", "description": "RFC1918 block"},
-        {"prefix": "192.168.0.0/16","status": "Reserved", "description": "RFC1918 block"},
-    ]
-    for pfx in prefixes:
-        if not nb.ipam.prefixes.filter(prefix=pfx["prefix"]):
-            nb.ipam.prefixes.create(pfx)
-        print(f"  Prefix: {pfx['prefix']}")
-
-    # ── VLANs ─────────────────────────────────────────────────────────────────
-    vlans = [
-        {"vid": 1,   "name": "default",    "status": "Active"},
-        {"vid": 100, "name": "management", "status": "Active"},
-        {"vid": 200, "name": "servers",    "status": "Active"},
-        {"vid": 300, "name": "transit",    "status": "Active"},
-    ]
-    for vlan in vlans:
-        if not nb.ipam.vlans.filter(vid=vlan["vid"]):
-            nb.ipam.vlans.create(vlan)
-        print(f"  VLAN: {vlan['vid']} - {vlan['name']}")
-
-    # ── Config Contexts ───────────────────────────────────────────────────────
-    # Global context: shared NTP, logging, and SNMP values consumed by every
-    # Jinja template via {{ cc.<key> }}.  Values here are lab defaults; override
-    # per-site or per-role by creating additional contexts with a higher weight.
-    global_cc_data = {
-        "ntp": {
-            "servers": ["10.0.0.1", "10.0.0.2"],
-        },
-        "logging": {
-            "buffered": {"size": 10000, "level": "informational"},
-            "hosts": ["10.0.0.10"],
-        },
-        "snmp": {
-            "community": "lab-ro",
-            "trap_host": "10.0.0.10",
-        },
-    }
-    global_cc = create_or_get(
-        nb.extras.config_contexts,
-        {"name": "global-lab-defaults"},
-        {
-            "name": "global-lab-defaults",
-            "weight": 100,
-            "is_active": True,
-            "description": "Shared NTP / logging / SNMP defaults for all lab devices",
-            "data": global_cc_data,
-        },
-    )
-    print("  ConfigContext: global-lab-defaults")
-
-    # Role-scoped contexts: set bgp.max_paths per spine / leaf role so the
-    # Jinja template can read {{ cc.bgp.max_paths }} without a custom field.
-    arista_platform = nb.dcim.platforms.get(name="Arista EOS")
-    for role_name, max_paths in (("Spine", 4), ("Leaf", 2), ("Border-Leaf", 2)):
-        role_obj = nb.extras.roles.get(name=role_name)
-        if not role_obj:
-            continue
-        cc_name = f"bgp-{role_name.lower().replace('-', '')}-defaults"
-        create_or_get(
-            nb.extras.config_contexts,
-            {"name": cc_name},
-            {
-                "name": cc_name,
-                "weight": 200,
-                "is_active": True,
-                "description": f"BGP defaults for {role_name} devices",
-                "roles": [role_obj.id],
-                "platforms": [arista_platform.id] if arista_platform else [],
-                "data": {"bgp": {"max_paths": max_paths}},
-            },
-        )
-        print(f"  ConfigContext: {cc_name}")
-
-    # ── Custom Fields ─────────────────────────────────────────────────────────
-    for cf in [
-        {"name": "snmp_community", "label": "SNMP Community", "type": "text",
-         "content_types": ["dcim.device"], "default": "public"},
-        {"name": "oob_ip",         "label": "OOB Management IP", "type": "text",
-         "content_types": ["dcim.device"]},
-    ]:
-        try:
-            nb.extras.custom_fields.create(cf)
-        except Exception as e:
-            if "already exists" not in str(e) and "duplicate" not in str(e).lower():
-                raise
-        print(f"  Custom Field: {cf['name']}")
-
-    # ── Secrets (SSH credentials sourced from environment variables) ──────────
-    secrets_config = [
-        {"name": "lab-admin-username", "variable": "ADMIN_USERNAME",
-         "description": "SSH username for lab devices"},
-        {"name": "lab-admin-password", "variable": "ADMIN_PASSWORD",
-         "description": "SSH password for lab devices"},
-        {"name": "lab-admin-secret",   "variable": "ADMIN_SECRET",
-         "description": "SSH enable/secret password for lab devices"},
-    ]
-    secret_objs = {}
-    for sc in secrets_config:
-        s = create_or_get(
-            nb.extras.secrets,
-            {"name": sc["name"]},
-            {"name": sc["name"], "provider": "environment-variable",
-             "parameters": {"variable": sc["variable"]},
-             "description": sc["description"]},
-        )
-        secret_objs[sc["name"]] = s
-        print(f"  Secret: {sc['name']}")
-
-    # ── SecretsGroup ──────────────────────────────────────────────────────────
-    sg = create_or_get(
-        nb.extras.secrets_groups,
-        {"name": "lab-ssh-creds"},
-        {"name": "lab-ssh-creds",
-         "description": "Generic SSH credentials for lab devices (admin/admin)"},
-    )
-    print("  SecretsGroup: lab-ssh-creds")
-
-    # ── SecretsGroupAssociations ──────────────────────────────────────────────
-    associations = [
-        ("lab-admin-username", "Generic", "username"),
-        ("lab-admin-password", "Generic", "password"),
-        ("lab-admin-secret",   "Generic", "secret"),
-    ]
-    for secret_name, access_type, secret_type in associations:
-        create_or_get(
-            nb.extras.secrets_groups_associations,
-            {"secrets_group": sg.id, "access_type": access_type, "secret_type": secret_type},
-            {"secrets_group": sg.id, "access_type": access_type, "secret_type": secret_type,
-             "secret": secret_objs[secret_name].id},
-        )
-        print(f"  SecretsGroupAssociation: {access_type}/{secret_type} → {secret_name}")
+    loader = NautobotDataLoader(nb, data)
+    loader.run()
 
     print("\n=== Nautobot initializer complete ===")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

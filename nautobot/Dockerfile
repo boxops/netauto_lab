@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir \
     nornir-nautobot \
     ncclient \
     deepdiff \
-    pyshark
+    pyshark \
+    pyyaml
 
 USER nautobot

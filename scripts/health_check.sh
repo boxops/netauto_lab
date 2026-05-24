@@ -20,6 +20,18 @@ GITEA_PORT="${GITEA_PORT:-3001}"
 AGENT_UI_PORT="${AGENT_UI_PORT:-7860}"
 LOKI_PORT="${LOKI_PORT:-3100}"
 
+USE_SUDO_DOCKER=false
+SKIP_CONTAINER_CHECKS=false
+DOCKER_ACCESS_HINT=""
+
+docker_compose_cmd() {
+  if [[ "${USE_SUDO_DOCKER}" == "true" ]]; then
+    sudo docker compose "$@"
+  else
+    docker compose "$@"
+  fi
+}
+
 PASS=0
 FAIL=0
 WARN=0
@@ -48,7 +60,7 @@ check_container() {
   local name="$1"
   local container_pattern="$2"
 
-  container=$(docker compose ps --format json 2>/dev/null | python3 -c "
+  container=$(docker_compose_cmd ps --format json 2>/dev/null | python3 -c "
 import json, sys
 for line in sys.stdin:
     line = line.strip()
@@ -87,17 +99,31 @@ check "Agent UI"         "http://localhost:${AGENT_UI_PORT}/" 200
 
 echo ""
 echo "Checking containers..."
-check_container "nautobot"           "nautobot"
-check_container "nautobot-worker"    "nautobot-worker"
-check_container "prometheus"         "prometheus"
-check_container "grafana"            "grafana"
-check_container "telegraf"           "telegraf"
-check_container "loki"               "loki"
-check_container "promtail"           "promtail"
-check_container "gitea"              "gitea"
-check_container "rabbitmq"           "rabbitmq"
-check_container "ai-ops-agent"       "ai-ops-agent"
-check_container "ai-eng-agent"       "ai-eng-agent"
+if docker compose ps >/dev/null 2>&1; then
+  USE_SUDO_DOCKER=false
+elif sudo -n docker compose ps >/dev/null 2>&1; then
+  USE_SUDO_DOCKER=true
+else
+  SKIP_CONTAINER_CHECKS=true
+  DOCKER_ACCESS_HINT="Cannot access Docker from this shell. Run: sudo usermod -aG docker ${USER} && newgrp docker"
+fi
+
+if [[ "${SKIP_CONTAINER_CHECKS}" == "true" ]]; then
+  RESULTS+=("${YELLOW}  ⚠ Container checks skipped${NC} (${DOCKER_ACCESS_HINT})")
+  WARN=$((WARN + 1))
+else
+  check_container "nautobot"           "nautobot"
+  check_container "nautobot-worker"    "nautobot-worker"
+  check_container "prometheus"         "prometheus"
+  check_container "grafana"            "grafana"
+  check_container "telegraf"           "telegraf"
+  check_container "loki"               "loki"
+  check_container "promtail"           "promtail"
+  check_container "gitea"              "gitea"
+  check_container "rabbitmq"           "rabbitmq"
+  check_container "ai-ops-agent"       "ai-ops-agent"
+  check_container "ai-eng-agent"       "ai-eng-agent"
+fi
 
 echo ""
 echo "Checking disk space..."

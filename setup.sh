@@ -2,7 +2,7 @@
 # ============================================================
 # setup.sh – Automated setup for the Network Automation Stack
 # ============================================================
-# Usage: bash setup.sh [--skip-prereqs] [--no-pull]
+# Usage: bash setup.sh [--skip-prereqs] [--no-pull] [--auto-install-docker]
 # ============================================================
 set -euo pipefail
 
@@ -15,11 +15,26 @@ BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
 
 SKIP_PREREQS=false
 NO_PULL=false
+AUTO_INSTALL_DOCKER=false
+USE_SUDO_DOCKER=false
+
+docker_cmd() {
+  if [[ "${USE_SUDO_DOCKER}" == "true" ]]; then
+    sudo docker "$@"
+  else
+    docker "$@"
+  fi
+}
+
+docker_compose_cmd() {
+  docker_cmd compose "$@"
+}
 
 for arg in "$@"; do
   case $arg in
     --skip-prereqs) SKIP_PREREQS=true ;;
     --no-pull)      NO_PULL=true ;;
+    --auto-install-docker) AUTO_INSTALL_DOCKER=true ;;
   esac
 done
 
@@ -27,6 +42,15 @@ log()     { echo -e "${GREEN}[$(date '+%H:%M:%S')] $*${NC}" | tee -a "${LOG_FILE
 warn()    { echo -e "${YELLOW}[$(date '+%H:%M:%S')] WARNING: $*${NC}" | tee -a "${LOG_FILE}"; }
 error()   { echo -e "${RED}[$(date '+%H:%M:%S')] ERROR: $*${NC}" | tee -a "${LOG_FILE}"; exit 1; }
 header()  { echo -e "\n${BLUE}══════════════════════════════════════════${NC}"; echo -e "${CYAN}  $*${NC}"; echo -e "${BLUE}══════════════════════════════════════════${NC}"; }
+term_link() {
+  local url="$1"
+  if [[ -t 1 ]]; then
+    # OSC 8 hyperlink sequence for clickable links in modern terminals.
+    printf '\033]8;;%s\a%s\033]8;;\a' "${url}" "${url}"
+  else
+    printf '%s' "${url}"
+  fi
+}
 
 cd "${NETAUTO_DIR}"
 
@@ -38,7 +62,20 @@ log "Log file: ${LOG_FILE}"
 if [[ "${SKIP_PREREQS}" == "false" ]]; then
   header "Step 1/9 – Checking prerequisites"
 
-  command -v docker >/dev/null 2>&1 || error "Docker is not installed. Install from https://docs.docker.com/get-docker/"
+  if ! command -v docker >/dev/null 2>&1; then
+    if [[ "${AUTO_INSTALL_DOCKER}" == "true" ]]; then
+      if [[ -f "${NETAUTO_DIR}/install_docker.sh" ]]; then
+        log "Docker not found. Running install_docker.sh..."
+        bash "${NETAUTO_DIR}/install_docker.sh"
+      else
+        error "Docker not installed and install_docker.sh is missing. Install Docker manually from https://docs.docker.com/get-docker/"
+      fi
+    else
+      error "Docker is not installed. Run: bash setup.sh --auto-install-docker (or install manually from https://docs.docker.com/get-docker/)"
+    fi
+  fi
+
+  command -v docker >/dev/null 2>&1 || error "Docker is still not available after installation attempt."
   log "✓ Docker found: $(docker --version)"
 
   docker compose version >/dev/null 2>&1 || error "Docker Compose v2 is not installed. Run: sudo apt install docker-compose-plugin"
@@ -47,9 +84,66 @@ if [[ "${SKIP_PREREQS}" == "false" ]]; then
   command -v python3 >/dev/null 2>&1 || warn "Python3 not found. Some scripts may not work."
   command -v git >/dev/null 2>&1 || warn "Git not found."
 
-  # Check Docker is running
-  docker info >/dev/null 2>&1 || error "Docker daemon is not running. Start with: sudo systemctl start docker"
-  log "✓ Docker daemon is running"
+  # Best-effort install of optional but commonly required tooling.
+  if ! command -v containerlab >/dev/null 2>&1; then
+    warn "Containerlab not found. Attempting installation..."
+    if command -v curl >/dev/null 2>&1; then
+      if bash -c "$(curl -sL https://get.containerlab.dev)" >/dev/null 2>&1; then
+        CLAB_VER="$(containerlab version 2>/dev/null | grep -i 'version' | head -1 | sed 's/^ *//')"
+        [[ -z "${CLAB_VER}" ]] && CLAB_VER="installed"
+        log "✓ Containerlab installed: ${CLAB_VER}"
+      else
+        warn "Containerlab auto-install failed. Install manually with: bash -c \"\$(curl -sL https://get.containerlab.dev)\""
+      fi
+    else
+      warn "curl not found; cannot auto-install Containerlab."
+    fi
+  else
+    CLAB_VER="$(containerlab version 2>/dev/null | grep -i 'version' | head -1 | sed 's/^ *//')"
+    [[ -z "${CLAB_VER}" ]] && CLAB_VER="available"
+    log "✓ Containerlab found: ${CLAB_VER}"
+  fi
+
+  if ! python3 -m pytest --version >/dev/null 2>&1; then
+    warn "pytest not found. Attempting installation..."
+    if python3 -m pip --version >/dev/null 2>&1; then
+      if python3 -m pip install --user pytest >/dev/null 2>&1; then
+        log "✓ pytest installed: $(python3 -m pytest --version 2>/dev/null | head -1)"
+      else
+        warn "pytest install via pip failed. Try: python3 -m pip install --user pytest"
+      fi
+    elif command -v apt-get >/dev/null 2>&1; then
+      if sudo apt-get update -qq && sudo apt-get install -y -qq python3-pytest >/dev/null 2>&1; then
+        log "✓ pytest installed from apt: $(python3 -m pytest --version 2>/dev/null | head -1)"
+      else
+        warn "pytest install via apt failed. Try: sudo apt-get install python3-pytest"
+      fi
+    else
+      warn "No supported package manager found to install pytest automatically."
+    fi
+  else
+    log "✓ pytest found: $(python3 -m pytest --version 2>/dev/null | head -1)"
+  fi
+
+  # Check Docker daemon accessibility and report the right root cause.
+  if docker info >/dev/null 2>&1; then
+    log "✓ Docker daemon is running"
+  else
+    DOCKER_INFO_ERR="$(docker info 2>&1 || true)"
+    if echo "${DOCKER_INFO_ERR}" | grep -qi "permission denied"; then
+      if sudo -v >/dev/null 2>&1; then
+        USE_SUDO_DOCKER=true
+        docker_cmd info >/dev/null 2>&1 || error "Docker permission issue persists even with sudo. Check Docker service and context."
+        log "✓ Docker daemon is running (using sudo for Docker commands in this session)"
+      else
+        error "Docker daemon is running, but user '${USER}' cannot access /var/run/docker.sock. Run: sudo usermod -aG docker ${USER} && newgrp docker"
+      fi
+    elif systemctl is-active --quiet docker; then
+      error "Docker service is active, but Docker CLI could not connect. Check your Docker context with: docker context ls"
+    else
+      error "Docker daemon is not running. Start with: sudo systemctl start docker"
+    fi
+  fi
 
   # Check available resources
   MEMORY_GB=$(awk '/MemTotal/ {printf "%.0f", $2/1024/1024}' /proc/meminfo)
@@ -107,7 +201,7 @@ set -a; source .env; set +a
 # ── Step 3: Create Docker networks ────────────────────────────────────────────
 header "Step 3/9 – Creating Docker networks"
 for network in netauto_mgmt-network netauto_monitoring-network netauto_syslog-network netauto_clab; do
-  if docker network inspect "${network}" >/dev/null 2>&1; then
+  if docker_cmd network inspect "${network}" >/dev/null 2>&1; then
     log "✓ Network ${network} already exists"
   else
     log "Creating network ${network}..."
@@ -119,26 +213,26 @@ log "Docker networks will be created by docker compose..."
 if [[ "${NO_PULL}" == "false" ]]; then
   header "Step 4/9 – Pulling Docker images"
   log "This may take several minutes..."
-  docker compose pull --quiet 2>&1 | tee -a "${LOG_FILE}" || warn "Some images failed to pull. Will try to continue."
+  docker_compose_cmd pull --quiet 2>&1 | tee -a "${LOG_FILE}" || warn "Some images failed to pull. Will try to continue."
 fi
 
 # ── Step 5: Build custom images ───────────────────────────────────────────────
 header "Step 5/9 – Building custom images"
-docker compose build --quiet 2>&1 | tee -a "${LOG_FILE}" || error "Image build failed. Check ${LOG_FILE} for details."
+docker_compose_cmd build --quiet 2>&1 | tee -a "${LOG_FILE}" || error "Image build failed. Check ${LOG_FILE} for details."
 log "✓ Images built successfully"
 
 # ── Step 6: Start core services ───────────────────────────────────────────────
 header "Step 6/9 – Starting core services"
-docker compose up -d nautobot-postgres redis 2>&1 | tee -a "${LOG_FILE}"
+docker_compose_cmd up -d nautobot-postgres redis 2>&1 | tee -a "${LOG_FILE}"
 log "Waiting for databases to be healthy..."
 sleep 10
 
-docker compose up -d nautobot 2>&1 | tee -a "${LOG_FILE}"
-log "Waiting for Nautobot to be healthy (up to 3 minutes)..."
+docker_compose_cmd up -d nautobot 2>&1 | tee -a "${LOG_FILE}"
+TIMEOUT="${SETUP_NAUTOBOT_HEALTH_TIMEOUT:-420}"
+log "Waiting for Nautobot to be healthy (up to ${TIMEOUT} seconds)..."
 
-TIMEOUT=180
 ELAPSED=0
-until docker compose exec -T nautobot curl -sf http://localhost:8080/health/ >/dev/null 2>&1; do
+until docker_compose_cmd exec -T nautobot curl -sf http://localhost:8080/health/ >/dev/null 2>&1; do
   if [[ ${ELAPSED} -ge ${TIMEOUT} ]]; then
     error "Nautobot did not become healthy within ${TIMEOUT} seconds. Check logs: docker compose logs nautobot"
   fi
@@ -152,7 +246,7 @@ log "✓ Nautobot is healthy"
 # ── Step 7: Initialize Nautobot ───────────────────────────────────────────────
 header "Step 7/9 – Initializing Nautobot"
 log "Running database migrations..."
-docker compose exec -T nautobot nautobot-server migrate --no-input 2>&1 | tee -a "${LOG_FILE}"
+docker_compose_cmd exec -T nautobot nautobot-server migrate --no-input 2>&1 | tee -a "${LOG_FILE}"
 
 log "Creating superuser..."
 cat > /tmp/nautobot_superuser.py << 'SUPERUSER_SCRIPT'
@@ -179,18 +273,18 @@ if token_key:
         t.save()
 print(f"Superuser {'created' if created else 'updated'}: {username}")
 SUPERUSER_SCRIPT
-docker compose exec -T nautobot nautobot-server shell < /tmp/nautobot_superuser.py 2>&1 | tee -a "${LOG_FILE}"
+docker_compose_cmd exec -T nautobot nautobot-server shell < /tmp/nautobot_superuser.py 2>&1 | tee -a "${LOG_FILE}"
 
 log "Collecting static files..."
-docker compose exec -T nautobot nautobot-server collectstatic --no-input 2>&1 | tee -a "${LOG_FILE}"
+docker_compose_cmd exec -T nautobot nautobot-server collectstatic --no-input 2>&1 | tee -a "${LOG_FILE}"
 
 log "Loading initial data..."
-docker compose exec -T nautobot pip install pynautobot --quiet 2>&1 | tee -a "${LOG_FILE}" || true
+docker_compose_cmd exec -T nautobot pip install pynautobot --quiet 2>&1 | tee -a "${LOG_FILE}" || true
 
 # Give Nautobot a moment to fully start
 sleep 5
 
-docker compose exec -T nautobot python /opt/nautobot/initializers/load_initial_data.py 2>&1 \
+docker_compose_cmd exec -T nautobot python /opt/nautobot/initializers/load_initial_data.py 2>&1 \
   | tee -a "${LOG_FILE}" || warn "Initial data load failed. You can run it manually later."
 
 log "✓ Nautobot initialized"
@@ -199,16 +293,16 @@ log "✓ Nautobot initialized"
 header "Step 8/9 – Starting all services"
 # Create the clab management network if it doesn't exist yet.
 # ContainerLab will use this network when a topology is later deployed.
-if ! docker network inspect clab >/dev/null 2>&1; then
+if ! docker_cmd network inspect clab >/dev/null 2>&1; then
   log "Creating clab management network..."
-  docker network create --driver bridge \
+  docker_cmd network create --driver bridge \
     --subnet 172.20.20.0/24 \
     --gateway 172.20.20.1 \
     clab 2>&1 | tee -a "${LOG_FILE}"
 else
   log "✓ clab network already exists"
 fi
-docker compose up -d 2>&1 | tee -a "${LOG_FILE}"
+docker_compose_cmd up -d 2>&1 | tee -a "${LOG_FILE}"
 log "Waiting for services to stabilize (60 seconds)..."
 sleep 60
 
@@ -217,7 +311,7 @@ log "Initializing Gitea admin user..."
 GITEA_USER="${GITEA_ADMIN_USER:-gitadmin}"
 GITEA_PASS_VAL="${GITEA_ADMIN_PASSWORD}"
 GITEA_EMAIL="${GITEA_ADMIN_EMAIL:-gitadmin@example.com}"
-docker compose exec -T -u git gitea gitea admin user create \
+docker_compose_cmd exec -T -u git gitea gitea admin user create \
   --username "${GITEA_USER}" \
   --password "${GITEA_PASS_VAL}" \
   --email "${GITEA_EMAIL}" \
@@ -273,35 +367,39 @@ GRAFANA_PORT="${GRAFANA_PORT:-3000}"
 PROMETHEUS_PORT="${PROMETHEUS_PORT:-9090}"
 GITEA_PORT="${GITEA_PORT:-3001}"
 AGENT_UI_PORT="${AGENT_UI_PORT:-7860}"
+NAUTOBOT_URL="http://localhost:${NAUTOBOT_PORT}"
+GRAFANA_URL="http://localhost:${GRAFANA_PORT}"
+PROMETHEUS_URL="http://localhost:${PROMETHEUS_PORT}"
+GITEA_URL="http://localhost:${GITEA_PORT}"
+AGENT_UI_URL="http://localhost:${AGENT_UI_PORT}"
 
-echo -e "
-${GREEN}╔══════════════════════════════════════════════════════════╗
-║          Network Automation Stack – Ready!                ║
-╚══════════════════════════════════════════════════════════╝${NC}
-
-${CYAN}Service URLs:${NC}
-  Nautobot      : http://localhost:${NAUTOBOT_PORT}
-  Grafana       : http://localhost:${GRAFANA_PORT}
-  Prometheus    : http://localhost:${PROMETHEUS_PORT}
-  Gitea         : http://localhost:${GITEA_PORT}
-  AI Agents UI  : http://localhost:${AGENT_UI_PORT}
-
-${CYAN}Default credentials:${NC}
-  Nautobot  : ${NAUTOBOT_SUPERUSER_NAME:-admin} / (see .env)
-  Grafana   : admin / (see .env)
-  Gitea     : ${GITEA_ADMIN_USER:-gitadmin} / (see .env)
-
-${CYAN}Useful commands:${NC}
-  make status          - Check service health
-  make logs            - Tail all logs
-  make ansible-shell   - Open Ansible container shell
-  make agent-chat      - CLI chat with AI agent
-  make deploy-lab      - Deploy Containerlab topology
-
-${YELLOW}Next steps:${NC}
-  1. Open Nautobot and verify initial data was loaded
-  2. Configure Nautobot Golden Config with your Git repo
-  3. Deploy Containerlab: make deploy-lab
-  4. Sync inventory: make sync-inventory
-  5. Open Grafana and verify dashboards
-"
+echo -e ""
+echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗"
+echo -e "║          Network Automation Stack – Ready!                ║"
+echo -e "╚══════════════════════════════════════════════════════════╝${NC}"
+echo -e ""
+echo -e "${CYAN}Service URLs:${NC}"
+printf "  Nautobot      : %s\n" "$(term_link "${NAUTOBOT_URL}")"
+printf "  Grafana       : %s\n" "$(term_link "${GRAFANA_URL}")"
+printf "  Prometheus    : %s\n" "$(term_link "${PROMETHEUS_URL}")"
+printf "  Gitea         : %s\n" "$(term_link "${GITEA_URL}")"
+printf "  AI Agents UI  : %s\n" "$(term_link "${AGENT_UI_URL}")"
+echo -e ""
+echo -e "${CYAN}Default credentials:${NC}"
+echo -e "  Nautobot  : ${NAUTOBOT_SUPERUSER_NAME:-admin} / (see .env)"
+echo -e "  Grafana   : admin / (see .env)"
+echo -e "  Gitea     : ${GITEA_ADMIN_USER:-gitadmin} / (see .env)"
+echo -e ""
+echo -e "${CYAN}Useful commands:${NC}"
+echo -e "  make status          - Check service health"
+echo -e "  make logs            - Tail all logs"
+echo -e "  make ansible-shell   - Open Ansible container shell"
+echo -e "  make agent-chat      - CLI chat with AI agent"
+echo -e "  make deploy-lab      - Deploy Containerlab topology"
+echo -e ""
+echo -e "${YELLOW}Next steps:${NC}"
+echo -e "  1. Open Nautobot and verify initial data was loaded"
+echo -e "  2. Configure Nautobot Golden Config with your Git repo"
+echo -e "  3. Deploy Containerlab: make deploy-lab"
+echo -e "  4. Sync inventory: make sync-inventory"
+echo -e "  5. Open Grafana and verify dashboards"

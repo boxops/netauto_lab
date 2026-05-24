@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Ignore setup.py logs
+setup.log
+
 # C extensions
 *.so
 
