@@ -40,18 +40,21 @@ Object coverage includes:
 
 The loader supports three modes:
 
-- `apply`: Reconcile desired state into Nautobot (create/update).
+- `apply`: Reconcile desired state into Nautobot with full managed-scope CRUD (create/update/delete).
 - `plan`: Simulate `apply` and prune decisions without mutating Nautobot.
-- `prune`: Remove managed objects that are no longer in desired state.
+- `prune`: Compatibility alias for `apply` (deprecated, will be removed in a future release).
 
 ## Make Targets
 
 Use these targets for day-to-day operations:
 
 ```bash
-make load-data             # apply
+make apply-data            # primary command: full CRUD apply
 make plan-data             # dry-run
-make prune-data            # prune managed scope
+
+# temporary compatibility aliases (deprecated)
+make load-data
+make prune-data
 
 make lint-data             # validate YAML syntax
 make test-data-unit        # unit tests
@@ -69,19 +72,29 @@ python /opt/nautobot/data_loader/load_data.py \
   --mode apply
 ```
 
-Switch `--mode` to `plan` or `prune` as needed.
+Optional state-file override:
+
+```bash
+python /opt/nautobot/data_loader/load_data.py \
+  --data-file /opt/nautobot/data_loader/data.yml \
+  --state-file /tmp/nautobot-data-loader.state.json \
+  --mode apply
+```
+
+Switch `--mode` to `plan` as needed.
 
 ## Expected Workflow
 
 1. Update `nautobot/data_loader/data.yml` with desired state changes.
 2. Run `make plan-data` and review action summary.
-3. Run `make load-data` to apply updates.
-4. Run `make prune-data` when removing managed objects from desired state.
+3. Run `make apply-data` to apply create/update/delete changes.
+4. Use `make plan-data` again to verify a clean no-op plan.
 5. Validate with `make test-data-crud` in CI or before merge.
 
 ## Notes and Guardrails
 
 - Plan mode is intended to be non-mutating.
-- Prune mode is scoped to managed objects represented by the loader logic and data model.
+- Apply deletes are scoped to managed objects represented by the loader logic and data model.
 - Integration tests invoke the same containerized loader path used in operations.
 - If Docker permissions vary by environment, command wrappers use a sudo fallback path.
+- Local loader state is currently persisted in `/tmp/nautobot-data-loader.state.json` by default.

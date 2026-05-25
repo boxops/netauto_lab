@@ -27,7 +27,7 @@ NC     := \033[0m
         deploy-lab destroy-lab \
         ansible-shell run-playbook sync-inventory \
         agent-chat update health-check \
-	lint test load-data lint-data \
+	lint test apply-data load-data lint-data \
 	test-data-unit test-data-integration \
 	prune-data plan-data test-data-crud
 
@@ -191,23 +191,23 @@ lint:  ## Lint Ansible playbooks and configs
 	  | xargs python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" 2>&1 \
 	  && echo "YAML validation: OK" || echo "YAML validation: check errors above"
 
-load-data:  ## Load Nautobot data from nautobot/data_loader/data.yml
+apply-data:  ## Apply Nautobot data from nautobot/data_loader/data.yml (full CRUD for managed scope)
 	@set -e; \
-	echo -e "$(GREEN)Loading Nautobot data...$(NC)"; \
+	echo -e "$(GREEN)Applying Nautobot data (create/update/delete managed scope)...$(NC)"; \
 	($(COMPOSE) exec -T nautobot python /opt/nautobot/data_loader/load_data.py \
 	  --data-file /opt/nautobot/data_loader/data.yml --mode apply \
 	  || sudo docker compose exec -T nautobot python /opt/nautobot/data_loader/load_data.py \
 	  --data-file /opt/nautobot/data_loader/data.yml --mode apply); \
-	echo -e "$(GREEN)Data load complete.$(NC)"
+	echo -e "$(GREEN)Apply complete.$(NC)"
 
-prune-data:  ## Reconcile and prune managed device/interface/ip/cable state from data.yml
+load-data:  ## Compatibility alias for apply-data (deprecated)
+	@echo -e "$(YELLOW)DEPRECATION: 'make load-data' will be removed in a future release. Use 'make apply-data'.$(NC)"; \
+	$(MAKE) apply-data
+
+prune-data:  ## Compatibility alias for apply-data (deprecated)
 	@set -e; \
-	echo -e "$(YELLOW)Pruning managed Nautobot data scope...$(NC)"; \
-	($(COMPOSE) exec -T nautobot python /opt/nautobot/data_loader/load_data.py \
-	  --data-file /opt/nautobot/data_loader/data.yml --mode prune \
-	  || sudo docker compose exec -T nautobot python /opt/nautobot/data_loader/load_data.py \
-	  --data-file /opt/nautobot/data_loader/data.yml --mode prune); \
-	echo -e "$(GREEN)Managed scope prune complete.$(NC)"
+	echo -e "$(YELLOW)DEPRECATION: 'make prune-data' will be removed in a future release. Apply now performs full CRUD. Use 'make apply-data'.$(NC)"; \
+	$(MAKE) apply-data
 
 plan-data:  ## Show planned create/update/delete actions without mutating Nautobot
 	@set -e; \

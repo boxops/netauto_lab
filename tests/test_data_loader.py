@@ -221,6 +221,7 @@ def test_create_or_get_updates_drifted_object():
 
     endpoint = DummyEndpoint()
     dl = loader.NautobotDataLoader(nb=None, data={})
+    dl.prefetch_enabled = False
     dl.create_or_get(
         endpoint,
         {"name": "obj1"},
@@ -306,6 +307,7 @@ def test_create_or_get_plan_mode_does_not_call_create_or_update():
 
     endpoint = DummyEndpoint()
     dl = loader.NautobotDataLoader(nb=None, data={}, mode="plan")
+    dl.prefetch_enabled = False
     dl.create_or_get(
         endpoint,
         {"name": "obj1"},
@@ -341,6 +343,99 @@ def test_create_or_get_plan_mode_returns_planned_object_for_create():
     assert getattr(obj, "name", "") == "new1"
     assert str(getattr(obj, "id", "")).startswith("planned-Dummy-")
     assert any(a["action"] == "create" and a["identity"] == "new1" for a in dl.actions)
+
+
+@pytest.mark.unit
+def test_create_or_get_plan_mode_uses_snapshot_cache_before_live_lookup():
+    class DummyEndpoint:
+        url = "http://localhost:8080/api/dcim/devices"
+
+        def filter(self, **kwargs):
+            raise AssertionError("live filter() should not be called when snapshot cache satisfies lookup")
+
+        def create(self, data):
+            raise AssertionError("create() should not be called when object exists in snapshot cache")
+
+    endpoint = DummyEndpoint()
+    cache_payload = {
+        "version": 1,
+        "meta": {},
+        "endpoints": {
+            "dcim.devices": {
+                "count": 1,
+                "objects": [
+                    {
+                        "id": "dev-1",
+                        "name": "obj1",
+                        "status": {"value": "Active", "label": "Active"},
+                    }
+                ],
+            }
+        },
+    }
+
+    dl = loader.NautobotDataLoader(
+        nb=None,
+        data={},
+        mode="plan",
+        cache_mode="read-through",
+        cache_payload=cache_payload,
+    )
+    dl._endpoint_paths["dcim.devices"] = "dcim.devices"
+
+    dl.create_or_get(
+        endpoint,
+        {"name": "obj1"},
+        {"name": "obj1", "status": "Planned"},
+        object_type="Dummy",
+        identity="obj1",
+    )
+
+    assert any(a["action"] == "update" and a["object_type"] == "Dummy" for a in dl.actions)
+
+
+@pytest.mark.unit
+def test_create_or_get_plan_mode_can_match_snapshot_by_identity_key():
+    class DummyEndpoint:
+        url = "http://localhost:8080/api/ipam/vlans"
+
+        def filter(self, **kwargs):
+            raise AssertionError("live filter() should not be called when identity index matches")
+
+        def create(self, data):
+            raise AssertionError("create() should not be called when identity index matches")
+
+    endpoint = DummyEndpoint()
+    cache_payload = {
+        "version": 1,
+        "meta": {},
+        "endpoints": {
+            "ipam.vlans": {
+                "count": 1,
+                "objects": [{"id": "vlan-1", "vid": 100, "name": "management", "status": "Active"}],
+                "indexes": {"vid": {"100": [0]}},
+            }
+        },
+    }
+
+    dl = loader.NautobotDataLoader(
+        nb=None,
+        data={},
+        mode="plan",
+        cache_mode="read-through",
+        cache_payload=cache_payload,
+    )
+    dl._endpoint_paths["ipam.vlans"] = "ipam.vlans"
+
+    dl.create_or_get(
+        endpoint,
+        {"vid": 100},
+        {"vid": 100, "name": "management", "status": "Planned"},
+        object_type="VLAN",
+        identity="100",
+    )
+
+    assert any(a["action"] == "update" and a["object_type"] == "VLAN" for a in dl.actions)
 
 
 @pytest.mark.integration

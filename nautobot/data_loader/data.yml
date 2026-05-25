@@ -29,6 +29,10 @@ locations:
     location_type: Site
     parent: North America
     status: Active
+  - name: site-lab-2
+    location_type: Site
+    parent: North America
+    status: Active
 
 roles:
   - name: Spine
@@ -77,13 +81,13 @@ platforms:
   - name: Cisco IOS
     manufacturer: Cisco Systems
     network_driver: cisco_ios
-  - name: Cisco IOS-XE
+  - name: Cisco IOS XE
     manufacturer: Cisco Systems
     network_driver: cisco_xe
-  - name: Cisco IOS-XR
+  - name: Cisco IOS XR
     manufacturer: Cisco Systems
     network_driver: cisco_xr
-  - name: Cisco NX-OS
+  - name: Cisco NX OS
     manufacturer: Cisco Systems
     network_driver: cisco_nxos
   - name: Juniper JunOS
