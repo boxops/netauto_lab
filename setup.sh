@@ -78,6 +78,39 @@ if [[ "${SKIP_PREREQS}" == "false" ]]; then
   command -v python3 >/dev/null 2>&1 || warn "Python3 not found. Some scripts may not work."
   command -v git >/dev/null 2>&1 || warn "Git not found."
 
+  if ! command -v make >/dev/null 2>&1; then
+    warn "make not found. Attempting installation..."
+    if command -v apt-get >/dev/null 2>&1; then
+      if sudo apt-get update -qq && sudo apt-get install -y -qq make >/dev/null 2>&1; then
+        log "✓ make installed: $(make --version 2>/dev/null | head -1)"
+      else
+        warn "make install via apt failed. Try: sudo apt-get install make"
+      fi
+    elif command -v dnf >/dev/null 2>&1; then
+      if sudo dnf install -y make >/dev/null 2>&1; then
+        log "✓ make installed: $(make --version 2>/dev/null | head -1)"
+      else
+        warn "make install via dnf failed. Try: sudo dnf install make"
+      fi
+    elif command -v yum >/dev/null 2>&1; then
+      if sudo yum install -y make >/dev/null 2>&1; then
+        log "✓ make installed: $(make --version 2>/dev/null | head -1)"
+      else
+        warn "make install via yum failed. Try: sudo yum install make"
+      fi
+    elif command -v apk >/dev/null 2>&1; then
+      if sudo apk add make >/dev/null 2>&1; then
+        log "✓ make installed: $(make --version 2>/dev/null | head -1)"
+      else
+        warn "make install via apk failed. Try: sudo apk add make"
+      fi
+    else
+      warn "No supported package manager found to install make automatically."
+    fi
+  else
+    log "✓ make found: $(make --version 2>/dev/null | head -1)"
+  fi
+
   # Best-effort install of optional but commonly required tooling.
   if ! command -v containerlab >/dev/null 2>&1; then
     warn "Containerlab not found. Attempting installation..."
