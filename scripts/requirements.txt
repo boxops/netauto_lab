@@ -1,0 +1,2 @@
+pynautobot>=2.3.0
+pyyaml>=6.0.1

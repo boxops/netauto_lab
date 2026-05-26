@@ -23,7 +23,7 @@ try:
     import yaml
     import pynautobot
 except ImportError:
-    print("Missing dependencies. Run: pip install pynautobot pyyaml")
+    print("Missing dependencies. Run: make sync-inventory (auto-bootstraps .venv-host) or install scripts/requirements.txt in your Python env.")
     sys.exit(1)
 
 # ── Configuration ──────────────────────────────────────────────────────────────

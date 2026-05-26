@@ -152,6 +152,65 @@ if [[ "${SKIP_PREREQS}" == "false" ]]; then
     log "✓ pytest found: $(python3 -m pytest --version 2>/dev/null | head -1)"
   fi
 
+  # Create and seed a project-local venv for host-side helper scripts.
+  if ! python3 -m venv --help >/dev/null 2>&1; then
+    warn "python3-venv not found. Attempting installation..."
+    if command -v apt-get >/dev/null 2>&1; then
+      PY_MINOR="$(python3 -c 'import sys; print(sys.version_info.minor)')"
+      if sudo apt-get update -qq && sudo apt-get install -y -qq "python3.${PY_MINOR}-venv" python3-venv >/dev/null 2>&1; then
+        log "✓ python3-venv installed"
+      else
+        warn "python3-venv install via apt failed. Try: sudo apt-get install python3-venv python3.${PY_MINOR}-venv"
+      fi
+    elif command -v dnf >/dev/null 2>&1; then
+      if sudo dnf install -y python3 >/dev/null 2>&1; then
+        log "✓ Python venv support installed"
+      else
+        warn "Python venv support install via dnf failed. Install python3-venv equivalent for your distro."
+      fi
+    elif command -v yum >/dev/null 2>&1; then
+      if sudo yum install -y python3 >/dev/null 2>&1; then
+        log "✓ Python venv support installed"
+      else
+        warn "Python venv support install via yum failed. Install python3-venv equivalent for your distro."
+      fi
+    elif command -v apk >/dev/null 2>&1; then
+      if sudo apk add py3-virtualenv >/dev/null 2>&1; then
+        log "✓ Python venv support installed"
+      else
+        warn "Python venv support install via apk failed. Try: sudo apk add py3-virtualenv"
+      fi
+    else
+      warn "No supported package manager found to install Python venv support automatically."
+    fi
+  fi
+
+  HOST_VENV_DIR="${NETAUTO_DIR}/.venv-host"
+  HOST_PYTHON_BIN="${HOST_VENV_DIR}/bin/python3"
+  if [[ ! -x "${HOST_PYTHON_BIN}" ]]; then
+    log "Creating host Python venv at ${HOST_VENV_DIR}..."
+    if python3 -m venv "${HOST_VENV_DIR}" >/dev/null 2>&1; then
+      log "✓ Host Python venv created"
+    else
+      warn "Could not create host Python venv. Install python3-venv and rerun setup."
+    fi
+  else
+    log "✓ Host Python venv found: ${HOST_VENV_DIR}"
+  fi
+
+  if [[ -x "${HOST_PYTHON_BIN}" ]]; then
+    if "${HOST_PYTHON_BIN}" -c "import pynautobot, yaml" >/dev/null 2>&1; then
+      log "✓ Host script dependencies already installed (pynautobot, pyyaml)"
+    else
+      log "Installing host script dependencies from scripts/requirements.txt..."
+      if "${HOST_PYTHON_BIN}" -m pip install -r scripts/requirements.txt >/dev/null 2>&1; then
+        log "✓ Host script dependencies installed"
+      else
+        warn "Could not install host script dependencies in ${HOST_VENV_DIR}."
+      fi
+    fi
+  fi
+
   # Check Docker daemon accessibility and report the right root cause.
   if docker info >/dev/null 2>&1; then
     log "✓ Docker daemon is running"

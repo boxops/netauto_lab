@@ -15,6 +15,11 @@ export
 COMPOSE     := docker compose
 PROJECT_DIR := $(shell pwd)
 DATE        := $(shell date '+%Y%m%d_%H%M%S')
+HOST_VENV   := $(PROJECT_DIR)/.venv-host
+HOST_PYTHON := $(HOST_VENV)/bin/python3
+LAB_RUNTIME_DIR := containerlab/topologies/clab-spine-leaf
+LOCAL_UID := $(shell id -u)
+LOCAL_GID := $(shell id -g)
 
 # Colors
 GREEN  := \033[0;32m
@@ -24,7 +29,7 @@ NC     := \033[0m
 
 .PHONY: help init start stop restart logs status clean \
         backup-data restore-data \
-        deploy-lab destroy-lab \
+        deploy-lab destroy-lab fix-lab-perms \
         ansible-shell run-playbook sync-inventory \
         agent-chat update health-check \
 	lint test apply-data load-data lint-data \
@@ -143,11 +148,17 @@ deploy-lab:  ## Deploy Containerlab spine-leaf topology
 	@echo -e "$(GREEN)Deploying Containerlab topology...$(NC)"
 	@sudo containerlab deploy --topo containerlab/topologies/spine-leaf.clab.yml 2>&1 \
 	  || { echo -e "$(YELLOW)Containerlab deploy failed. See docs.$(NC)"; exit 1; }
+	@$(MAKE) fix-lab-perms
 	@echo -e "$(GREEN)Lab deployed. Run 'make sync-inventory' to register in Nautobot.$(NC)"
 
 destroy-lab:  ## Destroy Containerlab topology
 	@echo -e "$(YELLOW)Destroying Containerlab topology...$(NC)"
 	@sudo containerlab destroy --topo containerlab/topologies/spine-leaf.clab.yml --cleanup 2>&1 || true
+	@$(MAKE) fix-lab-perms
+
+fix-lab-perms:  ## Normalize containerlab runtime ownership for git operations
+	@echo -e "$(CYAN)Normalizing ownership for $(LAB_RUNTIME_DIR)...$(NC)"
+	@sudo chown -R $(LOCAL_UID):$(LOCAL_GID) $(LAB_RUNTIME_DIR) 2>/dev/null || true
 
 redeploy-lab:  ## Redeploy Containerlab topology (destroy + deploy)
 	@make destroy-lab
@@ -155,15 +166,29 @@ redeploy-lab:  ## Redeploy Containerlab topology (destroy + deploy)
 
 sync-inventory:  ## Sync Containerlab devices to Nautobot
 	@echo -e "$(GREEN)Syncing inventory to Nautobot...$(NC)"
-	@NAUTOBOT_URL="http://localhost:$(NAUTOBOT_PORT)" \
-	  NAUTOBOT_SUPERUSER_API_TOKEN="$(NAUTOBOT_SUPERUSER_API_TOKEN)" \
-	  python3 scripts/sync_inventory.py
-	@echo -e "$(GREEN)Inventory sync complete.$(NC)"
+	@set -e; \
+	if [ ! -x "$(HOST_PYTHON)" ] || ! "$(HOST_PYTHON)" -m pip --version >/dev/null 2>&1; then \
+	  echo -e "$(CYAN)Creating host Python venv for sync tooling...$(NC)"; \
+	  rm -rf "$(HOST_VENV)"; \
+	  python3 -m venv "$(HOST_VENV)"; \
+	fi; \
+	"$(HOST_PYTHON)" -m pip install --quiet -r scripts/requirements.txt; \
+	NAUTOBOT_URL="http://localhost:$(NAUTOBOT_PORT)" \
+	NAUTOBOT_SUPERUSER_API_TOKEN="$(NAUTOBOT_SUPERUSER_API_TOKEN)" \
+	"$(HOST_PYTHON)" scripts/sync_inventory.py; \
+	echo -e "$(GREEN)Inventory sync complete.$(NC)"
 
 sync-inventory-dry:  ## Preview inventory sync (dry run)
-	@NAUTOBOT_URL="http://localhost:$(NAUTOBOT_PORT)" \
-	  NAUTOBOT_SUPERUSER_API_TOKEN="$(NAUTOBOT_SUPERUSER_API_TOKEN)" \
-	  python3 scripts/sync_inventory.py --dry-run
+	@set -e; \
+	if [ ! -x "$(HOST_PYTHON)" ] || ! "$(HOST_PYTHON)" -m pip --version >/dev/null 2>&1; then \
+	  echo -e "$(CYAN)Creating host Python venv for sync tooling...$(NC)"; \
+	  rm -rf "$(HOST_VENV)"; \
+	  python3 -m venv "$(HOST_VENV)"; \
+	fi; \
+	"$(HOST_PYTHON)" -m pip install --quiet -r scripts/requirements.txt; \
+	NAUTOBOT_URL="http://localhost:$(NAUTOBOT_PORT)" \
+	NAUTOBOT_SUPERUSER_API_TOKEN="$(NAUTOBOT_SUPERUSER_API_TOKEN)" \
+	"$(HOST_PYTHON)" scripts/sync_inventory.py --dry-run
 
 ## ── Ansible ───────────────────────────────────────────────────────────────────
 

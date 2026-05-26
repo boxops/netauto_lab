@@ -182,13 +182,13 @@ custom_fields:
 
 secrets:
   - name: lab-admin-username
-    variable: ADMIN_USERNAME
+    value: admin
     description: SSH username for lab devices
   - name: lab-admin-password
-    variable: ADMIN_PASSWORD
+    value: admin
     description: SSH password for lab devices
   - name: lab-admin-secret
-    variable: ADMIN_SECRET
+    value: admin
     description: SSH enable/secret password for lab devices
 
 secrets_group:
@@ -212,25 +212,25 @@ devices:
     location: site-lab
     platform: Arista EOS
     status: Active
-    primary_ip4: 10.10.100.11/32
+    primary_ip4: 172.20.20.11/32
     secrets_group: lab-ssh-creds
     interfaces:
-      - name: Eth0
+      - name: Ethernet0
         status: Active
         type: 1000base-t
         enabled: true
         ip_addresses:
-          - address: 10.10.100.11/32
+          - address: 172.20.20.11/32
             status: Active
-      - name: Eth1
+      - name: Ethernet1
         status: Active
         type: 1000base-t
         enabled: true
-      - name: Eth2
+      - name: Ethernet2
         status: Active
         type: 1000base-t
         enabled: true
-      - name: Eth3
+      - name: Ethernet3
         status: Active
         type: 1000base-t
         enabled: true
@@ -240,25 +240,25 @@ devices:
     location: site-lab
     platform: Arista EOS
     status: Active
-    primary_ip4: 10.10.100.12/32
+    primary_ip4: 172.20.20.12/32
     secrets_group: lab-ssh-creds
     interfaces:
-      - name: Eth0
+      - name: Ethernet0
         status: Active
         type: 1000base-t
         enabled: true
         ip_addresses:
-          - address: 10.10.100.12/32
+          - address: 172.20.20.12/32
             status: Active
-      - name: Eth1
+      - name: Ethernet1
         status: Active
         type: 1000base-t
         enabled: true
-      - name: Eth2
+      - name: Ethernet2
         status: Active
         type: 1000base-t
         enabled: true
-      - name: Eth3
+      - name: Ethernet3
         status: Active
         type: 1000base-t
         enabled: true
@@ -268,21 +268,21 @@ devices:
     location: site-lab
     platform: Arista EOS
     status: Active
-    primary_ip4: 10.10.100.21/32
+    primary_ip4: 172.20.20.21/32
     secrets_group: lab-ssh-creds
     interfaces:
-      - name: Eth0
+      - name: Ethernet0
         status: Active
         type: 1000base-t
         enabled: true
         ip_addresses:
-          - address: 10.10.100.21/32
+          - address: 172.20.20.21/32
             status: Active
-      - name: Eth1
+      - name: Ethernet1
         status: Active
         type: 1000base-t
         enabled: true
-      - name: Eth2
+      - name: Ethernet2
         status: Active
         type: 1000base-t
         enabled: true
@@ -292,21 +292,21 @@ devices:
     location: site-lab
     platform: Arista EOS
     status: Active
-    primary_ip4: 10.10.100.22/32
+    primary_ip4: 172.20.20.22/32
     secrets_group: lab-ssh-creds
     interfaces:
-      - name: Eth0
+      - name: Ethernet0
         status: Active
         type: 1000base-t
         enabled: true
         ip_addresses:
-          - address: 10.10.100.22/32
+          - address: 172.20.20.22/32
             status: Active
-      - name: Eth1
+      - name: Ethernet1
         status: Active
         type: 1000base-t
         enabled: true
-      - name: Eth2
+      - name: Ethernet2
         status: Active
         type: 1000base-t
         enabled: true
@@ -316,59 +316,59 @@ devices:
     location: site-lab
     platform: Arista EOS
     status: Active
-    primary_ip4: 10.10.100.23/32
+    primary_ip4: 172.20.20.23/32
     secrets_group: lab-ssh-creds
     interfaces:
-      - name: Eth0
+      - name: Ethernet0
         status: Active
         type: 1000base-t
         enabled: true
         ip_addresses:
-          - address: 10.10.100.23/32
+          - address: 172.20.20.23/32
             status: Active
-      - name: Eth1
+      - name: Ethernet1
         status: Active
         type: 1000base-t
         enabled: true
-      - name: Eth2
+      - name: Ethernet2
         status: Active
         type: 1000base-t
         enabled: true
 
 cables:
   - a_device: spine1
-    a_interface: Eth1
+    a_interface: Ethernet1
     b_device: leaf1
-    b_interface: Eth1
+    b_interface: Ethernet1
     type: cat6
     status: Connected
   - a_device: spine1
-    a_interface: Eth2
+    a_interface: Ethernet2
     b_device: leaf2
-    b_interface: Eth1
+    b_interface: Ethernet1
     type: cat6
     status: Connected
   - a_device: spine1
-    a_interface: Eth3
+    a_interface: Ethernet3
     b_device: leaf3
-    b_interface: Eth1
+    b_interface: Ethernet1
     type: cat6
     status: Connected
   - a_device: spine2
-    a_interface: Eth1
+    a_interface: Ethernet1
     b_device: leaf1
-    b_interface: Eth2
+    b_interface: Ethernet2
     type: cat6
     status: Connected
   - a_device: spine2
-    a_interface: Eth2
+    a_interface: Ethernet2
     b_device: leaf2
-    b_interface: Eth2
+    b_interface: Ethernet2
     type: cat6
     status: Connected
   - a_device: spine2
-    a_interface: Eth3
+    a_interface: Ethernet3
     b_device: leaf3
-    b_interface: Eth2
+    b_interface: Ethernet2
     type: cat6
     status: Connected

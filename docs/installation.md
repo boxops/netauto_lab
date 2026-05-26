@@ -110,6 +110,7 @@ docker compose --profile host-metrics up -d node-exporter
 
 ```bash
 # Import your cEOS image first
+# example: docker import cEOS64-lab-4.29.0.1F.tar.tar ceos:latest
 docker import cEOS64-lab-<version>.tar ceos:latest
 
 # Deploy the spine-leaf topology

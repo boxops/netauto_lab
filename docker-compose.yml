@@ -32,6 +32,7 @@ volumes:
   nautobot-media:
   nautobot-static:
   nautobot-git-repos:
+  nautobot-backups:
   prometheus-data:
   grafana-data:
   loki-data:
@@ -61,12 +62,14 @@ x-nautobot-base: &nautobot-base
     - ./nautobot/configuration/nautobot_config.py:/opt/nautobot/nautobot_config.py:ro
     - ./nautobot/scripts:/opt/nautobot/scripts
     - ./nautobot/data_loader:/opt/nautobot/data_loader
+    - nautobot-backups:/opt/nautobot/backups
     - nautobot-media:/opt/nautobot/media
     - nautobot-static:/opt/nautobot/static
     - nautobot-git-repos:/opt/nautobot/git-repos
     - ./prometheus/file_sd:/opt/nautobot/prometheus_file_sd
   networks:
     - mgmt-network
+    - clab
   restart: unless-stopped
   logging:
     driver: json-file
@@ -126,11 +129,12 @@ services:
   nautobot-volume-init:
     image: "busybox"
     user: "0"
-    command: ["sh", "-c", "chown -R 999:999 /media /static /git-repos && chmod 775 /file_sd"]
+    command: ["sh", "-c", "chown -R 999:999 /media /static /git-repos /backups && chmod 775 /file_sd"]
     volumes:
       - nautobot-media:/media
       - nautobot-static:/static
       - nautobot-git-repos:/git-repos
+      - nautobot-backups:/backups
       - ./prometheus/file_sd:/file_sd
     networks:
       - mgmt-network

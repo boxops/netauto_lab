@@ -533,21 +533,33 @@ def test_loader_crud_for_managed_network_scope_with_temp_fixture():
     leaf1 = next(d for d in create_update_data["devices"] if d["name"] == "leaf1")
     spine1 = next(d for d in create_update_data["devices"] if d["name"] == "spine1")
 
-    leaf1_eth1 = next(i for i in leaf1["interfaces"] if i["name"] == "Eth1")
+    leaf1_eth1 = next(
+        i
+        for i in leaf1["interfaces"]
+        if i["name"] in {"Eth1", "Ethernet1"}
+    )
     leaf1_eth1["description"] = "crud-updated-desc"
+
+    temp_interface_name = "Ethernet99" if any(i["name"].startswith("Ethernet") for i in leaf1["interfaces"]) else "Eth99"
 
     leaf1["interfaces"].append(
         {
-            "name": "Eth99",
+            "name": temp_interface_name,
             "status": "Active",
             "type": "1000base-t",
             "enabled": True,
-            "ip_addresses": [{"address": "10.10.199.21/32", "status": "Active"}],
+            "ip_addresses": [
+                {
+                    "address": "10.10.199.21/32",
+                    "status": "Active",
+                    "namespace": "Global",
+                }
+            ],
         }
     )
     spine1["interfaces"].append(
         {
-            "name": "Eth99",
+            "name": temp_interface_name,
             "status": "Active",
             "type": "1000base-t",
             "enabled": True,
@@ -556,9 +568,9 @@ def test_loader_crud_for_managed_network_scope_with_temp_fixture():
     create_update_data["cables"].append(
         {
             "a_device": "spine1",
-            "a_interface": "Eth99",
+            "a_interface": temp_interface_name,
             "b_device": "leaf1",
-            "b_interface": "Eth99",
+            "b_interface": temp_interface_name,
             "type": "cat6",
             "status": "Connected",
         }
@@ -637,7 +649,7 @@ def test_loader_crud_for_managed_network_scope_with_temp_fixture():
 
         eth1_resp = requests.get(
             f"{nautobot_url}/api/dcim/interfaces/",
-            params={"device_id": dev_id, "name": "Eth1"},
+            params={"device_id": dev_id, "name": leaf1_eth1["name"]},
             headers=headers,
             timeout=20,
         )
@@ -646,7 +658,7 @@ def test_loader_crud_for_managed_network_scope_with_temp_fixture():
 
         eth99_resp = requests.get(
             f"{nautobot_url}/api/dcim/interfaces/",
-            params={"device_id": dev_id, "name": "Eth99"},
+            params={"device_id": dev_id, "name": temp_interface_name},
             headers=headers,
             timeout=20,
         )
@@ -708,7 +720,7 @@ def test_loader_crud_for_managed_network_scope_with_temp_fixture():
 
         eth99_after = requests.get(
             f"{nautobot_url}/api/dcim/interfaces/",
-            params={"device_id": dev_id, "name": "Eth99"},
+            params={"device_id": dev_id, "name": temp_interface_name},
             headers=headers,
             timeout=20,
         )

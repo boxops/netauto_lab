@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import re
 import sys
 from typing import Any
 from urllib.parse import urlparse
@@ -97,6 +98,23 @@ class NautobotDataLoader:
         self._config_context_relations_supported: bool | None = None
         self._ip_namespace_supported: bool | None = None
 
+    @staticmethod
+    def _secret_store_dir() -> Path:
+        return Path(os.getenv("DATA_LOADER_SECRET_DIR", "/opt/nautobot/media/data_loader_secrets"))
+
+    @staticmethod
+    def _secret_filename(secret_name: str) -> str:
+        safe = re.sub(r"[^a-zA-Z0-9_.-]", "_", secret_name).strip("._")
+        return f"{safe or 'secret'}.txt"
+
+    def _materialize_secret_file(self, secret_name: str, secret_value: str) -> str:
+        secret_dir = self._secret_store_dir()
+        secret_dir.mkdir(parents=True, exist_ok=True)
+        file_path = secret_dir / self._secret_filename(secret_name)
+        file_path.write_text(str(secret_value), encoding="utf-8")
+        os.chmod(file_path, 0o600)
+        return str(file_path)
+
     @property
     def is_plan(self) -> bool:
         return self.mode == "plan"
@@ -121,6 +139,25 @@ class NautobotDataLoader:
             return sorted(normalized, key=lambda item: str(item))
 
         return value
+
+    @staticmethod
+    def _is_planned_placeholder(value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+        return value.startswith("planned-")
+
+    @classmethod
+    def _contains_planned_placeholder(cls, value: Any) -> bool:
+        if cls._is_planned_placeholder(value):
+            return True
+
+        if isinstance(value, dict):
+            return any(cls._contains_planned_placeholder(v) for v in value.values())
+
+        if isinstance(value, (list, tuple, set)):
+            return any(cls._contains_planned_placeholder(v) for v in value)
+
+        return False
 
     def _object_matches_filter(self, obj: Any, filter_kwargs: dict[str, Any]) -> bool:
         for key, expected in filter_kwargs.items():
@@ -677,6 +714,7 @@ class NautobotDataLoader:
         object_id = identity or str(filter_kwargs)
         existing: list[Any] = []
         snapshot_hit = False
+        has_planned_placeholders = self.is_plan and self._contains_planned_placeholder(filter_kwargs)
         if isinstance(object_id, str):
             by_identity = self._snapshot_lookup_by_identity(endpoint, object_type, object_id)
             if by_identity is not None:
@@ -688,7 +726,7 @@ class NautobotDataLoader:
         if snapshot_existing is not None and not existing:
             existing = snapshot_existing
 
-        if not existing and (not used_snapshot or self.cache_mode == "read-through"):
+        if not existing and (not used_snapshot or self.cache_mode == "read-through") and not has_planned_placeholders:
             cached_existing = self._cached_filter(endpoint, filter_kwargs)
             if cached_existing is not None:
                 existing = cached_existing
@@ -869,33 +907,89 @@ class NautobotDataLoader:
 
     def ensure_interface_ip(self, interface: Any, ip_item: dict[str, Any]) -> Any:
         address = ip_item["address"]
+
+        namespace_payload = None
+        namespace_value = ip_item.get("namespace")
+        if namespace_value is not None:
+            if isinstance(namespace_value, dict):
+                namespace_payload = namespace_value.get("id") or namespace_value.get("name")
+            else:
+                namespace_payload = namespace_value
+            if isinstance(namespace_payload, str) and namespace_payload and "-" not in namespace_payload:
+                namespace_payload = self.get_by_name(
+                    self.nb.ipam.namespaces,
+                    namespace_payload,
+                    "Namespace",
+                ).id
+
+        if namespace_payload is None and self.namespace is not None:
+            namespace_payload = self.namespace.id
+
+        desired_ip_payload = {
+            "address": address,
+            "status": ip_item.get("status", "Active"),
+        }
+        compare_keys = ["address", "status"]
+        if namespace_payload is not None:
+            desired_ip_payload["namespace"] = namespace_payload
+            compare_keys.append("namespace")
+        if "role" in ip_item:
+            desired_ip_payload["role"] = ip_item["role"]
+            compare_keys.append("role")
+        if "dns_name" in ip_item:
+            desired_ip_payload["dns_name"] = ip_item["dns_name"]
+            compare_keys.append("dns_name")
+
         ip_obj = None
         for candidate in self.nb.ipam.ip_addresses.filter(address=address):
+            if namespace_payload is not None:
+                candidate_namespace = getattr(candidate, "namespace", None)
+                candidate_namespace_id = getattr(candidate_namespace, "id", None)
+                if candidate_namespace_id is None and isinstance(candidate_namespace, dict):
+                    candidate_namespace_id = candidate_namespace.get("id")
+                if candidate_namespace_id and candidate_namespace_id != namespace_payload:
+                    continue
+
             assigned_obj = getattr(candidate, "assigned_object", None)
             if assigned_obj and getattr(assigned_obj, "id", None) == interface.id:
                 ip_obj = candidate
                 break
 
-        if ip_obj is None:
-            payload = {
-                "address": address,
-                "status": ip_item.get("status", "Active"),
-            }
-            compare_keys = ["status"]
-            if self._supports_ip_namespace():
-                payload["namespace"] = self.namespace.id
-                compare_keys.append("namespace")
-            if "role" in ip_item:
-                payload["role"] = ip_item["role"]
-                compare_keys.append("role")
-            if "dns_name" in ip_item:
-                payload["dns_name"] = ip_item["dns_name"]
-                compare_keys.append("dns_name")
+            if ip_obj is None:
+                ip_obj = candidate
 
+        if ip_obj is None and "/" in address:
+            host_address = address.split("/", 1)[0]
+            for candidate in self.nb.ipam.ip_addresses.filter(address=host_address):
+                if namespace_payload is not None:
+                    candidate_namespace = getattr(candidate, "namespace", None)
+                    candidate_namespace_id = getattr(candidate_namespace, "id", None)
+                    if candidate_namespace_id is None and isinstance(candidate_namespace, dict):
+                        candidate_namespace_id = candidate_namespace.get("id")
+                    if candidate_namespace_id and candidate_namespace_id != namespace_payload:
+                        continue
+
+                assigned_obj = getattr(candidate, "assigned_object", None)
+                if assigned_obj and getattr(assigned_obj, "id", None) == interface.id:
+                    ip_obj = candidate
+                    break
+
+                if ip_obj is None:
+                    ip_obj = candidate
+
+        if ip_obj is None:
             ip_obj = self.create_or_get(
                 self.nb.ipam.ip_addresses,
                 {"address": address},
-                payload,
+                desired_ip_payload,
+                compare_keys=compare_keys,
+            )
+        else:
+            self.update_if_needed(
+                ip_obj,
+                desired_ip_payload,
+                object_type="IPAddress",
+                identity=address,
                 compare_keys=compare_keys,
             )
 
@@ -939,7 +1033,7 @@ class NautobotDataLoader:
             return True
 
         data = sample.serialize()
-        self._ip_namespace_supported = data.get("namespace") is not None
+        self._ip_namespace_supported = "namespace" in data
         return self._ip_namespace_supported
 
     def ensure_namespace(self) -> None:
@@ -1161,10 +1255,20 @@ class NautobotDataLoader:
     def ensure_secrets_and_group(self) -> None:
         secret_objs = {}
         for item in self.data.get("secrets", []):
+            if "value" not in item:
+                raise ValueError(
+                    f"Secret '{item.get('name', '<unknown>')}' is missing required key: value"
+                )
+
+            # Store explicit YAML secret values in managed files and reference via Nautobot's text-file provider.
+            secret_path = str(self._secret_store_dir() / self._secret_filename(item["name"]))
+            if not self.is_plan:
+                secret_path = self._materialize_secret_file(item["name"], str(item["value"]))
+
             payload = {
                 "name": item["name"],
-                "provider": "environment-variable",
-                "parameters": {"variable": item["variable"]},
+                "provider": "text-file",
+                "parameters": {"path": secret_path},
                 "description": item.get("description", ""),
             }
             secret_objs[item["name"]] = self.create_or_get(self.nb.extras.secrets, {"name": item["name"]}, payload)
@@ -1681,9 +1785,10 @@ class NautobotDataLoader:
                     )
 
                     if using_snapshot_ip_assignment:
-                        remaining = list(range(assignments_by_ip.get(ip_id, 0)))
+                        assignments_by_ip[ip_id] = max(0, assignments_by_ip.get(ip_id, 0) - 1)
+                        remaining = assignments_by_ip.get(ip_id, 0)
                     else:
-                        remaining = self._cached_live_filter(self.nb.ipam.ip_address_to_interface, {"ip_address": ip_address})
+                        remaining = self._cached_live_filter(self.nb.ipam.ip_address_to_interface, {"ip_address": ip_id})
                     if not remaining:
                         if not self.is_plan:
                             ip_obj.delete()

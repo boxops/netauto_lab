@@ -1,6 +1,7 @@
 """Purpose: Capture device configurations and save them as a backup in Nautobot."""
 
 from datetime import datetime
+import threading
 from netmiko import ConnectHandler
 from django.conf import settings
 from ncclient import manager
@@ -114,6 +115,13 @@ class CustomDeviceBackup(Job, DeviceFormEntry):
         if device:
             all_devices.update(device)
 
+        failed_devices = []
+        failed_devices_lock = threading.Lock()
+
+        if not all_devices:
+            self.logger.warning("No devices matched the selected filters.")
+            return
+
         def _run_device(dev):
             """Back up one device, collecting all log output in a thread-local buffer."""
             buf = JobLogBuffer()
@@ -124,9 +132,14 @@ class CustomDeviceBackup(Job, DeviceFormEntry):
                     )
                     return buf
                 buf.info(f"{dev} Processing device...")
-                DeviceBackup(job=JobProxy(buf), device=dev).backup_config()
+                success = DeviceBackup(job=JobProxy(buf), device=dev).backup_config()
+                if not success:
+                    with failed_devices_lock:
+                        failed_devices.append(dev.name)
             except Exception as e:
                 buf.error(f"{dev} Error processing device: {e}")
+                with failed_devices_lock:
+                    failed_devices.append(dev.name)
             return buf
 
         if parallel_task:
@@ -134,6 +147,12 @@ class CustomDeviceBackup(Job, DeviceFormEntry):
         else:
             for dev in all_devices:
                 _run_device(dev).drain_to(self.logger)
+
+        if failed_devices:
+            failed_summary = ", ".join(sorted(set(failed_devices)))
+            self.logger.warning(
+                f"Backup failed for {len(set(failed_devices))} device(s): {failed_summary}. See job logs for details."
+            )
 
 
 class DeviceBackup:
@@ -155,6 +174,8 @@ class DeviceBackup:
         "arista_eos":       "show run",
     }
 
+    NETCONF_PLATFORMS = {"siklu_os"}
+
     # Platforms that require `terminal length 0` before issuing the command.
     PAGED_PLATFORMS = {"fiberstore_fsos", "netonix_os"}
 
@@ -170,7 +191,7 @@ class DeviceBackup:
         """Retrieve running config via NETCONF (e.g. Siklu OS)."""
         device_info = get_device_connection_info(self.device)
         netconf_params = {
-            "host":             device_info["host"],
+            "host":             device_info["ip"],
             "port":             device_info["port"],
             "username":         device_info["username"],
             "password":         device_info["password"],
@@ -204,7 +225,13 @@ class DeviceBackup:
         self.job.logger.info(f"{self.device} Connecting via SSH (command: {command})...")
         try:
             with ConnectHandler(**device_info) as session:
-                session.enable()
+                if driver.startswith("cisco_") or driver == "arista_eos":
+                    try:
+                        session.enable()
+                    except Exception as enable_error:
+                        self.job.logger.warning(
+                            f"{self.device} Could not enter enable mode: {enable_error}. Continuing..."
+                        )
                 self.device.cf["can_connect"] = True
                 if driver in self.PAGED_PLATFORMS:
                     session.send_command_timing("terminal length 0")
@@ -257,20 +284,23 @@ class DeviceBackup:
             backup_file = self._resolve_backup_path()
         except Exception as e:
             self.job.logger.error(f"{self.device} Could not resolve backup path: {e}")
-            return
+            return False
 
         os.makedirs(os.path.dirname(backup_file), exist_ok=True)
         self.job.logger.info(f"{self.device} Backup target: {backup_file}")
 
         # Dispatch to the correct retrieval method.
         driver = self.device.platform.network_driver
-        running_config = self._ssh_backup()
+        if driver in self.NETCONF_PLATFORMS:
+            running_config = self._netconf_backup()
+        else:
+            running_config = self._ssh_backup()
 
         if not running_config:
             self.job.logger.error(
                 f"{self.device} Backup failed — no configuration retrieved."
             )
-            return
+            return False
 
         if isinstance(running_config, dict):
             running_config = json.dumps(running_config, indent=4)
@@ -286,6 +316,7 @@ class DeviceBackup:
         backup_obj.save()
         self.job.logger.info(f"{self.device} Backup complete.")
         # TODO: Commit and push local Git repository to remote repository.
+        return True
 
 
 register_jobs(CustomDeviceBackup)
