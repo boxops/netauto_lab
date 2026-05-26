@@ -2,7 +2,7 @@
 # ============================================================
 # setup.sh – Automated setup for the Network Automation Stack
 # ============================================================
-# Usage: bash setup.sh [--skip-prereqs] [--no-pull] [--auto-install-docker]
+# Usage: bash setup.sh [--skip-prereqs] [--no-pull]
 # ============================================================
 set -euo pipefail
 
@@ -15,7 +15,6 @@ BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
 
 SKIP_PREREQS=false
 NO_PULL=false
-AUTO_INSTALL_DOCKER=false
 USE_SUDO_DOCKER=false
 
 docker_cmd() {
@@ -34,7 +33,6 @@ for arg in "$@"; do
   case $arg in
     --skip-prereqs) SKIP_PREREQS=true ;;
     --no-pull)      NO_PULL=true ;;
-    --auto-install-docker) AUTO_INSTALL_DOCKER=true ;;
   esac
 done
 
@@ -63,15 +61,11 @@ if [[ "${SKIP_PREREQS}" == "false" ]]; then
   header "Step 1/9 – Checking prerequisites"
 
   if ! command -v docker >/dev/null 2>&1; then
-    if [[ "${AUTO_INSTALL_DOCKER}" == "true" ]]; then
-      if [[ -f "${NETAUTO_DIR}/install_docker.sh" ]]; then
-        log "Docker not found. Running install_docker.sh..."
-        bash "${NETAUTO_DIR}/install_docker.sh"
-      else
-        error "Docker not installed and install_docker.sh is missing. Install Docker manually from https://docs.docker.com/get-docker/"
-      fi
+    if [[ -f "${NETAUTO_DIR}/install_docker.sh" ]]; then
+      log "Docker not found. Running install_docker.sh..."
+      bash "${NETAUTO_DIR}/install_docker.sh"
     else
-      error "Docker is not installed. Run: bash setup.sh --auto-install-docker (or install manually from https://docs.docker.com/get-docker/)"
+      error "Docker not installed and install_docker.sh is missing. Install Docker manually from https://docs.docker.com/get-docker/"
     fi
   fi
 
@@ -277,15 +271,6 @@ docker_compose_cmd exec -T nautobot nautobot-server shell < /tmp/nautobot_superu
 
 log "Collecting static files..."
 docker_compose_cmd exec -T nautobot nautobot-server collectstatic --no-input 2>&1 | tee -a "${LOG_FILE}"
-
-log "Loading data..."
-docker_compose_cmd exec -T nautobot pip install pynautobot --quiet 2>&1 | tee -a "${LOG_FILE}" || true
-
-# Give Nautobot a moment to fully start
-sleep 5
-
-docker_compose_cmd exec -T nautobot python /opt/nautobot/data_loader/load_data.py 2>&1 \
-  | tee -a "${LOG_FILE}" || warn "Data load failed. You can run it manually later."
 
 log "✓ Nautobot initialized"
 

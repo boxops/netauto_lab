@@ -66,7 +66,7 @@ git clone <repo-url> netauto_lab
 cd netauto_lab
 
 # 2. One-command setup (installs Docker if needed, creates .env, starts all services)
-bash setup.sh --auto-install-docker
+bash setup.sh
 
 # 3. Check services are healthy
 make health-check
