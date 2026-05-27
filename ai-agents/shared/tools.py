@@ -160,6 +160,49 @@ def search_nautobot(query: str) -> str:
 
 
 @tool
+def get_devices_by_location(location_name: str) -> str:
+    """
+    List all devices at a given location (site) from Nautobot.
+
+    Args:
+        location_name: The location/site name (e.g., 'site-lab', 'site-nyc').
+
+    Returns:
+        JSON string with device list including name, role, platform, IP, and status.
+    """
+    def _available_locations() -> list[str]:
+        try:
+            locs = _nautobot_get("dcim/locations/", {"limit": 50})
+            return [loc.get("name") for loc in locs.get("results", [])]
+        except Exception:
+            return []
+
+    try:
+        result = _nautobot_get(
+            "dcim/devices/",
+            {"location": location_name, "depth": 1, "limit": 100},
+        )
+        if result["count"] == 0:
+            return json.dumps({
+                "error": f"No devices found at location '{location_name}'.",
+                "available_locations": _available_locations(),
+            })
+        devices = [_summarize_device(d) for d in result["results"]]
+        return json.dumps({
+            "location": location_name,
+            "device_count": result["count"],
+            "devices": devices,
+        }, indent=2)
+    except httpx.HTTPStatusError:
+        return json.dumps({
+            "error": f"Location '{location_name}' not recognised by Nautobot.",
+            "available_locations": _available_locations(),
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@tool
 def get_available_ips(prefix: str, count: int = 1) -> str:
     """
     Find available IP addresses in a given prefix from Nautobot IPAM.
@@ -389,6 +432,7 @@ def run_ansible_playbook(
 OPS_TOOLS = [
     get_device_info,
     get_connected_devices,
+    get_devices_by_location,
     query_prometheus,
     get_active_alerts,
     get_recent_alert_events,
@@ -400,6 +444,7 @@ OPS_TOOLS = [
 ENG_TOOLS = [
     get_device_info,
     get_connected_devices,
+    get_devices_by_location,
     search_nautobot,
     get_available_ips,
     query_prometheus,

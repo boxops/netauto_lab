@@ -104,22 +104,58 @@ def _docker_python(container: str, script: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Nautobot — tools: get_device_info, get_connected_devices,
-#                   search_nautobot, get_available_ips
+#                   search_nautobot, get_available_ips, get_devices_by_location
 # ---------------------------------------------------------------------------
 
+KNOWN_LOCATION = "site-lab"
+
 class TestNautobotToolAccess:
-    """All four Nautobot tools can reach the live API."""
+    """All Nautobot tools can reach the live API."""
 
     def test_get_device_info_returns_device(self):
         from shared.tools import get_device_info
         result = _ok(get_device_info.func(KNOWN_DEVICE))
         assert result.get("name") == KNOWN_DEVICE
 
+    def test_get_device_info_returns_populated_fields(self):
+        """Fields must contain real values, not null, after the depth=1 fix."""
+        from shared.tools import get_device_info
+        result = _ok(get_device_info.func(KNOWN_DEVICE))
+        assert result.get("location"), "location must not be null (was 'site' in v1)"
+        assert result.get("role"), "role must not be null"
+        assert result.get("primary_ip"), "primary_ip must not be null"
+        assert result.get("status"), "status must not be null"
+
     def test_get_connected_devices_returns_neighbors(self):
         from shared.tools import get_connected_devices
         result = _ok(get_connected_devices.func(KNOWN_DEVICE))
         assert "device" in result
         assert "neighbors" in result
+
+    def test_get_devices_by_location_returns_devices(self):
+        from shared.tools import get_devices_by_location
+        result = _ok(get_devices_by_location.func(KNOWN_LOCATION))
+        assert result.get("location") == KNOWN_LOCATION
+        assert result.get("device_count", 0) > 0, (
+            f"Expected devices at location '{KNOWN_LOCATION}'"
+        )
+
+    def test_get_devices_by_location_includes_ips(self):
+        from shared.tools import get_devices_by_location
+        result = _ok(get_devices_by_location.func(KNOWN_LOCATION))
+        devices_with_ip = [d for d in result["devices"] if d.get("primary_ip")]
+        assert len(devices_with_ip) > 0, "Expected at least one device with a primary IP"
+
+    def test_get_devices_by_location_unknown_returns_available(self):
+        """Unknown location should return the list of valid locations, not crash."""
+        from shared.tools import get_devices_by_location
+        import json
+        raw = get_devices_by_location.func("nonexistent-site-xyz")
+        data = json.loads(raw)
+        assert "error" in data
+        assert "available_locations" in data, (
+            "Unknown location response should include available_locations list"
+        )
 
     def test_search_nautobot_finds_devices(self):
         from shared.tools import search_nautobot
@@ -135,6 +171,14 @@ class TestNautobotToolAccess:
             assert category in result["results"], (
                 f"Missing category '{category}' in search results"
             )
+
+    def test_search_nautobot_empty_query_lists_all(self):
+        """Empty query must return all devices (used by LLM for 'list all' requests)."""
+        from shared.tools import search_nautobot
+        result = _ok(search_nautobot.func(""))
+        assert result["results"]["devices"]["count"] > 0, (
+            "Empty query should return all devices"
+        )
 
     def test_get_available_ips_returns_ips(self):
         from shared.tools import get_available_ips
@@ -331,6 +375,7 @@ class TestOpsAgentToolCoverage:
     REQUIRED_TOOLS = {
         "get_device_info",
         "get_connected_devices",
+        "get_devices_by_location",
         "query_prometheus",
         "get_active_alerts",
         "get_recent_alert_events",
@@ -358,6 +403,7 @@ class TestEngineeringAgentToolCoverage:
     REQUIRED_TOOLS = {
         "get_device_info",
         "get_connected_devices",
+        "get_devices_by_location",
         "search_nautobot",
         "get_available_ips",
         "query_prometheus",
@@ -391,6 +437,7 @@ class TestChaosAgentToolCoverage:
     REQUIRED_OPS_TOOLS = {
         "get_device_info",
         "get_connected_devices",
+        "get_devices_by_location",
         "query_prometheus",
         "get_active_alerts",
         "get_recent_alert_events",
