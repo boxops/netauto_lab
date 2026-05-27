@@ -228,11 +228,7 @@ CHAOS_EXAMPLES = [
 # ── UI ─────────────────────────────────────────────────────────────────────────
 
 def create_ui():
-    with gr.Blocks(
-        title="Network AI Agents",
-        theme=gr.themes.Soft(primary_hue="blue"),
-        css=".chatbot { height: 520px !important; } .example-btn { font-size: 0.85em; }",
-    ) as demo:
+    with gr.Blocks(title="Network AI Agents") as demo:
         gr.Markdown(
             """
             # 🌐 Network Automation AI Agents
@@ -376,7 +372,7 @@ def create_ui():
                     interactive=False,
                     wrap=True,
                     row_count=12,
-                    col_count=(7, "fixed"),
+                    column_count=(7, "fixed"),
                 )
 
                 gr.Markdown("**Tool calls for selected interaction:**")
@@ -403,11 +399,8 @@ def create_ui():
                     inputs=[agent_filter],
                     outputs=[activity_table, activity_summary],
                 )
-                demo.load(
-                    lambda: get_activity_view("All"),
-                    outputs=[activity_table, activity_summary],
-                    every=5,
-                )
+                demo.load(lambda: get_activity_view("All"), outputs=[activity_table, activity_summary])
+                gr.Timer(5).tick(lambda: get_activity_view("All"), outputs=[activity_table, activity_summary])
 
             # ── Service Status ───────────────────────────────────────────────
             with gr.Tab("📊 Service Status"):
@@ -446,4 +439,6 @@ if __name__ == "__main__":
         server_port=7860,
         show_error=True,
         share=False,
+        theme=gr.themes.Soft(primary_hue="blue"),
+        css=".chatbot { height: 520px !important; } .example-btn { font-size: 0.85em; }",
     )
