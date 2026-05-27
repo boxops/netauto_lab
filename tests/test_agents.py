@@ -103,6 +103,30 @@ class TestToolsDefinition:
         content = tools_path.read_text()
         assert "ENG_TOOLS" in content
 
+    def test_alertmanager_url_not_derived_from_prometheus(self):
+        """Alertmanager must use its own URL, not a port-replace hack on Prometheus URL."""
+        tools_path = AI_AGENTS_DIR / "shared" / "tools.py"
+        content = tools_path.read_text()
+        assert "prometheus_url.replace" not in content, (
+            "Alertmanager URL must not be derived by replacing the Prometheus port — "
+            "use settings.alertmanager_url instead"
+        )
+
+    def test_alertmanager_url_in_config(self):
+        """shared/config.py must declare a dedicated alertmanager_url setting."""
+        config_path = AI_AGENTS_DIR / "shared" / "config.py"
+        content = config_path.read_text()
+        assert "alertmanager_url" in content
+
+    def test_search_nautobot_does_not_use_extras_search(self):
+        """search_nautobot must not call /api/extras/search/ (returns 404 in this Nautobot version)."""
+        tools_path = AI_AGENTS_DIR / "shared" / "tools.py"
+        content = tools_path.read_text()
+        assert "extras/search/" not in content, (
+            "extras/search/ returns 404 — search must query dcim/devices/, "
+            "ipam/prefixes/, ipam/vlans/, circuits/circuits/ separately"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Ops Agent safety rules

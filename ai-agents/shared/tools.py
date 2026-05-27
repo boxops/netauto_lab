@@ -91,19 +91,35 @@ def get_connected_devices(device_name: str) -> str:
 @tool
 def search_nautobot(query: str) -> str:
     """
-    Search Nautobot for devices, prefixes, VLANs, circuits matching a query.
+    Search Nautobot for devices, prefixes, VLANs, and circuits matching a query.
 
     Args:
         query: Search term (e.g., device name, IP address, site name).
 
     Returns:
-        JSON string with matching objects.
+        JSON string with matching objects grouped by type.
     """
-    try:
-        result = _nautobot_get("extras/search/", {"q": query})
-        return json.dumps(result, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    endpoints = {
+        "devices": ("dcim/devices/", {"q": query, "limit": 10}),
+        "prefixes": ("ipam/prefixes/", {"q": query, "limit": 10}),
+        "vlans": ("ipam/vlans/", {"q": query, "limit": 10}),
+        "circuits": ("circuits/circuits/", {"q": query, "limit": 10}),
+    }
+    results: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+    for label, (path, params) in endpoints.items():
+        try:
+            data = _nautobot_get(path, params)
+            results[label] = {
+                "count": data.get("count", 0),
+                "results": data.get("results", [])[:10],
+            }
+        except Exception as e:
+            errors[label] = str(e)
+    output: dict[str, Any] = {"query": query, "results": results}
+    if errors:
+        output["errors"] = errors
+    return json.dumps(output, indent=2)
 
 
 @tool
@@ -181,7 +197,7 @@ def get_active_alerts() -> str:
     """
     try:
         resp = httpx.get(
-            f"{settings.prometheus_url.replace('9090', '9093')}/api/v2/alerts",
+            f"{settings.alertmanager_url}/api/v2/alerts",
             timeout=30,
         )
         resp.raise_for_status()

@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Prometheus
     prometheus_url: str = "http://prometheus:9090"
 
+    # Alertmanager (separate container from Prometheus)
+    alertmanager_url: str = "http://alertmanager:9093"
+
     # Loki
     loki_url: str = "http://loki:3100"
 
