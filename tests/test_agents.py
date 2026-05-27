@@ -43,6 +43,10 @@ class TestAgentConfig:
         agent_path = AI_AGENTS_DIR / "engineering_agent" / "agent.py"
         assert agent_path.exists(), "ai-agents/engineering_agent/agent.py missing"
 
+    def test_chaos_agent_module_exists(self):
+        agent_path = AI_AGENTS_DIR / "chaos_agent" / "agent.py"
+        assert agent_path.exists(), "ai-agents/chaos_agent/agent.py missing"
+
     def test_ui_app_exists(self):
         ui_path = AI_AGENTS_DIR / "ui" / "app.py"
         assert ui_path.exists(), "ai-agents/ui/app.py missing"
@@ -160,6 +164,10 @@ class TestFastAPIModules:
         main_path = AI_AGENTS_DIR / "engineering_agent" / "main.py"
         assert main_path.exists(), "engineering_agent/main.py missing"
 
+    def test_chaos_agent_main_exists(self):
+        main_path = AI_AGENTS_DIR / "chaos_agent" / "main.py"
+        assert main_path.exists(), "chaos_agent/main.py missing"
+
     def test_ops_main_has_fastapi(self):
         main_path = AI_AGENTS_DIR / "ops_agent" / "main.py"
         content = main_path.read_text()
@@ -179,6 +187,28 @@ class TestFastAPIModules:
         main_path = AI_AGENTS_DIR / "engineering_agent" / "main.py"
         content = main_path.read_text()
         assert "/chat" in content
+
+    def test_chaos_main_has_chat_endpoint(self):
+        main_path = AI_AGENTS_DIR / "chaos_agent" / "main.py"
+        content = main_path.read_text()
+        assert "/chat" in content
+
+
+class TestUIIntegration:
+    def test_ui_has_chaos_agent_url(self):
+        ui_path = AI_AGENTS_DIR / "ui" / "app.py"
+        content = ui_path.read_text()
+        assert "CHAOS_AGENT_URL" in content
+
+    def test_ui_has_chaos_tab(self):
+        ui_path = AI_AGENTS_DIR / "ui" / "app.py"
+        content = ui_path.read_text()
+        assert "Chaos Agent" in content
+
+    def test_ui_has_activity_tab(self):
+        ui_path = AI_AGENTS_DIR / "ui" / "app.py"
+        content = ui_path.read_text()
+        assert "Agent Activity" in content
 
 
 # ---------------------------------------------------------------------------

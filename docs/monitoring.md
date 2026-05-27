@@ -83,6 +83,47 @@ Configured in `prometheus/alertmanager.yml`:
 
 To enable Slack, set `SLACK_WEBHOOK_URL` in `.env`.
 
+### Closed-Loop Event Intake
+
+- Alertmanager now forwards warning and critical alerts to the internal webhook receiver at `alert-event-receiver:8770`.
+- Receiver endpoint: `POST /alertmanager/webhook`
+- Health endpoint: `GET /health`
+- Recent ingested events: `GET /events?limit=20`
+
+This provides an auditable alert-event stream for downstream orchestration jobs.
+
+### Alert Event Orchestration (Nautobot Job)
+
+The `Alert Event Orchestrator` Nautobot job consumes ingested events and builds approval-gated remediation proposals:
+
+- Reads recent events from the alert receiver.
+- Filters by severity and status.
+- Maps alerts to recommended playbooks (check mode by default).
+- Produces artifacts:
+	- `alert_orchestration_proposals.json`
+	- `alert_orchestration_proposals.md`
+
+Optional semi-automated queue mode:
+
+- Set `queue_pending_intents=True` and `dry_run=False` to persist intents as `PENDING` `JobResult` records.
+- These records store proposal payloads for operator approval and do not execute remediation tasks directly.
+- Duplicate intents are skipped using alert fingerprint/device naming to reduce queue noise.
+
+### Alert Intent Executor (Nautobot Job)
+
+The `Alert Intent Executor` job processes `PENDING` approval intents created by `Alert Event Orchestrator`.
+
+- `action=approve`: marks intents approved and closes them.
+- `action=reject`: marks intents rejected and closes them.
+- Optional `execute_check_mode=True`: runs allowlisted playbooks in check mode only.
+- Live (non-check-mode) execution is not supported by this job.
+
+Primary artifact:
+
+- `alert_intent_execution_results.json`
+
+The job does not perform live changes; it prepares operator-reviewed actions for semi-automated closed-loop operations.
+
 ## Loki Log Queries
 
 Access Loki via Grafana's Explore panel or API at **http://localhost:3100**.

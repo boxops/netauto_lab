@@ -210,7 +210,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Containerlab runtime artifacts
-containerlab/topologies/clab-spine-leaf/*/flash/.extensions/
-containerlab/topologies/clab-spine-leaf/*/flash/schedule/tech-support/
-containerlab/topologies/clab-spine-leaf/*/flash/debug/
+# Containerlab: keep source-of-truth configs and topology YAML, ignore runtime artifacts
+containerlab/**
+!containerlab/configs/
+!containerlab/configs/**
+!containerlab/topologies/
+!containerlab/topologies/*.yml

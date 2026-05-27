@@ -46,6 +46,9 @@ from .inventory.onboard_device import CustomDeviceOnboarding
 from .monitoring.prometheus_target_sync import PrometheusTargetSync
 from .monitoring.reachability_sweep import ReachabilitySweep
 from .monitoring.interface_error_alerting import InterfaceErrorAlerting
+from .monitoring.visualization_sync import MonitoringVisualizationSync
+from .monitoring.alert_event_orchestrator import AlertEventOrchestrator
+from .monitoring.alert_intent_executor import AlertIntentExecutor
 
 # ── Operations ────────────────────────────────────────────────────────────────
 from .operations.command_runner import CommandRunner
@@ -110,6 +113,9 @@ __all__ = [
     "PrometheusTargetSync",
     "ReachabilitySweep",
     "InterfaceErrorAlerting",
+    "MonitoringVisualizationSync",
+    "AlertEventOrchestrator",
+    "AlertIntentExecutor",
     ### Onboarding
     "CustomDeviceOnboarding",
     "CustomCaptureDeviceData",

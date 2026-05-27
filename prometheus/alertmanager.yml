@@ -19,6 +19,10 @@ route:
   repeat_interval: 4h
   receiver: default
   routes:
+    - match_re:
+        severity: critical|warning
+      receiver: closed-loop-webhook
+      continue: true
     - match:
         severity: critical
       receiver: critical-alerts
@@ -66,6 +70,12 @@ receivers:
           *Details:* {{ .Annotations.description }}
           {{ end }}
         send_resolved: true
+
+  - name: closed-loop-webhook
+    webhook_configs:
+      - url: 'http://alert-event-receiver:8770/alertmanager/webhook'
+        send_resolved: true
+        max_alerts: 0
 
 # Inhibition rules
 inhibit_rules:

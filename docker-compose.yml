@@ -259,6 +259,25 @@ services:
       timeout: 5s
       retries: 3
 
+  # ── Alert Event Receiver ────────────────────────────────────
+  alert-event-receiver:
+    image: "python:3.11-slim"
+    command: python /app/alert_event_receiver.py
+    environment:
+      ALERT_EVENT_RECEIVER_PORT: "8770"
+      ALERT_EVENT_LOG_PATH: "/tmp/alert_events.ndjson"
+    volumes:
+      - ./scripts/alert_event_receiver.py:/app/alert_event_receiver.py:ro
+    networks:
+      - monitoring-network
+      - mgmt-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8770/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   # ── Grafana ──────────────────────────────────────────────────
   grafana:
     image: "grafana/grafana:latest"
@@ -496,6 +515,7 @@ services:
       NAUTOBOT_TOKEN: "${NAUTOBOT_SUPERUSER_API_TOKEN}"
       PROMETHEUS_URL: "http://prometheus:9090"
       LOKI_URL: "http://loki:3100"
+      ALERT_EVENT_RECEIVER_URL: "http://alert-event-receiver:8770"
     networks:
       - mgmt-network
       - monitoring-network
@@ -534,6 +554,35 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── AI Chaos Monkey Agent ────────────────────────────────────
+  ai-chaos-agent:
+    build:
+      context: ./ai-agents
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      AGENT_TYPE: chaos
+      NAUTOBOT_URL: "http://nautobot:8080"
+      NAUTOBOT_TOKEN: "${NAUTOBOT_SUPERUSER_API_TOKEN}"
+      PROMETHEUS_URL: "http://prometheus:9090"
+      LOKI_URL: "http://loki:3100"
+      ALERT_EVENT_RECEIVER_URL: "http://alert-event-receiver:8770"
+    networks:
+      - mgmt-network
+      - monitoring-network
+      - syslog-network
+    depends_on:
+      nautobot:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # ── Agent Web UI ──────────────────────────────────────────────
   agent-ui:
     build:
@@ -543,6 +592,7 @@ services:
     environment:
       OPS_AGENT_URL: "http://ai-ops-agent:8000"
       ENG_AGENT_URL: "http://ai-eng-agent:8001"
+      CHAOS_AGENT_URL: "http://ai-chaos-agent:8002"
     ports:
       - "${AGENT_UI_PORT:-7860}:7860"
     networks:
@@ -550,6 +600,7 @@ services:
     depends_on:
       - ai-ops-agent
       - ai-eng-agent
+      - ai-chaos-agent
     restart: unless-stopped
     logging:
       driver: json-file

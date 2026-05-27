@@ -202,6 +202,30 @@ def get_active_alerts() -> str:
         return json.dumps({"error": str(e)})
 
 
+@tool
+def get_recent_alert_events(limit: int = 20) -> str:
+    """
+    Get recently ingested alert events from the Alertmanager webhook receiver.
+
+    Args:
+        limit: Number of most recent events to fetch (1-200).
+
+    Returns:
+        JSON string with recent alert events and count.
+    """
+    limit = min(max(limit, 1), 200)
+    try:
+        resp = httpx.get(
+            f"{settings.alert_event_receiver_url}/events",
+            params={"limit": limit},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return json.dumps(resp.json(), indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
 # ── Loki tools ────────────────────────────────────────────────────────────────
 
 @tool
@@ -314,6 +338,7 @@ OPS_TOOLS = [
     get_connected_devices,
     query_prometheus,
     get_active_alerts,
+    get_recent_alert_events,
     query_logs,
     run_ansible_playbook,
     search_nautobot,

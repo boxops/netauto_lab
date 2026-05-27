@@ -115,7 +115,7 @@ make backup-data     # Backup all data
 ├── loki/                       # Loki log storage config
 ├── promtail/                   # Promtail syslog ingest config
 ├── ansible/                    # Ansible playbooks, roles, inventory
-├── ai-agents/                  # AI Ops & Engineering agents (LangGraph)
+├── ai-agents/                  # AI Ops, Engineering, and Chaos agents (LangGraph)
 ├── containerlab/               # Spine-leaf lab topology
 ├── scripts/                    # setup, health_check, backup, sync
 └── tests/                      # Infrastructure & agent tests
@@ -143,6 +143,16 @@ make backup-data     # Backup all data
 - IP address and VLAN planning from Nautobot
 - Generate Ansible playbooks from natural language
 - Configuration review and best-practices guidance
+
+**Chaos Agent** (internal service):
+- Propose controlled lab chaos experiments
+- Estimate blast radius and expected observability signals
+- Default to simulation/check-mode-first execution plans
+- Produce rollback-first test procedures
+
+**AI Agents UI** (`http://localhost:7860`):
+- Ops, Engineering, and Chaos chat tabs
+- Agent Activity page to track recent cross-agent actions and outcomes
 
 ## Troubleshooting
 

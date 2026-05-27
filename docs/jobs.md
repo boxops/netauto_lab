@@ -388,6 +388,8 @@ Always prefix log messages with the device name: `f"{dev} <message>"`.
 | Monitoring | Reachability Sweep | `ReachabilitySweep` | ICMP ping sweep; optionally update device status |
 | Monitoring | Interface Error Alerting | `InterfaceErrorAlerting` | Detect interfaces exceeding error thresholds |
 | Monitoring | Prometheus Target Sync | `PrometheusTargetSync` | Sync active devices to Prometheus static file targets |
+| Monitoring | Monitoring Visualization Sync | `MonitoringVisualizationSync` | Generate monitoring artifacts (targets/rules/dashboards) from Nautobot inventory |
+| Monitoring | Alert Event Orchestrator | `AlertEventOrchestrator` | Convert ingested alert events into approval-gated remediation proposals |
 | Onboarding | Onboard Device | `CustomDeviceOnboarding` | Create Device + interfaces from discovered data |
 | Onboarding | Get Show Version | `GetShowVersion` | Capture and store software version strings |
 | Operations | Device Decommission | `DeviceDecommission` | Bulk decommission workflow with backup and Nautobot cleanup |

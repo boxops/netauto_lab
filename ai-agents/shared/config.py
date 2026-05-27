@@ -33,9 +33,13 @@ class Settings(BaseSettings):
     # Loki
     loki_url: str = "http://loki:3100"
 
+    # Alert event receiver
+    alert_event_receiver_url: str = "http://alert-event-receiver:8770"
+
     # Agent API ports
     ops_agent_port: int = 8000
     eng_agent_port: int = 8001
+    chaos_agent_port: int = 8002
 
     @property
     def use_openai(self) -> bool:
