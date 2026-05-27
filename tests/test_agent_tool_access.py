@@ -34,10 +34,26 @@ sys.path.insert(0, str(AI_AGENTS_DIR))
 pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
+# Load .env from the repo root so tests can run without pre-exported vars
+# ---------------------------------------------------------------------------
+_REPO_ROOT = Path(__file__).parent.parent
+_env_file = _REPO_ROOT / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
+
+# ---------------------------------------------------------------------------
 # Service URLs — default to localhost ports exposed by docker compose
 # ---------------------------------------------------------------------------
 NAUTOBOT_URL = os.getenv("NAUTOBOT_URL", "http://localhost:8080")
-NAUTOBOT_TOKEN = os.getenv("NAUTOBOT_TOKEN", "")
+# Support both the compose-internal name and the superuser token from .env
+NAUTOBOT_TOKEN = (
+    os.getenv("NAUTOBOT_TOKEN")
+    or os.getenv("NAUTOBOT_SUPERUSER_API_TOKEN", "")
+)
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
 ALERTMANAGER_URL = os.getenv("ALERTMANAGER_URL", "http://localhost:9093")
 LOKI_URL = os.getenv("LOKI_URL", "http://localhost:3100")

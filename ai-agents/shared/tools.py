@@ -40,17 +40,17 @@ def get_device_info(device_name: str) -> str:
         JSON string with device details including site, role, platform, IP addresses.
     """
     try:
-        result = _nautobot_get("dcim/devices/", {"name": device_name})
+        result = _nautobot_get("dcim/devices/", {"name": device_name, "depth": 1})
         if result["count"] == 0:
             return json.dumps({"error": f"Device '{device_name}' not found in Nautobot."})
         device = result["results"][0]
         return json.dumps({
             "name": device["name"],
-            "site": device.get("site", {}).get("name"),
-            "role": device.get("role", {}).get("name"),
-            "platform": device.get("platform", {}).get("name"),
+            "location": device.get("location", {}).get("name") if device.get("location") else None,
+            "role": device.get("role", {}).get("name") if device.get("role") else None,
+            "platform": device.get("platform", {}).get("name") if device.get("platform") else None,
             "primary_ip": device.get("primary_ip4", {}).get("address") if device.get("primary_ip4") else None,
-            "status": device.get("status", {}).get("value"),
+            "status": device.get("status", {}).get("name") if device.get("status") else None,
             "serial": device.get("serial"),
             "nautobot_url": f"{settings.nautobot_url}/dcim/devices/{device['id']}/",
         }, indent=2)
@@ -88,31 +88,68 @@ def get_connected_devices(device_name: str) -> str:
         return json.dumps({"error": str(e)})
 
 
+def _summarize_device(d: dict) -> dict:
+    return {
+        "name": d.get("name"),
+        "location": d.get("location", {}).get("name") if d.get("location") else None,
+        "role": d.get("role", {}).get("name") if d.get("role") else None,
+        "platform": d.get("platform", {}).get("name") if d.get("platform") else None,
+        "status": d.get("status", {}).get("name") if d.get("status") else None,
+        "primary_ip": d.get("primary_ip4", {}).get("address") if d.get("primary_ip4") else None,
+    }
+
+
+def _summarize_prefix(p: dict) -> dict:
+    return {
+        "prefix": p.get("prefix"),
+        "status": p.get("status", {}).get("name") if p.get("status") else None,
+        "description": p.get("description"),
+    }
+
+
+def _summarize_vlan(v: dict) -> dict:
+    return {
+        "vid": v.get("vid"),
+        "name": v.get("name"),
+        "status": v.get("status", {}).get("name") if v.get("status") else None,
+    }
+
+
+def _summarize_circuit(c: dict) -> dict:
+    return {
+        "cid": c.get("cid"),
+        "provider": c.get("provider", {}).get("name") if c.get("provider") else None,
+        "type": c.get("circuit_type", {}).get("name") if c.get("circuit_type") else None,
+        "status": c.get("status", {}).get("name") if c.get("status") else None,
+    }
+
+
 @tool
 def search_nautobot(query: str) -> str:
     """
     Search Nautobot for devices, prefixes, VLANs, and circuits matching a query.
+    Pass an empty string to list all objects of each type.
 
     Args:
-        query: Search term (e.g., device name, IP address, site name).
+        query: Search term (e.g., device name, IP address, site name). Use "" to list all.
 
     Returns:
         JSON string with matching objects grouped by type.
     """
     endpoints = {
-        "devices": ("dcim/devices/", {"q": query, "limit": 10}),
-        "prefixes": ("ipam/prefixes/", {"q": query, "limit": 10}),
-        "vlans": ("ipam/vlans/", {"q": query, "limit": 10}),
-        "circuits": ("circuits/circuits/", {"q": query, "limit": 10}),
+        "devices": ("dcim/devices/", {"q": query, "limit": 10, "depth": 1}, _summarize_device),
+        "prefixes": ("ipam/prefixes/", {"q": query, "limit": 10, "depth": 1}, _summarize_prefix),
+        "vlans": ("ipam/vlans/", {"q": query, "limit": 10, "depth": 1}, _summarize_vlan),
+        "circuits": ("circuits/circuits/", {"q": query, "limit": 10, "depth": 1}, _summarize_circuit),
     }
     results: dict[str, Any] = {}
     errors: dict[str, str] = {}
-    for label, (path, params) in endpoints.items():
+    for label, (path, params, summarize) in endpoints.items():
         try:
             data = _nautobot_get(path, params)
             results[label] = {
                 "count": data.get("count", 0),
-                "results": data.get("results", [])[:10],
+                "results": [summarize(r) for r in data.get("results", [])[:10]],
             }
         except Exception as e:
             errors[label] = str(e)
