@@ -36,6 +36,7 @@ volumes:
   prometheus-data:
   grafana-data:
   loki-data:
+  agent-activity-data:
   alertmanager-data:
   gitea-data:
   gitea-postgres-data:
@@ -593,6 +594,9 @@ services:
       OPS_AGENT_URL: "http://ai-ops-agent:8000"
       ENG_AGENT_URL: "http://ai-eng-agent:8001"
       CHAOS_AGENT_URL: "http://ai-chaos-agent:8002"
+      ACTIVITY_DB_PATH: "/app/data/activity.db"
+    volumes:
+      - agent-activity-data:/app/data
     ports:
       - "${AGENT_UI_PORT:-7860}:7860"
     networks:

@@ -1,0 +1,66 @@
+---
+# ansible/playbooks/chaos_shutdown_interface.yml
+# Chaos operation: admin-shut a single interface to simulate a link failure.
+# This is a one-way action; use chaos_restore_interface.yml to undo.
+#
+# Required variables:
+#   target_interface  - interface name (e.g. Ethernet1)
+#   target_device     - hostname or group from inventory
+#
+# Example usage:
+#   ansible-playbook playbooks/chaos_shutdown_interface.yml \
+#     -i inventory/lab.yml --limit leaf1 \
+#     -e "target_interface=Ethernet1" --check
+
+- name: Chaos - Shutdown Interface
+  hosts: "{{ target_device | default('all') }}"
+  gather_facts: false
+
+  pre_tasks:
+    - name: Validate target_interface is defined
+      ansible.builtin.fail:
+        msg: "target_interface must be set (e.g. -e target_interface=Ethernet1)"
+      when: target_interface is not defined
+
+    - name: Capture pre-shutdown interface state (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "show interfaces {{ target_interface }} status"
+      register: pre_state
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Capture pre-shutdown interface state (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - "show interfaces {{ target_interface }} | include line protocol"
+      register: pre_state_ios
+      when: ansible_network_os == "cisco.ios.ios"
+
+  tasks:
+    - name: Shutdown interface (EOS)
+      arista.eos.eos_config:
+        lines:
+          - "shutdown"
+        parents: "interface {{ target_interface }}"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Shutdown interface (IOS)
+      cisco.ios.ios_config:
+        lines:
+          - "shutdown"
+        parents: "interface {{ target_interface }}"
+      when: ansible_network_os == "cisco.ios.ios"
+
+  post_tasks:
+    - name: Confirm interface is down (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "show interfaces {{ target_interface }} status"
+      register: post_state
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Display result
+      ansible.builtin.debug:
+        msg: >-
+          CHAOS: Interface {{ target_interface }} on {{ inventory_hostname }} has been shut down.
+          Run chaos_restore_interface.yml to restore.

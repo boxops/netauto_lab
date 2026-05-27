@@ -1,0 +1,54 @@
+---
+# ansible/playbooks/chaos_restore_interface.yml
+# Chaos rollback: no-shutdown an interface that was admin-shut by chaos operations.
+#
+# Required variables:
+#   target_interface  - interface name (e.g. Ethernet1)
+#   target_device     - hostname or group from inventory
+#
+# Example usage:
+#   ansible-playbook playbooks/chaos_restore_interface.yml \
+#     -i inventory/lab.yml --limit leaf1 \
+#     -e "target_interface=Ethernet1"
+
+- name: Chaos Rollback - Restore Interface
+  hosts: "{{ target_device | default('all') }}"
+  gather_facts: false
+
+  pre_tasks:
+    - name: Validate target_interface is defined
+      ansible.builtin.fail:
+        msg: "target_interface must be set (e.g. -e target_interface=Ethernet1)"
+      when: target_interface is not defined
+
+  tasks:
+    - name: No-shutdown interface (EOS)
+      arista.eos.eos_config:
+        lines:
+          - "no shutdown"
+        parents: "interface {{ target_interface }}"
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: No-shutdown interface (IOS)
+      cisco.ios.ios_config:
+        lines:
+          - "no shutdown"
+        parents: "interface {{ target_interface }}"
+      when: ansible_network_os == "cisco.ios.ios"
+
+    - name: Wait for interface to come up
+      ansible.builtin.pause:
+        seconds: 10
+
+  post_tasks:
+    - name: Confirm interface is up (EOS)
+      arista.eos.eos_command:
+        commands:
+          - "show interfaces {{ target_interface }} status"
+      register: post_state
+      when: ansible_network_os == "arista.eos.eos"
+
+    - name: Display result
+      ansible.builtin.debug:
+        msg: >-
+          ROLLBACK: Interface {{ target_interface }} on {{ inventory_hostname }} has been restored.

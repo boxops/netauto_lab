@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from typing import AsyncGenerator
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -71,12 +71,32 @@ class EngineeringAgent:
         )
 
     def chat(self, message: str, session_id: str = "default") -> str:
+        response, _ = self.chat_with_trace(message, session_id=session_id)
+        return response
+
+    def chat_with_trace(
+        self, message: str, session_id: str = "default"
+    ) -> tuple[str, list[dict]]:
+        """Return (response, tool_calls) capturing every tool invoked in the ReAct loop."""
         config = {"configurable": {"thread_id": session_id}}
         result = self.agent.invoke(
             {"messages": [HumanMessage(content=message)]},
             config=config,
         )
-        return result["messages"][-1].content
+        tool_calls: list[dict] = []
+        for msg in result["messages"]:
+            if isinstance(msg, ToolMessage):
+                tool_calls.append({
+                    "tool_name": msg.name,
+                    "output_summary": (msg.content or "")[:300],
+                })
+            elif isinstance(msg, AIMessage) and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    tool_calls.append({
+                        "tool_name": tc.get("name", ""),
+                        "input_summary": str(tc.get("args", ""))[:200],
+                    })
+        return result["messages"][-1].content, tool_calls
 
     async def astream(self, message: str, session_id: str = "default") -> AsyncGenerator[str, None]:
         config = {"configurable": {"thread_id": session_id}}

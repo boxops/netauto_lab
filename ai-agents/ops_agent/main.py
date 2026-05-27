@@ -35,6 +35,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     session_id: str
+    tool_calls: list[dict] = []
 
 
 @app.get("/health")
@@ -47,8 +48,8 @@ async def chat(request: ChatRequest):
     """Send a message and get a response from the ops agent."""
     session_id = request.session_id or str(uuid.uuid4())
     try:
-        response = agent.chat(request.message, session_id=session_id)
-        return ChatResponse(response=response, session_id=session_id)
+        response, tool_calls = agent.chat_with_trace(request.message, session_id=session_id)
+        return ChatResponse(response=response, session_id=session_id, tool_calls=tool_calls)
     except Exception as e:
         logger.exception("Agent error")
         raise HTTPException(status_code=500, detail=str(e))
