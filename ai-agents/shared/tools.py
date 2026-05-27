@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -160,14 +160,14 @@ def query_prometheus(promql_query: str, time_range_minutes: int = 60) -> str:
         JSON string with the query results.
     """
     try:
-        end = datetime.utcnow()
+        end = datetime.now(timezone.utc)
         start = end - timedelta(minutes=time_range_minutes)
         resp = httpx.get(
             f"{settings.prometheus_url}/api/v1/query_range",
             params={
                 "query": promql_query,
-                "start": start.isoformat() + "Z",
-                "end": end.isoformat() + "Z",
+                "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "step": "60s",
             },
             timeout=30,
@@ -258,8 +258,8 @@ def query_logs(device: str = "", log_pattern: str = "", time_range_minutes: int 
         JSON string with matching log entries.
     """
     try:
-        end_ns = int(datetime.utcnow().timestamp() * 1e9)
-        start_ns = int((datetime.utcnow() - timedelta(minutes=time_range_minutes)).timestamp() * 1e9)
+        end_ns = int(datetime.now(timezone.utc).timestamp() * 1e9)
+        start_ns = int((datetime.now(timezone.utc) - timedelta(minutes=time_range_minutes)).timestamp() * 1e9)
 
         logql = '{job="syslog"}'
         if device:
