@@ -27,7 +27,7 @@ YELLOW := \033[1;33m
 CYAN   := \033[0;36m
 NC     := \033[0m
 
-.PHONY: help init start stop restart logs status clean \
+.PHONY: help init start stop restart rebuild logs status clean \
         backup-data restore-data \
         deploy-lab destroy-lab fix-lab-perms \
         ansible-shell run-playbook sync-inventory \
@@ -85,6 +85,16 @@ restart:  ## Restart all services (or specific: make restart SVC=grafana)
 	  echo -e "$(YELLOW)Restarting all services...$(NC)"; \
 	  $(COMPOSE) restart; \
 	fi
+
+rebuild:  ## Rebuild and restart a service (make rebuild SVC=agent-ui) or all services
+	@if [ -n "$(SVC)" ]; then \
+	  echo -e "$(YELLOW)Rebuilding $(SVC)...$(NC)"; \
+	  $(COMPOSE) build $(SVC) && $(COMPOSE) up -d $(SVC); \
+	else \
+	  echo -e "$(YELLOW)Rebuilding all services...$(NC)"; \
+	  $(COMPOSE) build && $(COMPOSE) up -d; \
+	fi
+	@echo -e "$(GREEN)Rebuild complete.$(NC)"
 
 clab-inspect:
 	@echo -e "$(CYAN)Inspecting Containerlab topology...$(NC)"

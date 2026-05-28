@@ -85,7 +85,7 @@ class ActivityStore:
                    (timestamp, agent, session_id, status, latency_ms, message, response)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (ts, agent, session_id, status, latency_ms,
-                 _truncate(message, 400), _truncate(response, 400)),
+                 _truncate(message, 10000), _truncate(response, 50000)),
             )
 
     def record_tool_calls(
@@ -102,8 +102,8 @@ class ActivityStore:
             (
                 ts, agent, session_id,
                 tc.get("tool_name", ""),
-                _truncate(tc.get("input_summary", "") or "", 200),
-                _truncate(tc.get("output_summary", "") or "", 300),
+                _truncate(tc.get("input_summary", "") or "", 5000),
+                _truncate(tc.get("output_summary", "") or "", 20000),
             )
             for tc in tool_calls
         ]
