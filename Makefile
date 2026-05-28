@@ -36,14 +36,16 @@ NC     := \033[0m
 	test-data-unit test-data-integration \
 	prune-data plan-data test-data-crud
 
-## ── Setup & lifecycle ─────────────────────────────────────────────────────────
+##@ Lifecycle
 
 help:  ## Show this help message
-	@echo ""
-	@echo "  Network Automation Stack – Available targets"
-	@echo ""
-	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
-	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-22s$(NC) %s\n", $$1, $$2}'
+	@awk 'BEGIN { \
+	    FS = ":.*##"; \
+	    printf "\n  \033[1mNetwork Automation Stack\033[0m  —  available targets\n" \
+	  } \
+	  /^##@/ { printf "\n  $(YELLOW)%s$(NC)\n", substr($$0, 5) } \
+	  /^[a-zA-Z_-]+:.*?##/ { printf "    $(CYAN)%-24s$(NC) %s\n", $$1, $$2 }' \
+	  $(MAKEFILE_LIST)
 	@echo ""
 
 init:  ## Initialize environment (first-time setup)
@@ -121,7 +123,7 @@ update:  ## Pull latest images and restart
 	$(COMPOSE) up -d
 	@echo -e "$(GREEN)Update complete.$(NC)"
 
-## ── Data management ───────────────────────────────────────────────────────────
+##@ Backups
 
 backup-data:  ## Backup all persistent data
 	@echo -e "$(GREEN)Starting backup...$(NC)"
@@ -152,7 +154,7 @@ clean:  ## Remove all containers and data (DESTRUCTIVE – prompts for confirmat
 	  echo "Cancelled."; \
 	fi
 
-## ── Containerlab ──────────────────────────────────────────────────────────────
+##@ Lab
 
 deploy-lab:  ## Deploy Containerlab spine-leaf topology
 	@echo -e "$(GREEN)Deploying Containerlab topology...$(NC)"
@@ -200,7 +202,7 @@ sync-inventory-dry:  ## Preview inventory sync (dry run)
 	NAUTOBOT_SUPERUSER_API_TOKEN="$(NAUTOBOT_SUPERUSER_API_TOKEN)" \
 	"$(HOST_PYTHON)" scripts/sync_inventory.py --dry-run
 
-## ── Ansible ───────────────────────────────────────────────────────────────────
+##@ Ansible
 
 ansible-shell:  ## Open an interactive Ansible container shell
 	@echo -e "$(CYAN)Opening Ansible shell. Type 'exit' to leave.$(NC)"
@@ -225,6 +227,8 @@ lint:  ## Lint Ansible playbooks and configs
 	@find prometheus loki promtail grafana telegraf nautobot/data_loader -name '*.yml' -o -name '*.yaml' 2>/dev/null \
 	  | xargs python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" 2>&1 \
 	  && echo "YAML validation: OK" || echo "YAML validation: check errors above"
+
+##@ Nautobot Data
 
 apply-data:  ## Apply Nautobot data from nautobot/data_loader/data.yml (full CRUD for managed scope)
 	@set -e; \
@@ -265,7 +269,7 @@ test-data-integration:  ## Run integration tests for data loader
 test-data-crud:  ## Run integration CRUD-focused tests for data loader modes
 	@python3 -m pytest tests/test_data_loader.py -m integration -k "crud or plan_mode" -v --tb=short
 
-## ── Nautobot Jobs ──────────────────────────────────────────────────────
+##@ Nautobot Jobs
 
 refresh-jobs:  ## Re-scan JOBS_ROOT and register any new/changed Job classes
 	@echo -e "$(CYAN)Refreshing Nautobot Jobs from JOBS_ROOT...$(NC)"
@@ -285,7 +289,7 @@ sync-jobs:  ## Pull the latest commits from the netauto-jobs Git repo into Nauto
 	@python3 scripts/sync_nautobot_jobs.py
 	@echo -e "$(GREEN)Sync complete.$(NC)"
 
-## ── AI Agents ─────────────────────────────────────────────────────────────────
+##@ AI Agents
 
 define AGENT_CHAT_PY
 import sys, httpx, json
@@ -322,7 +326,7 @@ agent-chat:  ## Start an interactive CLI chat with the Ops Agent
 	@which python3 >/dev/null 2>&1 || (echo "python3 required"; exit 1)
 	@python3 -c "$$AGENT_CHAT_PY"
 
-## ── Testing ───────────────────────────────────────────────────────────────────
+##@ Tests
 
 test:  ## Run all tests
 	@echo -e "$(GREEN)Running tests...$(NC)"
