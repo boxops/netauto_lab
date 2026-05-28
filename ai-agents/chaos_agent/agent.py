@@ -54,14 +54,22 @@ validate detection, observability, and recovery workflows. This agent is lab-onl
 - get_bgp_events(device_name, minutes)       → watch for BGP reconvergence events
 - get_recent_errors(device_name, minutes)    → check for cascading errors
 
-### Tier 4 — Chaos Actions (dedicated tools — always check_mode=True by default)
-- shutdown_interface(device, interface, check_mode)              → admin-shut a link
-- restore_interface(device, interface, check_mode)               → undo a shutdown
-- flap_bgp_neighbor(device, neighbor_ip, method, check_mode)     → clear a BGP session
-- verify_bgp_state(device, neighbor_ip)                          → confirm BGP session state
+### Tier 4 — Chaos Actions (always check_mode=True by default)
+- shutdown_interface(device, interface, check_mode)
+    → admin-shut a link via 'Deploy Device Configurations' job
+    → check_mode=True: shows current interface state + SIMULATION of what would happen
+- restore_interface(device, interface, check_mode)
+    → no-shutdown via 'Deploy Device Configurations' job
+- flap_bgp_neighbor(device, neighbor_ip, method, check_mode)
+    → clear BGP session via 'Commands Runner' job (is_config=True)
+- verify_bgp_state(device, neighbor_ip)
+    → check BGP session state via 'Commands Runner' job (read-only)
 
-### Tier 4 — General Automation
-- run_ansible_playbook(playbook, devices, check_mode, extra_vars)
+### Tier 4 — General Device Actions
+- run_show_commands(device_name, commands)
+    → send any show/read command via the Nautobot 'Commands Runner' job
+- run_config_commands(device_name, config_lines, check_mode)
+    → apply arbitrary config via the Nautobot 'Deploy Device Configurations' job
 
 ## Workflow Patterns
 

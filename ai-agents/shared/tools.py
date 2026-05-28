@@ -5,14 +5,15 @@ Tools are organised into four tiers that map to a standard investigation workflo
   1. Discovery   – Nautobot inventory (devices, interfaces, topology, VLANs, prefixes, IPs)
   2. Metrics     – Prometheus real-time state (reachability, interface counters, BGP)
   3. Logs        – Loki syslog events (interface flaps, BGP events, errors)
-  4. Actions     – Ansible playbook execution (always check-mode by default)
+  4. Actions     – Nautobot Jobs (Commands Runner for show commands,
+                   Deploy Device Configurations for config changes)
 
 See docs/agent-tools-framework.md for the full workflow guide.
 """
 from __future__ import annotations
 
 import json
-import subprocess
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -33,6 +34,109 @@ def _nautobot_get(path: str, params: dict | None = None) -> dict:
     )
     resp.raise_for_status()
     return resp.json()
+
+
+def _nautobot_post(path: str, data: dict) -> dict:
+    resp = httpx.post(
+        f"{settings.nautobot_url}/api/{path.lstrip('/')}",
+        headers={"Authorization": f"Token {settings.nautobot_token}"},
+        json=data,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+# ── Nautobot Job helpers ───────────────────────────────────────────────────────
+
+_job_id_cache: dict[str, str] = {}
+
+
+def _resolve_job_id(job_name: str) -> str:
+    """Return the Nautobot Job UUID for a given job display name, with caching."""
+    if job_name in _job_id_cache:
+        return _job_id_cache[job_name]
+    data = _nautobot_get("extras/jobs/", {"limit": 200})
+    for job in data.get("results", []):
+        if job.get("name") == job_name:
+            _job_id_cache[job_name] = job["id"]
+            return job["id"]
+    raise ValueError(
+        f"Nautobot Job '{job_name}' not found. "
+        f"Available: {[j['name'] for j in data.get('results', [])]}"
+    )
+
+
+def _get_device_id(device_name: str) -> str:
+    """Return the Nautobot Device UUID for a given hostname."""
+    result = _nautobot_get("dcim/devices/", {"name": device_name})
+    if result["count"] == 0:
+        available = _nautobot_get("dcim/devices/", {"limit": 50})
+        names = [d["name"] for d in available["results"]]
+        raise ValueError(
+            f"Device '{device_name}' not found in Nautobot. "
+            f"Available devices: {names}"
+        )
+    return result["results"][0]["id"]
+
+
+def _submit_job(job_id: str, data: dict) -> str:
+    """Trigger a Nautobot job and return the job_result UUID."""
+    response = _nautobot_post(f"extras/jobs/{job_id}/run/", {"data": data})
+    job_result = response.get("job_result") or {}
+    if not job_result.get("id"):
+        raise ValueError(f"Job trigger returned no result ID: {response}")
+    return job_result["id"]
+
+
+def _poll_job(result_id: str, timeout: int = 120, interval: int = 3) -> dict:
+    """Poll a job result until it reaches a terminal state or timeout."""
+    terminal = {"SUCCESS", "FAILURE", "ERRORED", "FAILED"}
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = _nautobot_get(f"extras/job-results/{result_id}/")
+        status = result.get("status", {}).get("value", "UNKNOWN")
+        if status in terminal:
+            return result
+        time.sleep(interval)
+    return _nautobot_get(f"extras/job-results/{result_id}/")
+
+
+def _fetch_job_logs(result_id: str) -> list[dict]:
+    """Fetch all log entries for a job result from the /logs/ sub-endpoint."""
+    try:
+        resp = httpx.get(
+            f"{settings.nautobot_url}/api/extras/job-results/{result_id}/logs/",
+            headers={"Authorization": f"Token {settings.nautobot_token}"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else data.get("results", [])
+    except Exception:
+        return []
+
+
+def _format_job_output(logs: list[dict], status: str) -> dict:
+    """Extract meaningful output lines and errors from job log entries."""
+    _skip = {"Running job", "Job completed"}
+    output_lines: list[str] = []
+    errors: list[str] = []
+    for entry in logs:
+        level = entry.get("log_level", "")
+        msg = (entry.get("message") or "").strip()
+        if not msg or msg in _skip:
+            continue
+        if level == "error":
+            errors.append(msg)
+        else:
+            output_lines.append(msg)
+    return {
+        "status": status,
+        "success": status == "SUCCESS",
+        "output": "\n".join(output_lines),
+        "errors": errors,
+    }
 
 
 def _summarize_device(d: dict) -> dict:
@@ -970,61 +1074,120 @@ def get_recent_errors(device_name: str = "", time_range_minutes: int = 60) -> st
         return json.dumps({"error": str(e)})
 
 
-# ── Tier 4 – Ansible Actions ──────────────────────────────────────────────────
+# ── Tier 4 – Nautobot Job Actions ─────────────────────────────────────────────
 
 @tool
-def run_ansible_playbook(
-    playbook: str,
-    devices: list[str] | None = None,
-    check_mode: bool = True,
-    extra_vars: dict | None = None,
+def run_show_commands(
+    device_name: str,
+    commands: str,
+    timeout: int = 90,
 ) -> str:
     """
-    Execute an Ansible playbook against network devices.
+    Run read-only show commands on a device via the Nautobot 'Commands Runner' job.
 
-    SAFETY: Always runs in check_mode=True (dry-run) by default.
-    Only set check_mode=False when the user has explicitly approved execution
-    with language like "approved", "execute", or "apply for real".
+    Use for any verification or read need: show interfaces, show ip bgp summary,
+    show version, show running-config interface <name>, etc.
+    Commands are newline-separated. Output is returned from the job log entries.
 
-    Use get_all_devices() to confirm device names before running.
+    Use run_config_commands() for configuration changes.
+    Call get_all_devices() first if the device name is unknown.
 
     Args:
-        playbook:   Playbook filename from ansible/playbooks/ (with or without .yml).
-        devices:    Optional list of device hostnames to limit execution scope.
-        check_mode: Dry-run if True (default). Set False only with user approval.
-        extra_vars: Additional variables to pass to the playbook.
+        device_name: Exact hostname as it appears in Nautobot (e.g., 'leaf1').
+        commands:    Newline-separated show commands
+                     (e.g., "show interfaces Ethernet1 status\nshow ip bgp summary").
+        timeout:     Seconds to wait for job completion (default 90).
 
     Returns:
-        JSON with return code, stdout, stderr, and success flag.
+        JSON with job status, output lines from the device, and any errors.
     """
-    if not playbook.endswith(".yml"):
-        playbook += ".yml"
+    try:
+        device_id = _get_device_id(device_name)
+        job_id = _resolve_job_id("Commands Runner")
+        result_id = _submit_job(job_id, {
+            "device": [device_id],
+            "commands": commands,
+            "is_config": False,
+        })
+        result = _poll_job(result_id, timeout=timeout)
+        status = result.get("status", {}).get("value", "UNKNOWN")
+        logs = _fetch_job_logs(result_id)
+        output = _format_job_output(logs, status)
+        output["device"] = device_name
+        output["commands"] = commands
+        output["job_result_url"] = (
+            f"{settings.nautobot_url}/extras/job-results/{result_id}/"
+        )
+        return json.dumps(output, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
-    cmd = [
-        "docker", "exec", "netauto-ansible-1",
-        "ansible-playbook",
-        f"/ansible/playbooks/{playbook}",
-        "-i", "/ansible/inventory/lab.yml",
-    ]
+
+@tool
+def run_config_commands(
+    device_name: str,
+    config_lines: str,
+    check_mode: bool = True,
+    timeout: int = 120,
+) -> str:
+    """
+    Send configuration commands to a device via the Nautobot
+    'Deploy Device Configurations' job.
+
+    SAFETY: Defaults to check_mode=True which returns a SIMULATION response
+    and does NOT touch the device. Only set check_mode=False when the user has
+    explicitly approved using words like 'execute', 'apply', or 'approved'.
+
+    Workflow:
+      1. Call run_show_commands() to capture current device state.
+      2. Call this tool with check_mode=True to preview what would be sent.
+      3. Get user approval, then call again with check_mode=False to apply.
+      4. Call run_show_commands() again to verify the change took effect.
+
+    Args:
+        device_name:  Exact hostname as it appears in Nautobot (e.g., 'leaf1').
+        config_lines: Multi-line configuration block to apply
+                      (e.g., "interface Ethernet1\\nshutdown").
+        check_mode:   True = simulation only, device NOT changed (default).
+                      False = actually applies the config — requires user approval.
+        timeout:      Seconds to wait for job completion (default 120).
+
+    Returns:
+        JSON with SIMULATION notice (check_mode=True) or job result (check_mode=False).
+    """
     if check_mode:
-        cmd.append("--check")
-    if devices:
-        cmd.extend(["--limit", ",".join(devices)])
-    if extra_vars:
-        cmd.extend(["-e", json.dumps(extra_vars)])
+        return json.dumps({
+            "simulation": True,
+            "check_mode": True,
+            "device": device_name,
+            "config_lines": config_lines,
+            "message": (
+                "SIMULATION — configuration NOT applied to device. "
+                "The following configuration WOULD be sent:\n\n"
+                f"{config_lines}\n\n"
+                "Call run_show_commands() to see the current device state. "
+                "Re-run this tool with check_mode=False after explicit user approval to apply."
+            ),
+        }, indent=2)
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        return json.dumps({
-            "playbook": playbook,
-            "check_mode": check_mode,
-            "return_code": result.returncode,
-            "stdout": result.stdout[-3000:] if len(result.stdout) > 3000 else result.stdout,
-            "stderr": result.stderr[-1000:] if len(result.stderr) > 1000 else result.stderr,
-            "success": result.returncode == 0,
-        }, indent=2)
-    except subprocess.TimeoutExpired:
-        return json.dumps({"error": "Playbook timed out after 120 seconds."})
+        device_id = _get_device_id(device_name)
+        job_id = _resolve_job_id("Deploy Device Configurations")
+        result_id = _submit_job(job_id, {
+            "device": [device_id],
+            "configuration": config_lines,
+        })
+        result = _poll_job(result_id, timeout=timeout)
+        status = result.get("status", {}).get("value", "UNKNOWN")
+        logs = _fetch_job_logs(result_id)
+        output = _format_job_output(logs, status)
+        output["device"] = device_name
+        output["config_applied"] = config_lines
+        output["check_mode"] = False
+        output["job_result_url"] = (
+            f"{settings.nautobot_url}/extras/job-results/{result_id}/"
+        )
+        return json.dumps(output, indent=2)
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -1063,11 +1226,15 @@ _LOKI_TOOLS = [
     query_logs,
 ]
 
-OPS_TOOLS = _NAUTOBOT_TOOLS + _PROMETHEUS_TOOLS + _LOKI_TOOLS + [run_ansible_playbook]
+_ACTION_TOOLS = [
+    run_show_commands,
+    run_config_commands,
+]
+
+OPS_TOOLS = _NAUTOBOT_TOOLS + _PROMETHEUS_TOOLS + _LOKI_TOOLS + _ACTION_TOOLS
 
 ENG_TOOLS = _NAUTOBOT_TOOLS + [
     get_device_metrics,       # useful for validating current state
     get_interface_metrics,    # useful for bandwidth planning
     get_active_alerts,        # useful for checking impact before changes
-    run_ansible_playbook,
-]
+] + _ACTION_TOOLS

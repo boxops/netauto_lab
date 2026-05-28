@@ -34,7 +34,7 @@ WORKDIR /ansible
 
 # Install Ansible collections
 COPY collections/requirements.yml /ansible/collections/requirements.yml
-RUN ansible-galaxy collection install -r /ansible/collections/requirements.yml
+RUN ansible-galaxy collection install -r /ansible/collections/requirements.yml -p /opt/ansible-collections
 
 # Copy ansible.cfg
 COPY ansible.cfg /etc/ansible/ansible.cfg

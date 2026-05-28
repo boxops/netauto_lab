@@ -213,7 +213,7 @@ class RunCommands:
         return commands_output
 
     def save_command_output(self, command, output, check_type):
-        if self.re_run_after > 0:
+        if self.re_run_after and self.re_run_after > 0:
             suffix = f"-{check_type}-check.txt"
         else:
             suffix = ".txt"
@@ -221,7 +221,7 @@ class RunCommands:
         self.job.create_file(filename, output)
 
     def save_all_commands_output(self, commands_output, check_type):
-        if self.re_run_after > 0:
+        if self.re_run_after and self.re_run_after > 0:
             suffix = f"-all-commands-{check_type}-check.txt"
         else:
             suffix = "-all-commands.txt"
@@ -247,7 +247,7 @@ class RunCommands:
 
     def run(self):
         pre_check = self.run_all_commands("pre")
-        if self.re_run_after > 0:
+        if self.re_run_after and self.re_run_after > 0:
             self.job.logger.info(
                 f"Re-running commands after {self.re_run_after} seconds"
             )

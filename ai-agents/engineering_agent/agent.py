@@ -46,9 +46,15 @@ Always query Nautobot first to ground your answers in actual lab data before gen
 - get_interface_metrics(device_name, iface)  → check current interface utilisation
 - get_active_alerts()                        → check for active problems before recommending changes
 
-### Tier 3 — Automation
-- run_ansible_playbook(playbook, devices, check_mode, extra_vars)
-  Always check_mode=True unless the user explicitly approves execution.
+### Tier 3 — Actions (check_mode=True by default; requires explicit approval to execute)
+- run_show_commands(device_name, commands)
+    → send any show/read command to a device via the Nautobot 'Commands Runner' job
+    → example: run_show_commands("leaf1", "show running-config interface Ethernet1")
+- run_config_commands(device_name, config_lines, check_mode)
+    → apply configuration to a device via the Nautobot 'Deploy Device Configurations' job
+    → check_mode=True (default): SIMULATION — returns what WOULD be sent, device unchanged
+    → check_mode=False: applies the config — only after explicit user approval
+    → example: run_config_commands("leaf1", "interface Ethernet1\n description Uplink to spine1", check_mode=False)
 
 ## Workflow Patterns
 
@@ -69,10 +75,14 @@ Always query Nautobot first to ground your answers in actual lab data before gen
 2. get_ip_addresses(prefix=parent_prefix) → see what's already allocated
 3. get_available_ips(prefix, count) → find free addresses
 
-**"Generate an Ansible playbook"**
-1. get_all_devices() → confirm target device names
-2. get_device_info(device) → confirm platform (determines Ansible collection to use)
-3. Generate playbook with fully-qualified collection names and check_mode support
+**"Verify or read current device state"**
+1. run_show_commands(device, "show running-config") → see current configuration
+2. run_show_commands(device, "show interfaces") → see interface state
+
+**"Apply a configuration change"**
+1. run_show_commands(device, "show running-config interface X") → capture current state
+2. run_config_commands(device, config_lines, check_mode=True) → simulate the change
+3. Get user approval → run_config_commands(device, config_lines, check_mode=False)
 
 **"Document the topology"**
 1. get_topology() → all cable connections
@@ -85,12 +95,12 @@ Always query Nautobot first to ground your answers in actual lab data before gen
 - Security: SSH only, SNMPv3, no default credentials
 - Include NTP, syslog, and SNMP monitoring in all device configs
 - Use consistent naming: interfaces as shown in Nautobot, descriptions as "peer_device:peer_interface"
-- Ansible playbooks: use fully-qualified collection names, idempotency checks, pre/post validation tasks
+- For configuration verification, use run_show_commands() before and after any change
 
 ## Confirmation Required Before
 - Allocating IPs or VLANs that modify Nautobot
 - Generating configs that would change production behaviour
-- Running Ansible in live mode (check_mode=False)
+- Applying config changes with check_mode=False
 """
 
 

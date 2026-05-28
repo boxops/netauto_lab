@@ -1,0 +1,4 @@
+---
+# Lab device credentials — sourced from LAB_DEVICE_PASSWORD env var (set in .env).
+# The inventory references vault_device_password; this file resolves it.
+vault_device_password: "{{ lookup('env', 'LAB_DEVICE_PASSWORD') | default('admin') }}"

@@ -28,9 +28,9 @@ itself has no network access.
 │  What happened?        interface events, BGP events,       │
 │                        error/warning messages              │
 ├────────────────────────────────────────────────────────────┤
-│  Tier 4 – Actions      Ansible + Chaos tools               │
-│  Change something      playbook execution, interface       │
-│  (requires approval)   shutdown/restore, BGP clear         │
+│  Tier 4 – Actions      Nautobot Jobs                       │
+│  Change something      run_show_commands (Commands Runner) │
+│  (requires approval)   run_config_commands (Deploy Config) │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -75,6 +75,40 @@ first grounding in inventory data — is the primary cause of poor agent respons
 - **Query language**: LogQL — tools use `|~` for case-insensitive regex matching
 - **Retention**: Logs are available for the configured retention period (typically 30 days)
 
+### Nautobot Jobs (Execution Engine)
+
+Actions are executed by submitting jobs to the Nautobot Celery queue. The two jobs used by agents:
+
+| Job display name | Class | Purpose |
+|---|---|---|
+| `Commands Runner` | `CommandRunner` | Read-only show commands (`is_config=False`) or config-mode commands (`is_config=True`) |
+| `Deploy Device Configurations` | `DeployConfigurations` | Push arbitrary configuration blocks to devices |
+
+**API flow for every action tool:**
+```
+1. Resolve device hostname → UUID
+   GET /api/dcim/devices/?name=leaf1 → results[0].id
+
+2. Resolve job name → UUID (cached after first call)
+   GET /api/extras/jobs/?limit=200 → find matching name → id
+
+3. Trigger the job
+   POST /api/extras/jobs/{job_id}/run/
+   {"data": {"device": ["<device_uuid>"], "commands": "...", "is_config": false}}
+   → response.job_result.id
+
+4. Poll until terminal state (SUCCESS / FAILURE / ERRORED)
+   GET /api/extras/job-results/{result_id}/
+   → status.value  (poll every 3 s, default timeout 90–120 s)
+
+5. Fetch log entries (command output lives here)
+   GET /api/extras/job-results/{result_id}/logs/
+   → list of {log_level, message, grouping, created}
+```
+
+**check_mode semantics:**  
+`run_config_commands(check_mode=True)` never submits a job — it returns a `SIMULATION` JSON describing what would be sent. Call `run_show_commands()` separately to capture current state. Only `check_mode=False` submits the `Deploy Device Configurations` job and requires explicit user approval.
+
 ---
 
 ## Tool Reference
@@ -114,15 +148,19 @@ first grounding in inventory data — is the primary cause of poor agent respons
 | `get_recent_errors(device_name, minutes)` | ERROR/WARNING/CRITICAL log lines |
 | `query_logs(device, pattern, minutes)` | Arbitrary log pattern (LogQL) |
 
-### Tier 4 — Actions
+### Tier 4 — Actions (Nautobot Jobs)
 
-| Tool | Notes |
-|---|---|
-| `run_ansible_playbook(playbook, devices, check_mode, extra_vars)` | Always check_mode=True unless approved |
-| `shutdown_interface(device, interface, check_mode)` | Chaos tool — admin-shut a link |
-| `restore_interface(device, interface, check_mode)` | Chaos tool — undo a shutdown |
-| `flap_bgp_neighbor(device, neighbor_ip, method, check_mode)` | Chaos tool — clear BGP session |
-| `verify_bgp_state(device, neighbor_ip)` | Chaos tool — confirm BGP is Established |
+All action tools submit jobs to the Nautobot Celery queue and poll for completion.
+Output is read from `GET /api/extras/job-results/{id}/logs/`.
+
+| Tool | Nautobot Job | Notes |
+|---|---|---|
+| `run_show_commands(device_name, commands)` | Commands Runner (`is_config=False`) | Read-only; any show command |
+| `run_config_commands(device_name, config_lines, check_mode)` | Deploy Device Configurations | check_mode=True (default) = simulation only |
+| `shutdown_interface(device, interface, check_mode)` | Deploy Device Configurations | Chaos — admin-shut; check=True shows current state first |
+| `restore_interface(device, interface, check_mode)` | Deploy Device Configurations | Chaos — no shutdown |
+| `flap_bgp_neighbor(device, neighbor_ip, method, check_mode)` | Commands Runner (`is_config=True`) | Chaos — clear BGP session |
+| `verify_bgp_state(device, neighbor_ip)` | Commands Runner (`is_config=False`) | Chaos — confirm BGP is Established |
 
 ---
 
@@ -255,7 +293,8 @@ get_recent_errors(minutes=60)
 | get_bgp_events | ✓ | — | ✓ |
 | get_recent_errors | ✓ | — | ✓ |
 | query_logs | ✓ | — | ✓ |
-| run_ansible_playbook | ✓ | ✓ | ✓ |
+| run_show_commands | ✓ | ✓ | ✓ |
+| run_config_commands | ✓ | ✓ | ✓ |
 | shutdown_interface | — | — | ✓ |
 | restore_interface | — | — | ✓ |
 | flap_bgp_neighbor | — | — | ✓ |
