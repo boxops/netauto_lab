@@ -12,12 +12,12 @@ A fully containerised network automation and observability platform built for **
 
 ## ✨ What's Inside
 
-| Source of Truth | Observability | AI Agents |
-|---|---|---|
-| Nautobot DCIM/IPAM | Prometheus + Alertmanager | Ops Agent (incidents & alerts) |
-| Gitea (config store) | Grafana (4 dashboards) | Engineering Agent (configs & planning) |
-| Containerlab cEOS lab | Loki + Promtail (syslog) | Chaos Agent (controlled experiments) |
-| Ansible automation | Telegraf (metrics) | Gradio Web UI (port 7860) |
+| Source of Truth       | Observability             | AI Agents                              |
+| --------------------- | ------------------------- | -------------------------------------- |
+| Nautobot DCIM/IPAM    | Prometheus + Alertmanager | Ops Agent (incidents & alerts)         |
+| Gitea (config store)  | Grafana (4 dashboards)    | Engineering Agent (configs & planning) |
+| Containerlab cEOS lab | Loki + Promtail (syslog)  | Chaos Agent (controlled experiments)   |
+| Ansible automation    | Telegraf (metrics)        | Gradio Web UI (port 7860)              |
 
 ---
 
@@ -83,18 +83,18 @@ Open the AI Agents web UI → **http://localhost:7860**
 
 ## 🖥️ Services
 
-| Service | URL | Default Credentials |
-|---|---|---|
-| AI Agents UI | http://localhost:7860 | — |
-| Nautobot | http://localhost:8080 | admin / see `.env` |
-| Grafana | http://localhost:3000 | admin / see `.env` |
-| Prometheus | http://localhost:9090 | — |
-| Alertmanager | http://localhost:9093 | — |
-| Loki | http://localhost:3100 | — |
-| Gitea | http://localhost:3001 | gitadmin / see `.env` |
-| Ops Agent API | http://localhost:8000 | — |
-| Engineering Agent API | http://localhost:8001 | — |
-| Chaos Agent API | http://localhost:8002 | — |
+| Service               | URL                   | Default Credentials   |
+| --------------------- | --------------------- | --------------------- |
+| AI Agents UI          | http://localhost:7860 | —                     |
+| Nautobot              | http://localhost:8080 | admin / see `.env`    |
+| Grafana               | http://localhost:3000 | admin / see `.env`    |
+| Prometheus            | http://localhost:9090 | —                     |
+| Alertmanager          | http://localhost:9093 | —                     |
+| Loki                  | http://localhost:3100 | —                     |
+| Gitea                 | http://localhost:3001 | gitadmin / see `.env` |
+| Ops Agent API         | http://localhost:8000 | —                     |
+| Engineering Agent API | http://localhost:8001 | —                     |
+| Chaos Agent API       | http://localhost:8002 | —                     |
 
 ---
 
@@ -127,6 +127,7 @@ Agents are instructed to work top-to-bottom: **discover what exists, measure its
 Investigates network incidents by correlating Nautobot inventory, Prometheus metrics, and Loki syslogs.
 
 **Example prompts**
+
 ```
 "What alerts are currently firing?"
 "Investigate the BGP peer down alert on spine2."
@@ -135,6 +136,7 @@ Investigates network incidents by correlating Nautobot inventory, Prometheus met
 ```
 
 **Incident investigation workflow**
+
 1. `get_active_alerts()` → identify what is firing
 2. `get_device_metrics(device)` → confirm reachability
 3. `get_interface_events(device)` → check for link flaps
@@ -148,6 +150,7 @@ Investigates network incidents by correlating Nautobot inventory, Prometheus met
 Designs configurations, plans IP space, and generates Ansible playbooks — always grounded in real Nautobot data before producing output.
 
 **Example prompts**
+
 ```
 "Find all devices and generate interface description standards for every link."
 "Design a BGP configuration for a new leaf router with AS 65104."
@@ -156,6 +159,7 @@ Designs configurations, plans IP space, and generates Ansible playbooks — alwa
 ```
 
 **Config design workflow**
+
 1. `get_all_devices()` + `get_topology()` → understand existing topology
 2. `get_device_interfaces(device)` → get exact interface names and neighbors
 3. `get_available_ips(prefix)` → allocate addresses from Nautobot IPAM
@@ -169,6 +173,7 @@ Designs configurations, plans IP space, and generates Ansible playbooks — alwa
 Plans and runs controlled chaos experiments with mandatory blast-radius assessment, simulation-first execution, and structured rollback procedures.
 
 **Example prompts**
+
 ```
 "What is the blast radius if I take down Ethernet1 on spine1?"
 "Design a 15-minute game day for testing BGP reconvergence."
@@ -177,6 +182,7 @@ Plans and runs controlled chaos experiments with mandatory blast-radius assessme
 ```
 
 **Chaos experiment workflow**
+
 1. `get_topology()` → map redundant paths (are there any?)
 2. `get_device_interfaces(device)` → get exact interface names
 3. `get_active_alerts()` → document baseline before disruption
@@ -186,9 +192,46 @@ Plans and runs controlled chaos experiments with mandatory blast-radius assessme
 
 ---
 
-### 📊 Agent Activity
+### 🔄 Closed-Loop Automation Pipeline
 
-The **Agent Activity** tab in the web UI logs every interaction across all three agents with full message and response history, tool call details (inputs and outputs), latency, and per-agent statistics. Click any row to expand the full interaction.
+The three agents are wired into an **autonomous incident-response pipeline** that triggers automatically when Prometheus fires an alert. No human intervention is required until the final approval gate.
+
+```
+Prometheus alert fires
+      │
+      ▼
+  🔍 RCA  (Ops Agent)          — correlates alerts, metrics, syslogs into a root cause
+      │
+      ▼
+  🔧 Fix Proposal  (Eng Agent) — generates specific config commands in check mode
+      │
+      ├─► RISK: high ──────────────────────────────────────────────────────────────┐
+      │                                                                             │
+      ▼                                                                             │
+  ✅ Validation  (Chaos Agent) — blast-radius check, topology analysis             │
+      │                                                                             │
+      ▼                                                                             ▼
+  🔐 Approval Gate  (Human)    — review commands, then Approve or Reject
+```
+
+All pipeline state is stored in a shared SQLite task queue. The **📊 Pipeline** tab (the default landing page of the web UI) shows a real-time visual of every stage for a selected alert, updating every 3 seconds. See [`docs/closed-loop-pipeline.md`](docs/closed-loop-pipeline.md) for the full reference.
+
+---
+
+### 📊 Pipeline Dashboard
+
+The **📊 Pipeline** tab is the default landing page of the web UI at [http://localhost:7860](http://localhost:7860). It provides:
+
+- **Alert Processing Pipeline visualiser** — four-stage card layout for any selected alert, showing live status, key outputs, and timing for each stage; auto-refreshes every 3 s
+- **Live Agent Status** — real-time state (`IDLE`, `THINKING`, `CALLING TOOL`) and token budget for all three agents; updates every 2 s
+- **Task Queue** — filterable table of all pipeline tasks with click-to-expand detail, event timeline, and Approve / Reject controls for `awaiting_approval` tasks
+- **Cost Monitor & KPIs** — daily spend, auto-resolution rate, Chaos Agent validation accuracy, escalation rate
+
+---
+
+### 🕒 Agent Activity
+
+The **Agent Activity** tab logs every interaction across all three agents with full message and response history, tool call details (inputs and outputs), latency, and per-agent statistics. Click any row to expand the full interaction.
 
 ---
 
@@ -196,12 +239,12 @@ The **Agent Activity** tab in the web UI logs every interaction across all three
 
 Four pre-built Grafana dashboards are automatically provisioned at startup:
 
-| Dashboard | What it shows |
-|---|---|
-| **Network Overview** | Fleet health, interface utilisation, active alert count, BGP peer state |
-| **Device Detail** | Per-device CPU, traffic, BGP peers, recent syslogs |
-| **Interface Analytics** | Traffic rates, error counters, CRC errors, utilisation heatmap |
-| **BGP Monitoring** | Per-peer session state, prefix counts, reconvergence events |
+| Dashboard               | What it shows                                                           |
+| ----------------------- | ----------------------------------------------------------------------- |
+| **Network Overview**    | Fleet health, interface utilisation, active alert count, BGP peer state |
+| **Device Detail**       | Per-device CPU, traffic, BGP peers, recent syslogs                      |
+| **Interface Analytics** | Traffic rates, error counters, CRC errors, utilisation heatmap          |
+| **BGP Monitoring**      | Per-peer session state, prefix counts, reconvergence events             |
 
 Prometheus scrapes **Telegraf** (SNMP polling + ICMP probes) and **Loki** aggregates syslog from all Containerlab devices via **Promtail**.
 
@@ -272,11 +315,12 @@ make test                     # Run all tests
 ├── ai-agents/                  # LangGraph AI agents
 │   ├── shared/
 │   │   ├── tools.py            # 24-tool library (4 tiers)
+│   │   ├── task_store.py       # Shared SQLite task queue (pipeline state)
 │   │   └── activity_store.py   # SQLite interaction log
-│   ├── ops_agent/              # Ops agent + system prompt
-│   ├── engineering_agent/      # Engineering agent + system prompt
-│   ├── chaos_agent/            # Chaos agent, chaos tools, scheduler
-│   └── ui/                     # Gradio web UI
+│   ├── ops_agent/              # Ops agent + alert poller (pipeline stage 1)
+│   ├── engineering_agent/      # Eng agent + fix-proposal runner (pipeline stage 2)
+│   ├── chaos_agent/            # Chaos agent + validation runner + scheduler (pipeline stage 3)
+│   └── ui/                     # Gradio web UI (pipeline dashboard default tab)
 ├── ansible/                    # Playbooks, roles, inventory
 ├── containerlab/               # Spine-leaf topology definition
 ├── docs/                       # Detailed documentation
@@ -300,28 +344,29 @@ make test                     # Run all tests
 
 ## 📋 Prerequisites
 
-| Requirement | Version |
-|---|---|
-| OS | Ubuntu 22.04 LTS (recommended) |
-| Docker + Compose | 24.x+ / v2.20+ |
-| RAM | 16 GB minimum (32 GB recommended) |
-| Disk | 60 GB SSD minimum |
-| Containerlab | 0.45+ (for lab topology) |
-| OpenAI API key | Optional — falls back to Ollama |
+| Requirement      | Version                           |
+| ---------------- | --------------------------------- |
+| OS               | Ubuntu 22.04 LTS (recommended)    |
+| Docker + Compose | 24.x+ / v2.20+                    |
+| RAM              | 16 GB minimum (32 GB recommended) |
+| Disk             | 60 GB SSD minimum                 |
+| Containerlab     | 0.45+ (for lab topology)          |
+| OpenAI API key   | Optional — falls back to Ollama   |
 
 ---
 
 ## 📚 Documentation
 
-| Document | Description |
-|---|---|
-| [`docs/agent-tools-framework.md`](docs/agent-tools-framework.md) | AI agent tool tiers, workflow patterns, adding new tools |
-| [`docs/architecture.md`](docs/architecture.md) | Docker networks, service map, component details |
-| [`docs/agents.md`](docs/agents.md) | Agent capabilities, REST API, example prompts |
-| [`docs/monitoring.md`](docs/monitoring.md) | Grafana dashboards, Prometheus rules, Loki queries |
-| [`docs/ansible.md`](docs/ansible.md) | Playbook inventory, roles, check-mode usage |
-| [`docs/installation.md`](docs/installation.md) | Detailed installation and configuration guide |
-| [`docs/data-loader.md`](docs/data-loader.md) | Nautobot data management with `data.yml` |
+| Document                                                         | Description                                                              |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| [`docs/closed-loop-pipeline.md`](docs/closed-loop-pipeline.md)   | Autonomous incident-response pipeline: stages, task model, approval gate |
+| [`docs/agent-tools-framework.md`](docs/agent-tools-framework.md) | AI agent tool tiers, workflow patterns, adding new tools                 |
+| [`docs/agents.md`](docs/agents.md)                               | Agent capabilities, REST APIs, example prompts                           |
+| [`docs/architecture.md`](docs/architecture.md)                   | Docker networks, service map, component details                          |
+| [`docs/monitoring.md`](docs/monitoring.md)                       | Grafana dashboards, Prometheus rules, Loki queries                       |
+| [`docs/ansible.md`](docs/ansible.md)                             | Playbook inventory, roles, check-mode usage                              |
+| [`docs/installation.md`](docs/installation.md)                   | Detailed installation and configuration guide                            |
+| [`docs/data-loader.md`](docs/data-loader.md)                     | Nautobot data management with `data.yml`                                 |
 
 ---
 

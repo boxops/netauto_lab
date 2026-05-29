@@ -9,6 +9,7 @@ All dashboards are automatically provisioned from `grafana/dashboards/`. No manu
 ### Network Overview (`network-overview`)
 
 Fleet-wide health status:
+
 - Total device count and online/offline ratio
 - Interface utilization summary (top-N by traffic)
 - Active alert count by severity
@@ -17,6 +18,7 @@ Fleet-wide health status:
 ### Device Detail (`device-detail`)
 
 Per-device drill-down (select device from `$device` template variable):
+
 - CPU and memory utilization
 - Interface traffic (all interfaces, stacked)
 - BGP peer state table
@@ -25,6 +27,7 @@ Per-device drill-down (select device from `$device` template variable):
 ### Interface Analytics (`interface-analytics`)
 
 Traffic engineering view:
+
 - In/out bps per interface
 - Interface error and drop rates
 - CRC errors and packet discards
@@ -33,6 +36,7 @@ Traffic engineering view:
 ### BGP Monitoring (`bgp-monitoring`)
 
 BGP routing health:
+
 - Per-peer state (Established / Idle / Active)
 - Received and advertised prefix counts
 - Prefix count change rate (alerts if drops >20%)
@@ -43,32 +47,32 @@ Access Prometheus at **http://localhost:9090**.
 
 ### Key Metrics
 
-| Metric | Source | Description |
-|--------|--------|-------------|
-| `ifInOctets`, `ifOutOctets` | Telegraf/SNMP | Interface byte counters (IF-MIB) |
-| `ifOperStatus` | Telegraf/SNMP | Interface operational state |
-| `bgpPeerState` | Telegraf/SNMP | BGP peer FSM state |
-| `bgpPeerFsmEstablishedTransitions` | Telegraf/SNMP | BGP session flap count |
-| `node_cpu_seconds_total` | Node Exporter | Host CPU usage |
-| `node_memory_MemAvailable_bytes` | Node Exporter | Host memory |
-| `probe_success` | Blackbox Exporter | HTTP/ICMP probe success |
+| Metric                             | Source            | Description                      |
+| ---------------------------------- | ----------------- | -------------------------------- |
+| `ifInOctets`, `ifOutOctets`        | Telegraf/SNMP     | Interface byte counters (IF-MIB) |
+| `ifOperStatus`                     | Telegraf/SNMP     | Interface operational state      |
+| `bgpPeerState`                     | Telegraf/SNMP     | BGP peer FSM state               |
+| `bgpPeerFsmEstablishedTransitions` | Telegraf/SNMP     | BGP session flap count           |
+| `node_cpu_seconds_total`           | Node Exporter     | Host CPU usage                   |
+| `node_memory_MemAvailable_bytes`   | Node Exporter     | Host memory                      |
+| `probe_success`                    | Blackbox Exporter | HTTP/ICMP probe success          |
 
 ### Alert Rules
 
 Defined in `prometheus/alerts/network.yml`:
 
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| `DeviceDown` | `up == 0` for 2m | critical |
-| `ServiceDown` | `up == 0` for 2m | critical |
-| `HighInterfaceUtilization` | `utilization > 80%` for 5m | warning |
-| `InterfaceDown` | `ifOperStatus != 1` for 5m | warning |
-| `InterfaceHighErrorRate` | `errors/packets > 1%` for 5m | warning |
-| `BGPPeerDown` | `bgpPeerState != 6` for 5m | critical |
-| `BGPPrefixCountDecreased` | prefix drop > 20% | warning |
-| `HighCPU` | CPU > 90% for 10m | warning |
-| `HighMemory` | memory > 90% for 10m | warning |
-| `DiskSpaceLow` | disk > 85% | warning |
+| Alert                      | Condition                    | Severity |
+| -------------------------- | ---------------------------- | -------- |
+| `DeviceDown`               | `up == 0` for 2m             | critical |
+| `ServiceDown`              | `up == 0` for 2m             | critical |
+| `HighInterfaceUtilization` | `utilization > 80%` for 5m   | warning  |
+| `InterfaceDown`            | `ifOperStatus != 1` for 5m   | warning  |
+| `InterfaceHighErrorRate`   | `errors/packets > 1%` for 5m | warning  |
+| `BGPPeerDown`              | `bgpPeerState != 6` for 5m   | critical |
+| `BGPPrefixCountDecreased`  | prefix drop > 20%            | warning  |
+| `HighCPU`                  | CPU > 90% for 10m            | warning  |
+| `HighMemory`               | memory > 90% for 10m         | warning  |
+| `DiskSpaceLow`             | disk > 85%                   | warning  |
 
 ## Alertmanager
 
@@ -100,8 +104,8 @@ The `Alert Event Orchestrator` Nautobot job consumes ingested events and builds 
 - Filters by severity and status.
 - Maps alerts to recommended playbooks (check mode by default).
 - Produces artifacts:
-	- `alert_orchestration_proposals.json`
-	- `alert_orchestration_proposals.md`
+  - `alert_orchestration_proposals.json`
+  - `alert_orchestration_proposals.md`
 
 Optional semi-automated queue mode:
 
@@ -149,11 +153,13 @@ Access Loki via Grafana's Explore panel or API at **http://localhost:3100**.
 Telegraf is configured in `telegraf/telegraf.conf`. It polls the following OIDs on all five Containerlab nodes:
 
 **IF-MIB (30s interval):**
+
 - `ifDescr`, `ifType`, `ifMtu`
 - `ifInOctets`, `ifOutOctets`, `ifInErrors`, `ifOutErrors`
 - `ifOperStatus`, `ifAdminStatus`
 
 **BGP4-MIB (60s interval):**
+
 - `bgpPeerState`, `bgpPeerAdminStatus`
 - `bgpPeerInUpdates`, `bgpPeerOutUpdates`
 - `bgpPeerFsmEstablishedTime`, `bgpPeerFsmEstablishedTransitions`

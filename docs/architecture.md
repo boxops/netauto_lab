@@ -8,12 +8,12 @@ The stack is organized into four functional planes: **Source of Truth**, **Monit
 
 Four isolated Docker networks are created:
 
-| Network | Subnet | Purpose |
-|---------|--------|---------|
-| `mgmt` | 172.20.10.0/24 | Service-to-service API traffic |
-| `monitoring` | 172.20.11.0/24 | Metrics scraping |
-| `syslog` | 172.20.12.0/24 | Log forwarding from devices |
-| `clab` | 172.20.20.0/24 | Containerlab device management |
+| Network      | Subnet         | Purpose                        |
+| ------------ | -------------- | ------------------------------ |
+| `mgmt`       | 172.20.10.0/24 | Service-to-service API traffic |
+| `monitoring` | 172.20.11.0/24 | Metrics scraping               |
+| `syslog`     | 172.20.12.0/24 | Log forwarding from devices    |
+| `clab`       | 172.20.20.0/24 | Containerlab device management |
 
 ## Service Map
 
@@ -80,12 +80,12 @@ Four isolated Docker networks are created:
 
 Four pre-provisioned dashboards:
 
-| Dashboard | UID | Description |
-|-----------|-----|-------------|
-| Network Overview | `network-overview` | Fleet-wide health summary |
-| Device Detail | `device-detail` | Per-device drill-down |
-| Interface Analytics | `interface-analytics` | Traffic and error rates |
-| BGP Monitoring | `bgp-monitoring` | Peer state and prefix counts |
+| Dashboard           | UID                   | Description                  |
+| ------------------- | --------------------- | ---------------------------- |
+| Network Overview    | `network-overview`    | Fleet-wide health summary    |
+| Device Detail       | `device-detail`       | Per-device drill-down        |
+| Interface Analytics | `interface-analytics` | Traffic and error rates      |
+| BGP Monitoring      | `bgp-monitoring`      | Peer state and prefix counts |
 
 ### Loki + Promtail
 
@@ -140,12 +140,12 @@ All eBGP. Leaves advertise loopbacks + host routes to both spines.
 
 ## Data Persistence
 
-| Volume | Contents |
-|--------|----------|
-| `nautobot_db` | Nautobot PostgreSQL data |
-| `gitea_db` | Gitea PostgreSQL data |
-| `nautobot_media` | Nautobot uploaded files |
-| `gitea_data` | Gitea repositories |
-| `prometheus_data` | Prometheus TSDB |
-| `grafana_data` | Grafana dashboards & users |
-| `loki_data` | Loki log chunks |
+| Volume            | Contents                   |
+| ----------------- | -------------------------- |
+| `nautobot_db`     | Nautobot PostgreSQL data   |
+| `gitea_db`        | Gitea PostgreSQL data      |
+| `nautobot_media`  | Nautobot uploaded files    |
+| `gitea_data`      | Gitea repositories         |
+| `prometheus_data` | Prometheus TSDB            |
+| `grafana_data`    | Grafana dashboards & users |
+| `loki_data`       | Loki log chunks            |

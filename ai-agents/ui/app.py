@@ -702,6 +702,300 @@ def _clear_tasks_confirm(armed: bool) -> tuple[str, bool]:
         return f"🗑️ Cleared {n} task(s). (Poller reset failed — restart ops agent if tasks don't reappear.)", False
 
 
+# ── Alert Pipeline Visualizer helpers ────────────────────────────────────────
+
+def _pipeline_fingerprints() -> list[tuple[str, str]]:
+    """Return (label, fingerprint) pairs for the dropdown, most recent first."""
+    tasks = task_store.list_tasks(type="rca", limit=200)
+    seen: dict[str, str] = {}
+    for t in tasks:
+        fp = t.get("alert_fingerprint", "")
+        if not fp or fp in seen:
+            continue
+        title = (t.get("title") or "").strip()
+        seen[fp] = title if title else fp[:20]
+    return [(label, fp) for fp, label in seen.items()]
+
+
+def _get_pipeline_tasks(fp: str) -> dict[str, dict | None]:
+    """Return the most-recent task of each stage type for this fingerprint."""
+    stages = ["rca", "fix_proposal", "validation", "approval_gate"]
+    by_type: dict[str, dict | None] = {s: None for s in stages}
+    if not fp:
+        return by_type
+    tasks = task_store.list_tasks(alert_fingerprint=fp, limit=50)
+    for t in tasks:
+        tp = t["type"]
+        if tp in by_type:
+            cur = by_type[tp]
+            if cur is None or t["created_at"] > cur["created_at"]:
+                by_type[tp] = t
+    return by_type
+
+
+def _pipeline_card_html(
+    icon: str,
+    label: str,
+    agent: str,
+    task: dict | None,
+    accent: str,
+) -> str:
+    if task is None:
+        return (
+            f'<div style="background:var(--background-fill-secondary);border-radius:12px;'
+            f'padding:14px 16px;border:1px solid var(--border-color-primary);'
+            f'border-top:3px solid #4b5563;flex:1;min-width:185px;opacity:0.4">'
+            f'<div style="font-weight:700;font-size:0.88em">{icon} {label}</div>'
+            f'<div style="font-size:0.72em;color:var(--body-text-color-subdued);margin-top:2px">{agent}</div>'
+            f'<div style="margin-top:14px;font-size:0.8em;color:var(--body-text-color-subdued);'
+            f'font-style:italic">Waiting…</div>'
+            f'</div>'
+        )
+
+    status  = task.get("status", "")
+    sc      = _STATUS_COLORS.get(status, "#6b7280")
+    task_id = task.get("id", "")
+
+    result = {}
+    content = {}
+    try:
+        result = json.loads(task.get("result") or "{}")
+    except Exception:
+        pass
+    try:
+        content = json.loads(task.get("content") or "{}")
+    except Exception:
+        pass
+
+    info_lines: list[str] = []
+    tp = task.get("type", "")
+
+    if tp == "rca":
+        diag     = result.get("diagnosis", "")
+        affected = result.get("affected", "") or result.get("affected_device", "")
+        conf     = result.get("confidence", "")
+        action   = result.get("action", "") or result.get("recommended_action", "")
+        if diag:
+            info_lines.append(f'<b>Diagnosis:</b> {_truncate(diag, 90)}')
+        if affected:
+            info_lines.append(f'<b>Affected:</b> {affected}')
+        if action:
+            info_lines.append(f'<b>Action:</b> {_truncate(action, 70)}')
+        if conf:
+            cc = {"high": "#22c55e", "medium": "#f59e0b", "low": "#ef4444"}.get(conf.lower(), "#6b7280")
+            info_lines.append(f'<b>Confidence:</b> <span style="color:{cc}">{conf}</span>')
+        if not info_lines and status in ("running", "claimed"):
+            alertname = content.get("alertname", "")
+            device    = content.get("device", "")
+            info_lines.append(
+                f'<span style="color:#f59e0b">⟳ Investigating {alertname}'
+                f'{" on " + device if device else ""}…</span>'
+            )
+
+    elif tp == "fix_proposal":
+        fix_type = result.get("fix_type", "")
+        device   = result.get("device", "")
+        commands = result.get("commands", "")
+        risk     = result.get("risk", "")
+        reason   = result.get("reason", "")
+        if device:
+            info_lines.append(f'<b>Device:</b> {device}')
+        if fix_type:
+            info_lines.append(f'<b>Fix type:</b> {fix_type}')
+        if commands and commands != "none":
+            info_lines.append(
+                f'<b>Commands:</b> <code style="font-size:0.9em">{_truncate(commands, 70)}</code>'
+            )
+        if risk:
+            rc = {"high": "#ef4444", "medium": "#f59e0b", "low": "#22c55e"}.get(risk.lower(), "#6b7280")
+            info_lines.append(
+                f'<b>Risk:</b> <span style="color:{rc};font-weight:600">{risk.upper()}</span>'
+            )
+        if reason:
+            info_lines.append(f'<b>Reason:</b> {_truncate(reason, 70)}')
+        if not info_lines and status in ("running", "claimed"):
+            rca_hint = content.get("rca", {}).get("affected_device", "")
+            info_lines.append(
+                f'<span style="color:#f59e0b">⟳ Generating fix'
+                f'{" for " + rca_hint if rca_hint else ""}…</span>'
+            )
+
+    elif tp == "validation":
+        verdict  = result.get("verdict", "")
+        risk_c   = result.get("risk_confirmed", "")
+        notes    = result.get("notes", "")
+        if verdict:
+            vc = {"correct": "#22c55e", "incorrect": "#ef4444",
+                  "partial": "#f59e0b", "unverifiable": "#6b7280"}.get(verdict.lower(), "#6b7280")
+            info_lines.append(
+                f'<b>Verdict:</b> <span style="color:{vc};font-weight:600">{verdict.upper()}</span>'
+            )
+        if risk_c:
+            rc = {"high": "#ef4444", "medium": "#f59e0b", "low": "#22c55e"}.get(risk_c.lower(), "#6b7280")
+            info_lines.append(
+                f'<b>Risk confirmed:</b> <span style="color:{rc}">{risk_c.upper()}</span>'
+            )
+        if notes:
+            info_lines.append(f'<b>Notes:</b> {_truncate(notes, 80)}')
+        if not info_lines and status in ("running", "claimed"):
+            fp_content = content.get("fix_proposal", {})
+            dev_v = fp_content.get("device", "")
+            info_lines.append(
+                f'<span style="color:#f59e0b">⟳ Validating fix'
+                f'{" on " + dev_v if dev_v else ""}…</span>'
+            )
+
+    elif tp == "approval_gate":
+        device      = content.get("device", "")
+        commands    = content.get("commands", "")
+        risk_c      = content.get("risk_confirmed", "")
+        val_verdict = content.get("validation_verdict", "")
+        reason      = content.get("reason", "")
+        if device:
+            info_lines.append(f'<b>Device:</b> {device}')
+        if commands and commands != "none":
+            info_lines.append(
+                f'<b>Commands:</b> <code style="font-size:0.9em">{_truncate(commands, 70)}</code>'
+            )
+        if risk_c:
+            rc = {"high": "#ef4444", "medium": "#f59e0b", "low": "#22c55e"}.get(risk_c.lower(), "#6b7280")
+            info_lines.append(
+                f'<b>Risk:</b> <span style="color:{rc};font-weight:600">{risk_c.upper()}</span>'
+            )
+        if val_verdict:
+            vc = {"correct": "#22c55e", "partial": "#f59e0b"}.get(val_verdict.lower(), "#6b7280")
+            info_lines.append(
+                f'<b>Validated:</b> <span style="color:{vc}">{val_verdict}</span>'
+            )
+        if reason:
+            info_lines.append(f'<b>Reason:</b> {_truncate(reason, 80)}')
+        if status == "awaiting_approval":
+            info_lines.append(
+                f'<div style="margin-top:6px;background:#a855f711;border:1px solid #a855f744;'
+                f'border-radius:6px;padding:5px 8px;font-size:0.8em;color:#a855f7;font-weight:600">'
+                f'🔐 Awaiting human approval — use Task Queue below</div>'
+            )
+
+    info_html = "".join(
+        f'<div style="margin-top:5px;font-size:0.78em;line-height:1.45">{line}</div>'
+        for line in info_lines
+    ) or (
+        f'<div style="margin-top:10px;font-size:0.78em;color:var(--body-text-color-subdued);'
+        f'font-style:italic">No details yet.</div>'
+    )
+
+    # Duration / age footer
+    completed_at = task.get("completed_at")
+    if completed_at and task.get("created_at"):
+        try:
+            t0 = datetime.strptime(task["created_at"], "%Y-%m-%d %H:%M:%S UTC").replace(tzinfo=timezone.utc)
+            t1 = datetime.strptime(completed_at, "%Y-%m-%d %H:%M:%S UTC").replace(tzinfo=timezone.utc)
+            dur = int((t1 - t0).total_seconds())
+            dur_str = f"{dur}s" if dur < 60 else f"{dur // 60}m {dur % 60}s"
+            time_str = f"Completed in {dur_str} · {_age(task.get('created_at'))} ago"
+        except Exception:
+            time_str = f"Created {_age(task.get('created_at'))} ago"
+    else:
+        time_str = f"Started {_age(task.get('created_at'))} ago"
+
+    pulse = "animation:pulse 1.5s infinite;" if status in ("running", "claimed") else ""
+
+    return (
+        f'<div style="background:var(--background-fill-secondary);border-radius:12px;'
+        f'padding:14px 16px;border:1px solid var(--border-color-primary);'
+        f'border-top:3px solid {accent};flex:1;min-width:185px">'
+
+        f'<div style="display:flex;align-items:center;justify-content:space-between;gap:6px">'
+        f'<span style="font-weight:700;font-size:0.88em;white-space:nowrap">{icon} {label}</span>'
+        f'<span style="background:{sc}22;color:{sc};border:1px solid {sc}55;border-radius:10px;'
+        f'padding:2px 7px;font-size:0.68em;font-weight:600;white-space:nowrap;flex-shrink:0;{pulse}">'
+        f'{status.replace("_", " ").upper()}</span>'
+        f'</div>'
+
+        f'<div style="font-size:0.7em;color:var(--body-text-color-subdued);margin-top:2px">'
+        f'{agent} · <code style="font-size:0.9em">{task_id}</code></div>'
+
+        f'{info_html}'
+
+        f'<div style="margin-top:8px;font-size:0.68em;color:var(--body-text-color-subdued);'
+        f'border-top:1px solid var(--border-color-primary);padding-top:5px">'
+        f'{time_str}</div>'
+
+        f'</div>'
+    )
+
+
+def _alert_pipeline_html(fp: str | None) -> str:
+    """Render the full 4-stage pipeline visual for one alert fingerprint."""
+    if not fp:
+        return (
+            '<div style="text-align:center;color:var(--body-text-color-subdued);'
+            'padding:36px 0;font-size:0.9em;border:1px dashed var(--border-color-primary);'
+            'border-radius:10px;margin:4px 0">'
+            'Select an alert fingerprint above to visualise its processing pipeline.</div>'
+        )
+
+    by_type = _get_pipeline_tasks(fp)
+
+    STAGES = [
+        ("rca",           "🔍", "RCA",           "ops_agent",   "#3b82f6"),
+        ("fix_proposal",  "🔧", "Fix Proposal",  "eng_agent",   "#10b981"),
+        ("validation",    "✅", "Validation",    "chaos_agent", "#f97316"),
+        ("approval_gate", "🔐", "Approval Gate", "human",       "#a855f7"),
+    ]
+
+    rca_task    = by_type.get("rca")
+    header_text = rca_task.get("title", "") if rca_task else f"<code>{fp[:16]}…</code>"
+
+    # Overall pipeline state badge
+    ap_task     = by_type.get("approval_gate")
+    any_running = any(
+        t is not None and t.get("status") in ("running", "claimed")
+        for t in by_type.values()
+    )
+    all_complete = all(
+        by_type[tp] is not None and by_type[tp].get("status") == "complete"
+        for tp, *_ in STAGES
+    )
+    if ap_task and ap_task.get("status") == "awaiting_approval":
+        overall_color, overall_label = "#a855f7", "🔐 Awaiting Approval"
+    elif all_complete:
+        overall_color, overall_label = "#22c55e", "✅ Pipeline Complete"
+    elif any_running:
+        overall_color, overall_label = "#3b82f6", "⟳ In Progress"
+    elif rca_task is None:
+        overall_color, overall_label = "#6b7280", "No tasks found"
+    else:
+        overall_color, overall_label = "#f59e0b", "⚠ Stalled"
+
+    cards_html: list[str] = []
+    for i, (tp, icon, label, agent, color) in enumerate(STAGES):
+        cards_html.append(_pipeline_card_html(icon, label, agent, by_type[tp], color))
+        if i < len(STAGES) - 1:
+            cur          = by_type[tp]
+            arrow_active = cur is not None and cur.get("status") == "complete"
+            arrow_color  = "#22c55e" if arrow_active else "#4b5563"
+            cards_html.append(
+                f'<div style="display:flex;align-items:center;flex-shrink:0;color:{arrow_color};'
+                f'font-size:1.8em;padding:0 2px;align-self:center;line-height:1;margin-top:-8px">›</div>'
+            )
+
+    return (
+        f'<style>@keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:0.55}}}}</style>'
+        f'<div style="margin:0">'
+        f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'
+        f'<span style="font-weight:600;font-size:0.9em">{header_text}</span>'
+        f'<span style="background:{overall_color}18;color:{overall_color};'
+        f'border:1px solid {overall_color}44;border-radius:12px;'
+        f'padding:2px 10px;font-size:0.75em;font-weight:600">{overall_label}</span>'
+        f'</div>'
+        f'<div style="display:flex;align-items:stretch;gap:6px;overflow-x:auto;padding-bottom:6px">'
+        + "".join(cards_html) +
+        f'</div>'
+        f'</div>'
+    )
+
+
 # ── Quick prompts ─────────────────────────────────────────────────────────────
 
 OPS_EXAMPLES = [
@@ -833,6 +1127,182 @@ def create_ui():
 
         with gr.Tabs():
 
+            # ── Pipeline Dashboard ─────────────────────────────────────────
+            with gr.Tab("📊 Pipeline"):
+                gr.HTML(
+                    '<p style="font-size:0.85em;color:var(--body-text-color-subdued);margin:4px 0 12px 0">'
+                    'Live agent states refresh every 2 s · Task queue refreshes every 3 s · '
+                    'Cost &amp; KPIs refresh every 30 s</p>'
+                )
+
+                # ── Section 0: Alert Pipeline Visualizer ──────────────────
+                gr.Markdown("### 🌐 Alert Processing Pipeline")
+                gr.HTML(
+                    '<p style="font-size:0.83em;color:var(--body-text-color-subdued);margin:-4px 0 10px 0">'
+                    'Select an alert to trace its full journey through the four-stage agent pipeline in real time. '
+                    'Updates every 3 s.</p>'
+                )
+                with gr.Row():
+                    fp_dropdown = gr.Dropdown(
+                        choices=[],
+                        label="Alert fingerprint",
+                        scale=4,
+                        interactive=True,
+                        allow_custom_value=False,
+                    )
+                    refresh_fp_btn = gr.Button("🔄 Refresh Alerts", scale=1, variant="secondary")
+
+                pipeline_visual = gr.HTML(
+                    value=(
+                        '<div style="text-align:center;color:var(--body-text-color-subdued);'
+                        'padding:36px 0;font-size:0.9em;border:1px dashed var(--border-color-primary);'
+                        'border-radius:10px;margin:4px 0">Loading…</div>'
+                    )
+                )
+
+                gr.Markdown("---")
+
+                # ── Section 1: Live Agent Status ───────────────────────────
+                gr.Markdown("### 🤖 Live Agent Status")
+                live_status_html = gr.HTML(value=_live_agent_status_html())
+
+                # ── Section 2: Task Queue ──────────────────────────────────
+                gr.Markdown("### 📋 Task Queue")
+
+                task_queue_tasks_state = gr.State([])
+
+                with gr.Row():
+                    task_status_filter = gr.Dropdown(
+                        choices=["", "pending", "claimed", "running",
+                                 "awaiting_approval", "complete", "failed", "rejected"],
+                        value="", label="Status filter", scale=1)
+                    task_type_filter = gr.Dropdown(
+                        choices=["", "rca", "fix_proposal", "validation", "approval_gate"],
+                        value="", label="Type filter", scale=1)
+                    task_refresh_btn = gr.Button("🔄 Refresh", scale=1, variant="secondary")
+
+                task_queue_table = gr.Dataframe(
+                    headers=["ID", "Type", "Status", "Priority",
+                             "Assigned To", "Created By", "Title", "Age"],
+                    datatype=["str", "str", "str", "str", "str", "str", "str", "str"],
+                    value=[],
+                    interactive=False,
+                    wrap=True,
+                    row_count=10,
+                )
+
+                with gr.Row():
+                    approval_task_id = gr.Textbox(
+                        label="Task ID for approval action", scale=3,
+                        placeholder="e.g. app-1a2b3c4d")
+                    approve_btn = gr.Button("✅ Approve", variant="primary", scale=1)
+                    reject_btn  = gr.Button("❌ Reject",  variant="stop",    scale=1)
+                approval_status = gr.Markdown()
+
+                gr.Markdown("---")
+                with gr.Row():
+                    clear_armed_state = gr.State(False)
+                    clear_btn         = gr.Button("🗑️ Clear All Tasks", variant="secondary", scale=1)
+                    confirm_clear_btn = gr.Button("⚠️ Confirm Clear", variant="stop", scale=1, visible=False)
+                clear_status = gr.Markdown()
+
+                # ── Section 3: Task Detail ─────────────────────────────────
+                gr.Markdown("### 🔍 Task Detail")
+                with gr.Group(elem_classes=["task-detail-panel"]):
+                    task_detail_md = gr.Markdown(
+                        value="*Click a task row above to see its full timeline and context.*"
+                    )
+
+                # ── Section 4: Cost Monitor + KPIs ─────────────────────────
+                gr.Markdown("### 💰 Cost Monitor & KPIs")
+                cost_kpi_html = gr.HTML(value=_cost_kpi_html())
+
+                # ── Wiring ────────────────────────────────────────────────
+
+                def _refresh_queue(sf, tf):
+                    rows, tasks = _task_queue_rows(sf, tf)
+                    return rows, tasks
+
+                fp_dropdown.change(
+                    _alert_pipeline_html,
+                    inputs=[fp_dropdown],
+                    outputs=[pipeline_visual],
+                )
+
+                def _refresh_fps_dropdown():
+                    fps = _pipeline_fingerprints()
+                    sel = fps[0][1] if fps else None
+                    return gr.update(choices=fps, value=sel)
+
+                refresh_fp_btn.click(_refresh_fps_dropdown, outputs=[fp_dropdown])
+
+                task_refresh_btn.click(
+                    _refresh_queue,
+                    inputs=[task_status_filter, task_type_filter],
+                    outputs=[task_queue_table, task_queue_tasks_state],
+                )
+                task_status_filter.change(
+                    _refresh_queue,
+                    inputs=[task_status_filter, task_type_filter],
+                    outputs=[task_queue_table, task_queue_tasks_state],
+                )
+                task_type_filter.change(
+                    _refresh_queue,
+                    inputs=[task_status_filter, task_type_filter],
+                    outputs=[task_queue_table, task_queue_tasks_state],
+                )
+
+                task_queue_table.select(
+                    _on_task_row_select,
+                    inputs=[task_queue_tasks_state],
+                    outputs=[task_detail_md, approval_task_id],
+                )
+
+                approve_btn.click(
+                    _approve_task,
+                    inputs=[approval_task_id],
+                    outputs=[approval_status],
+                )
+                reject_btn.click(
+                    _reject_task,
+                    inputs=[approval_task_id],
+                    outputs=[approval_status],
+                )
+
+                def _on_clear(armed):
+                    msg, new_armed = _clear_tasks_confirm(armed)
+                    return msg, new_armed, gr.update(visible=new_armed)
+
+                def _on_confirm_clear(armed):
+                    msg, new_armed = _clear_tasks_confirm(armed)
+                    return msg, new_armed, gr.update(visible=new_armed), [], []
+
+                clear_btn.click(
+                    _on_clear,
+                    inputs=[clear_armed_state],
+                    outputs=[clear_status, clear_armed_state, confirm_clear_btn],
+                )
+                confirm_clear_btn.click(
+                    _on_confirm_clear,
+                    inputs=[clear_armed_state],
+                    outputs=[clear_status, clear_armed_state, confirm_clear_btn,
+                             task_queue_table, task_queue_tasks_state],
+                )
+
+                # Auto-refresh timers
+                gr.Timer(2).tick(_live_agent_status_html, outputs=live_status_html)
+                gr.Timer(3).tick(
+                    _alert_pipeline_html,
+                    inputs=[fp_dropdown],
+                    outputs=[pipeline_visual],
+                )
+                gr.Timer(3).tick(
+                    lambda sf, tf: _refresh_queue(sf, tf),
+                    inputs=[task_status_filter, task_type_filter],
+                    outputs=[task_queue_table, task_queue_tasks_state],
+                )
+                gr.Timer(30).tick(_cost_kpi_html, outputs=cost_kpi_html)
+
             # ── Ops Agent ──────────────────────────────────────────────────
             with gr.Tab("🚨 Ops Agent"):
                 gr.Markdown("*Monitor Prometheus alerts, investigate root causes, and coordinate remediations.*")
@@ -933,138 +1403,6 @@ def create_ui():
                                      [sched_status, sched_table])
                     refresh_sched.click(lambda: _schedule_rows(), outputs=sched_table)
 
-            # ── Pipeline Dashboard ─────────────────────────────────────────
-            with gr.Tab("📊 Pipeline"):
-                gr.HTML(
-                    '<p style="font-size:0.85em;color:var(--body-text-color-subdued);margin:4px 0 12px 0">'
-                    'Live agent states refresh every 2 s · Task queue refreshes every 3 s · '
-                    'Cost &amp; KPIs refresh every 30 s</p>'
-                )
-
-                # ── Section 1: Live Agent Status ───────────────────────────
-                gr.Markdown("### 🤖 Live Agent Status")
-                live_status_html = gr.HTML(value=_live_agent_status_html())
-
-                # ── Section 2: Task Queue ──────────────────────────────────
-                gr.Markdown("### 📋 Task Queue")
-
-                task_queue_tasks_state = gr.State([])
-
-                with gr.Row():
-                    task_status_filter = gr.Dropdown(
-                        choices=["", "pending", "claimed", "running",
-                                 "awaiting_approval", "complete", "failed", "rejected"],
-                        value="", label="Status filter", scale=1)
-                    task_type_filter = gr.Dropdown(
-                        choices=["", "rca", "fix_proposal", "validation", "approval_gate"],
-                        value="", label="Type filter", scale=1)
-                    task_refresh_btn = gr.Button("🔄 Refresh", scale=1, variant="secondary")
-
-                task_queue_table = gr.Dataframe(
-                    headers=["ID", "Type", "Status", "Priority",
-                             "Assigned To", "Created By", "Title", "Age"],
-                    datatype=["str", "str", "str", "str", "str", "str", "str", "str"],
-                    value=[],
-                    interactive=False,
-                    wrap=True,
-                    row_count=10,
-                )
-
-                with gr.Row():
-                    approval_task_id = gr.Textbox(
-                        label="Task ID for approval action", scale=3,
-                        placeholder="e.g. app-1a2b3c4d")
-                    approve_btn = gr.Button("✅ Approve", variant="primary", scale=1)
-                    reject_btn  = gr.Button("❌ Reject",  variant="stop",    scale=1)
-                approval_status = gr.Markdown()
-
-                gr.Markdown("---")
-                with gr.Row():
-                    clear_armed_state = gr.State(False)
-                    clear_btn         = gr.Button("🗑️ Clear All Tasks", variant="secondary", scale=1)
-                    confirm_clear_btn = gr.Button("⚠️ Confirm Clear", variant="stop", scale=1, visible=False)
-                clear_status = gr.Markdown()
-
-                # ── Section 3: Task Detail ─────────────────────────────────
-                gr.Markdown("### 🔍 Task Detail")
-                with gr.Group(elem_classes=["task-detail-panel"]):
-                    task_detail_md = gr.Markdown(
-                        value="*Click a task row above to see its full timeline and context.*"
-                    )
-
-                # ── Section 4: Cost Monitor + KPIs ─────────────────────────
-                gr.Markdown("### 💰 Cost Monitor & KPIs")
-                cost_kpi_html = gr.HTML(value=_cost_kpi_html())
-
-                # ── Wiring ────────────────────────────────────────────────
-
-                def _refresh_queue(sf, tf):
-                    rows, tasks = _task_queue_rows(sf, tf)
-                    return rows, tasks
-
-                task_refresh_btn.click(
-                    _refresh_queue,
-                    inputs=[task_status_filter, task_type_filter],
-                    outputs=[task_queue_table, task_queue_tasks_state],
-                )
-                task_status_filter.change(
-                    _refresh_queue,
-                    inputs=[task_status_filter, task_type_filter],
-                    outputs=[task_queue_table, task_queue_tasks_state],
-                )
-                task_type_filter.change(
-                    _refresh_queue,
-                    inputs=[task_status_filter, task_type_filter],
-                    outputs=[task_queue_table, task_queue_tasks_state],
-                )
-
-                task_queue_table.select(
-                    _on_task_row_select,
-                    inputs=[task_queue_tasks_state],
-                    outputs=[task_detail_md, approval_task_id],
-                )
-
-                approve_btn.click(
-                    _approve_task,
-                    inputs=[approval_task_id],
-                    outputs=[approval_status],
-                )
-                reject_btn.click(
-                    _reject_task,
-                    inputs=[approval_task_id],
-                    outputs=[approval_status],
-                )
-
-                def _on_clear(armed):
-                    msg, new_armed = _clear_tasks_confirm(armed)
-                    # Show confirm button only when armed (waiting for confirmation)
-                    return msg, new_armed, gr.update(visible=new_armed)
-
-                def _on_confirm_clear(armed):
-                    msg, new_armed = _clear_tasks_confirm(armed)
-                    return msg, new_armed, gr.update(visible=new_armed), [], []
-
-                clear_btn.click(
-                    _on_clear,
-                    inputs=[clear_armed_state],
-                    outputs=[clear_status, clear_armed_state, confirm_clear_btn],
-                )
-                confirm_clear_btn.click(
-                    _on_confirm_clear,
-                    inputs=[clear_armed_state],
-                    outputs=[clear_status, clear_armed_state, confirm_clear_btn,
-                             task_queue_table, task_queue_tasks_state],
-                )
-
-                # Auto-refresh timers
-                gr.Timer(2).tick(_live_agent_status_html, outputs=live_status_html)
-                gr.Timer(3).tick(
-                    lambda sf, tf: _refresh_queue(sf, tf),
-                    inputs=[task_status_filter, task_type_filter],
-                    outputs=[task_queue_table, task_queue_tasks_state],
-                )
-                gr.Timer(30).tick(_cost_kpi_html, outputs=cost_kpi_html)
-
             # ── Agent Activity ─────────────────────────────────────────────
             with gr.Tab("🕒 Agent Activity"):
                 full_records_state = gr.State([])
@@ -1124,6 +1462,13 @@ def create_ui():
             lambda: _refresh_queue("", ""),
             outputs=[task_queue_table, task_queue_tasks_state],
         )
+
+        def _load_pipeline_state():
+            fps = _pipeline_fingerprints()
+            sel = fps[0][1] if fps else None
+            return gr.update(choices=fps, value=sel), _alert_pipeline_html(sel or "")
+
+        demo.load(_load_pipeline_state, outputs=[fp_dropdown, pipeline_visual])
         gr.Timer(30).tick(_status_bar_html, outputs=status_bar)
 
     return demo

@@ -84,19 +84,19 @@ custom_jobs/<category>/<job_name>.py
 
 Every job file follows this top-to-bottom order:
 
-| Section | Purpose |
-|---|---|
-| Module docstring | `"""Purpose: ...` — one-line summary |
-| Standard library imports | `os`, `csv`, `json`, `datetime`, … |
-| Third-party imports | `netmiko`, `ncclient`, `requests`, … |
-| Django imports | `django.conf.settings`, … |
-| Nautobot imports | `register_jobs`, `Job`, variable types |
-| Custom jobs imports | from `custom_jobs.modules.tools` |
-| `name = "Category"` | UI grouping string |
-| Module-level constants | `SUPPORTED_PLATFORMS`, per-platform maps |
-| Job class | Inherits `Job` + `DeviceFormEntry` |
-| Helper class(es) | Per-device business logic |
-| `register_jobs(MyJob)` | Registers class with Nautobot |
+| Section                  | Purpose                                  |
+| ------------------------ | ---------------------------------------- |
+| Module docstring         | `"""Purpose: ...` — one-line summary     |
+| Standard library imports | `os`, `csv`, `json`, `datetime`, …       |
+| Third-party imports      | `netmiko`, `ncclient`, `requests`, …     |
+| Django imports           | `django.conf.settings`, …                |
+| Nautobot imports         | `register_jobs`, `Job`, variable types   |
+| Custom jobs imports      | from `custom_jobs.modules.tools`         |
+| `name = "Category"`      | UI grouping string                       |
+| Module-level constants   | `SUPPORTED_PLATFORMS`, per-platform maps |
+| Job class                | Inherits `Job` + `DeviceFormEntry`       |
+| Helper class(es)         | Per-device business logic                |
+| `register_jobs(MyJob)`   | Registers class with Nautobot            |
 
 ---
 
@@ -125,37 +125,37 @@ class MyJob(Job, DeviceFormEntry):
 
 ### Meta Reference
 
-| Field | Type | Description |
-|---|---|---|
-| `name` | `str` | Display name in the Nautobot UI job list |
-| `description` | `str` | Longer description; rendered on the job detail page |
-| `has_sensitive_variables` | `bool` | Set `True` if the job accepts passwords/tokens — masks them in logs |
-| `soft_time_limit` | `int` | Seconds before Celery raises `SoftTimeLimitExceeded`; job can log a clean error |
-| `time_limit` | `int` | Seconds before Celery hard-kills the task |
-| `task_queues` | `list[str]` | Which Celery queues accept this job |
+| Field                     | Type        | Description                                                                     |
+| ------------------------- | ----------- | ------------------------------------------------------------------------------- |
+| `name`                    | `str`       | Display name in the Nautobot UI job list                                        |
+| `description`             | `str`       | Longer description; rendered on the job detail page                             |
+| `has_sensitive_variables` | `bool`      | Set `True` if the job accepts passwords/tokens — masks them in logs             |
+| `soft_time_limit`         | `int`       | Seconds before Celery raises `SoftTimeLimitExceeded`; job can log a clean error |
+| `time_limit`              | `int`       | Seconds before Celery hard-kills the task                                       |
+| `task_queues`             | `list[str]` | Which Celery queues accept this job                                             |
 
 Recommended time limits:
 
-| Job type | `soft_time_limit` | `time_limit` |
-|---|---|---|
-| Quick audits / single device | 300 (5 min) | 600 (10 min) |
-| Standard sweep (< 100 devices) | 1800 (30 min) | 2400 (40 min) |
-| Large-scale / firmware upgrade | 3600 (60 min) | 4500 (75 min) |
+| Job type                       | `soft_time_limit` | `time_limit`  |
+| ------------------------------ | ----------------- | ------------- |
+| Quick audits / single device   | 300 (5 min)       | 600 (10 min)  |
+| Standard sweep (< 100 devices) | 1800 (30 min)     | 2400 (40 min) |
+| Large-scale / firmware upgrade | 3600 (60 min)     | 4500 (75 min) |
 
 ### Form Variable Types
 
-| Class | Use for |
-|---|---|
-| `BooleanVar` | Toggle / flag |
-| `IntegerVar` | Numeric input; supports `min_value` / `max_value` |
-| `StringVar` | Free-text single-line input |
-| `TextVar` | Free-text multi-line input |
-| `ChoiceVar` | Static dropdown; `choices=[("val", "Label"), ...]` |
-| `ObjectVar` | Single object picker; requires `model=` |
-| `MultiObjectVar` | Multi-object picker; requires `model=` |
-| `IPAddressVar` | Validated IP address |
-| `IPNetworkVar` | Validated CIDR prefix |
-| `FileVar` | File upload |
+| Class            | Use for                                            |
+| ---------------- | -------------------------------------------------- |
+| `BooleanVar`     | Toggle / flag                                      |
+| `IntegerVar`     | Numeric input; supports `min_value` / `max_value`  |
+| `StringVar`      | Free-text single-line input                        |
+| `TextVar`        | Free-text multi-line input                         |
+| `ChoiceVar`      | Static dropdown; `choices=[("val", "Label"), ...]` |
+| `ObjectVar`      | Single object picker; requires `model=`            |
+| `MultiObjectVar` | Multi-object picker; requires `model=`             |
+| `IPAddressVar`   | Validated IP address                               |
+| `IPNetworkVar`   | Validated CIDR prefix                              |
+| `FileVar`        | File upload                                        |
 
 All `DeviceFormEntry` filter fields (`tenant_group`, `tenant`, `location`, `rack_group`, `rack`, `role`, `manufacturer`, `platform`, `device_type`, `device`, `tags`, `status`) are inherited automatically — no need to declare them unless you want to override defaults.
 
@@ -199,11 +199,11 @@ if not all_devices:
 
 Jobs that need to process many devices benefit from parallelism. The pattern uses three components from `modules/tools.py`:
 
-| Component | Role |
-|---|---|
-| `JobLogBuffer` | Collects `debug/info/warning/error/critical` calls from a worker thread |
-| `JobProxy` | Wraps `JobLogBuffer` so helper classes can call `self.job.logger.*` normally |
-| `parallel_execution()` | Thread pool; drains each buffer to the real logger on the main thread |
+| Component              | Role                                                                         |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| `JobLogBuffer`         | Collects `debug/info/warning/error/critical` calls from a worker thread      |
+| `JobProxy`             | Wraps `JobLogBuffer` so helper classes can call `self.job.logger.*` normally |
+| `parallel_execution()` | Thread pool; drains each buffer to the real logger on the main thread        |
 
 ### Why the buffer is necessary
 
@@ -291,18 +291,18 @@ class MyHelper:
 
 ## Shared Utilities (`modules/tools.py`)
 
-| Function / Class | Description |
-|---|---|
-| `apply_device_filters(**kwargs)` | Returns a `set` of `Device` objects matching the given filters |
-| `get_device_connection_info(device)` | Returns a Netmiko-compatible `dict` with `host`, `username`, `password`, `device_type`, etc. |
-| `parse_command_output(command_output, template_file)` | Parses CLI text via a TextFSM template file path; returns a list of dicts |
-| `ping_device(host)` | Returns `True` if the host responds to a single ICMP ping |
-| `xml_to_dict(xml_string)` | Converts an XML string to a nested Python dict |
-| `diff_files(backup, intended)` | Yields unified diff lines between two config files |
-| `parallel_execution(task_func, devices, max_workers, job_logger)` | Thread-pool runner with log-buffer draining |
-| `JobLogBuffer` | Thread-safe log collector; use in worker threads |
-| `JobProxy` | Routes `self.job.logger` to a `JobLogBuffer` |
-| `DeviceFormEntry` | Mixin that adds standard device-filter form fields |
+| Function / Class                                                  | Description                                                                                  |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `apply_device_filters(**kwargs)`                                  | Returns a `set` of `Device` objects matching the given filters                               |
+| `get_device_connection_info(device)`                              | Returns a Netmiko-compatible `dict` with `host`, `username`, `password`, `device_type`, etc. |
+| `parse_command_output(command_output, template_file)`             | Parses CLI text via a TextFSM template file path; returns a list of dicts                    |
+| `ping_device(host)`                                               | Returns `True` if the host responds to a single ICMP ping                                    |
+| `xml_to_dict(xml_string)`                                         | Converts an XML string to a nested Python dict                                               |
+| `diff_files(backup, intended)`                                    | Yields unified diff lines between two config files                                           |
+| `parallel_execution(task_func, devices, max_workers, job_logger)` | Thread-pool runner with log-buffer draining                                                  |
+| `JobLogBuffer`                                                    | Thread-safe log collector; use in worker threads                                             |
+| `JobProxy`                                                        | Routes `self.job.logger` to a `JobLogBuffer`                                                 |
+| `DeviceFormEntry`                                                 | Mixin that adds standard device-filter form fields                                           |
 
 ---
 
@@ -322,10 +322,10 @@ self.create_file("report.csv", buf.getvalue())
 
 Common output formats:
 
-| Format | When to use |
-|---|---|
-| `.csv` | Tabular data (inventory, audit results) |
-| `.txt` | Human-readable summaries, diff output |
+| Format  | When to use                                |
+| ------- | ------------------------------------------ |
+| `.csv`  | Tabular data (inventory, audit results)    |
+| `.txt`  | Human-readable summaries, diff output      |
 | `.json` | Structured data for downstream consumption |
 
 ---
@@ -358,13 +358,13 @@ if dev.platform is None or dev.platform.network_driver not in SUPPORTED_PLATFORM
 
 ## Logging Guidelines
 
-| Level | When to use |
-|---|---|
-| `logger.debug()` | Verbose detail useful for troubleshooting — not shown by default |
-| `logger.info()` | Normal progress: "Device X processed successfully" |
-| `logger.warning()` | Recoverable issues: skipped device, unexpected but non-fatal state |
-| `logger.error()` | Failures that affect a specific device but don't abort the whole job |
-| `logger.critical()` | Fatal errors that should stop execution |
+| Level               | When to use                                                          |
+| ------------------- | -------------------------------------------------------------------- |
+| `logger.debug()`    | Verbose detail useful for troubleshooting — not shown by default     |
+| `logger.info()`     | Normal progress: "Device X processed successfully"                   |
+| `logger.warning()`  | Recoverable issues: skipped device, unexpected but non-fatal state   |
+| `logger.error()`    | Failures that affect a specific device but don't abort the whole job |
+| `logger.critical()` | Fatal errors that should stop execution                              |
 
 Always prefix log messages with the device name: `f"{dev} <message>"`.
 
@@ -372,49 +372,49 @@ Always prefix log messages with the device name: `f"{dev} <message>"`.
 
 ## Existing Jobs Reference
 
-| Category | Job | Class | Description |
-|---|---|---|---|
-| Configuration | Backup Device Configurations | `CustomDeviceBackup` | SSH/NETCONF config backup to disk + Nautobot Golden Config |
-| Configuration | Intended Configurations | `CustomDeviceIntended` | Render intended configs from Jinja2 templates |
-| Configuration | Configuration Compliance | `CustomDeviceCompliance` | Run Golden Config compliance checks |
-| Configuration | Deploy Configurations | `DeployConfigurations` | Push rendered configs to devices |
-| Configuration | NTP Compliance | `NTPComplianceCheck` | Verify NTP server configuration |
-| Configuration | Banner Compliance | `BannerComplianceCheck` | Verify login/MOTD banners |
-| Configuration | SNMP Validation | `SNMPValidation` | Verify SNMP community strings and targets |
-| Inventory | LLDP Neighbor Discovery | `LLDPNeighborDiscovery` | Discover and sync LLDP neighbors to Nautobot |
-| Inventory | ARP/MAC Sync | `ARPMACSync` | Sync ARP and MAC tables to IP address records |
-| Inventory | Interface Capacity Audit | `InterfaceCapacityAudit` | Report utilization against capacity thresholds |
-| Inventory | Optics Transceiver Inventory | `OpticsTransceiverInventory` | Collect DOM data; export CSV |
-| Monitoring | Reachability Sweep | `ReachabilitySweep` | ICMP ping sweep; optionally update device status |
-| Monitoring | Interface Error Alerting | `InterfaceErrorAlerting` | Detect interfaces exceeding error thresholds |
-| Monitoring | Prometheus Target Sync | `PrometheusTargetSync` | Sync active devices to Prometheus static file targets |
-| Monitoring | Monitoring Visualization Sync | `MonitoringVisualizationSync` | Generate monitoring artifacts (targets/rules/dashboards) from Nautobot inventory |
-| Monitoring | Alert Event Orchestrator | `AlertEventOrchestrator` | Convert ingested alert events into approval-gated remediation proposals |
-| Onboarding | Onboard Device | `CustomDeviceOnboarding` | Create Device + interfaces from discovered data |
-| Onboarding | Get Show Version | `GetShowVersion` | Capture and store software version strings |
-| Operations | Device Decommission | `DeviceDecommission` | Bulk decommission workflow with backup and Nautobot cleanup |
-| Operations | Command Runner | `CommandRunner` | Run an arbitrary command on a device set |
-| Operations | Password Prober | `PasswordProber` | Test credential reachability across devices |
-| Reporting | Backup State Checker | `BackupStateChecker` | Alert on devices missing recent backup records |
-| Reporting | Hardware EOS Alert | `HardwareEOLAlert` | Cross-reference device types against EOS dates |
-| Reporting | CVE Vulnerability Scanner | `CVEVulnerabilityScanner` | Match software versions against CVE database |
-| Security | SSH Audit | `SSHAudit` | Verify SSH version, ciphers, and key exchange |
-| Security | AAA Compliance | `AAAComplianceCheck` | Verify RADIUS/TACACS configuration |
-| Troubleshooting | MTU Mismatch Detector | `MTUMismatchDetector` | Cross-ref MTU + LLDP data to find mismatched links |
-| Troubleshooting | BGP Prefix Anomaly | `BGPPrefixAnomalyDetector` | Detect unexpected prefix count changes |
-| Upgrading | Firmware Upgrade | `FirmwareUpgrade` | Orchestrate staged firmware upgrade |
-| Upgrading | Readiness Check | `ReadinessCheck` | Pre-upgrade health check |
+| Category        | Job                           | Class                         | Description                                                                      |
+| --------------- | ----------------------------- | ----------------------------- | -------------------------------------------------------------------------------- |
+| Configuration   | Backup Device Configurations  | `CustomDeviceBackup`          | SSH/NETCONF config backup to disk + Nautobot Golden Config                       |
+| Configuration   | Intended Configurations       | `CustomDeviceIntended`        | Render intended configs from Jinja2 templates                                    |
+| Configuration   | Configuration Compliance      | `CustomDeviceCompliance`      | Run Golden Config compliance checks                                              |
+| Configuration   | Deploy Configurations         | `DeployConfigurations`        | Push rendered configs to devices                                                 |
+| Configuration   | NTP Compliance                | `NTPComplianceCheck`          | Verify NTP server configuration                                                  |
+| Configuration   | Banner Compliance             | `BannerComplianceCheck`       | Verify login/MOTD banners                                                        |
+| Configuration   | SNMP Validation               | `SNMPValidation`              | Verify SNMP community strings and targets                                        |
+| Inventory       | LLDP Neighbor Discovery       | `LLDPNeighborDiscovery`       | Discover and sync LLDP neighbors to Nautobot                                     |
+| Inventory       | ARP/MAC Sync                  | `ARPMACSync`                  | Sync ARP and MAC tables to IP address records                                    |
+| Inventory       | Interface Capacity Audit      | `InterfaceCapacityAudit`      | Report utilization against capacity thresholds                                   |
+| Inventory       | Optics Transceiver Inventory  | `OpticsTransceiverInventory`  | Collect DOM data; export CSV                                                     |
+| Monitoring      | Reachability Sweep            | `ReachabilitySweep`           | ICMP ping sweep; optionally update device status                                 |
+| Monitoring      | Interface Error Alerting      | `InterfaceErrorAlerting`      | Detect interfaces exceeding error thresholds                                     |
+| Monitoring      | Prometheus Target Sync        | `PrometheusTargetSync`        | Sync active devices to Prometheus static file targets                            |
+| Monitoring      | Monitoring Visualization Sync | `MonitoringVisualizationSync` | Generate monitoring artifacts (targets/rules/dashboards) from Nautobot inventory |
+| Monitoring      | Alert Event Orchestrator      | `AlertEventOrchestrator`      | Convert ingested alert events into approval-gated remediation proposals          |
+| Onboarding      | Onboard Device                | `CustomDeviceOnboarding`      | Create Device + interfaces from discovered data                                  |
+| Onboarding      | Get Show Version              | `GetShowVersion`              | Capture and store software version strings                                       |
+| Operations      | Device Decommission           | `DeviceDecommission`          | Bulk decommission workflow with backup and Nautobot cleanup                      |
+| Operations      | Command Runner                | `CommandRunner`               | Run an arbitrary command on a device set                                         |
+| Operations      | Password Prober               | `PasswordProber`              | Test credential reachability across devices                                      |
+| Reporting       | Backup State Checker          | `BackupStateChecker`          | Alert on devices missing recent backup records                                   |
+| Reporting       | Hardware EOS Alert            | `HardwareEOLAlert`            | Cross-reference device types against EOS dates                                   |
+| Reporting       | CVE Vulnerability Scanner     | `CVEVulnerabilityScanner`     | Match software versions against CVE database                                     |
+| Security        | SSH Audit                     | `SSHAudit`                    | Verify SSH version, ciphers, and key exchange                                    |
+| Security        | AAA Compliance                | `AAAComplianceCheck`          | Verify RADIUS/TACACS configuration                                               |
+| Troubleshooting | MTU Mismatch Detector         | `MTUMismatchDetector`         | Cross-ref MTU + LLDP data to find mismatched links                               |
+| Troubleshooting | BGP Prefix Anomaly            | `BGPPrefixAnomalyDetector`    | Detect unexpected prefix count changes                                           |
+| Upgrading       | Firmware Upgrade              | `FirmwareUpgrade`             | Orchestrate staged firmware upgrade                                              |
+| Upgrading       | Readiness Check               | `ReadinessCheck`              | Pre-upgrade health check                                                         |
 
 ---
 
 ## Common Pitfalls
 
-| Mistake | Correct approach |
-|---|---|
-| Calling `self.logger` from a worker thread | Write to `JobLogBuffer`; drain on the main thread |
-| Materialising an unbounded queryset | Use `apply_device_filters()` which returns a `set`; never call `.all()` without a limit |
-| Opening SSH inside `__init__` | Open connections inside methods; use `with ConnectHandler(...) as conn:` |
-| Forgetting to return `buf` from `_run_device` | All code paths must `return buf` |
-| Writing to a shared list/dict from threads | Protect with `threading.Lock()` |
-| Not registering in `__init__.py` | Add an import — both `register_jobs()` and the `__init__.py` import are required |
-| Setting `time_limit` too low | Long-running SSH commands block; give at least 2× your expected runtime |
+| Mistake                                       | Correct approach                                                                        |
+| --------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Calling `self.logger` from a worker thread    | Write to `JobLogBuffer`; drain on the main thread                                       |
+| Materialising an unbounded queryset           | Use `apply_device_filters()` which returns a `set`; never call `.all()` without a limit |
+| Opening SSH inside `__init__`                 | Open connections inside methods; use `with ConnectHandler(...) as conn:`                |
+| Forgetting to return `buf` from `_run_device` | All code paths must `return buf`                                                        |
+| Writing to a shared list/dict from threads    | Protect with `threading.Lock()`                                                         |
+| Not registering in `__init__.py`              | Add an import — both `register_jobs()` and the `__init__.py` import are required        |
+| Setting `time_limit` too low                  | Long-running SSH commands block; give at least 2× your expected runtime                 |

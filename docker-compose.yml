@@ -79,7 +79,6 @@ x-nautobot-base: &nautobot-base
       max-file: "3"
 
 services:
-
   # ── PostgreSQL for Nautobot ──────────────────────────────────
   nautobot-postgres:
     image: "postgres:15-alpine"
@@ -130,7 +129,12 @@ services:
   nautobot-volume-init:
     image: "busybox"
     user: "0"
-    command: ["sh", "-c", "chown -R 999:999 /media /static /git-repos /backups && chmod 775 /file_sd"]
+    command:
+      [
+        "sh",
+        "-c",
+        "chown -R 999:999 /media /static /git-repos /backups && chmod 775 /file_sd",
+      ]
     volumes:
       - nautobot-media:/media
       - nautobot-static:/static
@@ -255,7 +259,13 @@ services:
       - monitoring-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -274,7 +284,13 @@ services:
       - mgmt-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8770/health')"]
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8770/health')",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3

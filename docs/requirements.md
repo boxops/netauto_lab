@@ -13,6 +13,7 @@ Create an intermediate-level, production-ready network automation and observabil
 ## **1. ARCHITECTURE REQUIREMENTS**
 
 ### **1.1 Overall Architecture**
+
 - **Microservices-based** architecture using Docker Compose
 - **Multi-network** design: management network, monitoring network, syslog network
 - **API-first** approach - all services must expose REST APIs
@@ -21,6 +22,7 @@ Create an intermediate-level, production-ready network automation and observabil
 - **Scalability** design for 100-500 network devices initially
 
 ### **1.2 Network Topology**
+
 ```
 Docker Networks:
 ├── mgmt-network (172.20.10.0/24) - Management plane
@@ -30,6 +32,7 @@ Docker Networks:
 ```
 
 ### **1.3 Data Flow Architecture**
+
 - Devices → Telegraf → Prometheus → Grafana (metrics)
 - Devices → Syslog Collector → Loki/Elasticsearch (logs)
 - Devices → Nautobot Golden Config Plugin (configurations)
@@ -46,6 +49,7 @@ Docker Networks:
 **Purpose:** Network Source of Truth, IPAM, DCIM, configuration management
 
 **Required Plugins:**
+
 - **Golden Config** - Configuration backup, compliance, remediation
 - **Device Lifecycle** - Hardware/software lifecycle management
 - **ChatOps** - Slack/Mattermost integration
@@ -55,6 +59,7 @@ Docker Networks:
 - **Firewall Models** - ACL and firewall rule management
 
 **Required Configuration:**
+
 - PostgreSQL 15+ database
 - Redis for caching and task queue
 - Celery workers for background jobs
@@ -66,6 +71,7 @@ Docker Networks:
 - Single Sign-On (SSO) ready (LDAP/SAML prep)
 
 **Data Model Requirements:**
+
 - Sites, regions, rack layouts
 - Devices, interfaces, cables, connections
 - IP addresses, prefixes, VLANs, VRFs
@@ -75,6 +81,7 @@ Docker Networks:
 - Tags and tenant segregation
 
 **Integration Points:**
+
 - Export dynamic Ansible inventory
 - Sync with Containerlab topology
 - Push intended configs to devices
@@ -89,6 +96,7 @@ Docker Networks:
 **Purpose:** Collect metrics from network devices and systems
 
 **Input Plugins Required:**
+
 - `inputs.snmp` - SNMP polling (v2c, v3)
 - `inputs.gnmi` - gNMI telemetry streaming
 - `inputs.netflow` - NetFlow/sFlow collection
@@ -98,10 +106,12 @@ Docker Networks:
 - `inputs.prometheus` - Scrape other Prometheus exporters
 
 **Output Plugins:**
+
 - `outputs.prometheus_client` - Expose metrics for Prometheus scraping
 - `outputs.influxdb_v2` - Optional time-series database
 
 **Configuration Template:**
+
 - 30-second collection interval for interface metrics
 - 5-minute interval for system metrics
 - Device templates per vendor (Cisco, Arista, Juniper)
@@ -109,6 +119,7 @@ Docker Networks:
 - Tag enrichment from Nautobot API
 
 **Key Metrics to Collect:**
+
 - Interface: bytes/packets in/out, errors, discards, utilization %
 - CPU, memory, temperature
 - BGP peer states, prefix counts
@@ -123,6 +134,7 @@ Docker Networks:
 **Purpose:** Time-series metrics storage and alerting engine
 
 **Required Configuration:**
+
 - **Retention:** 30 days minimum
 - **Scrape intervals:** 30s for devices, 15s for critical services
 - **Service discovery:** Dynamic targets from Nautobot API
@@ -131,6 +143,7 @@ Docker Networks:
 - **Remote write:** Optional to long-term storage
 
 **Alerting Rules Required:**
+
 - Device down (no metrics for 2 minutes)
 - Interface down (operational status changed)
 - High interface utilization (>80% for 5 minutes)
@@ -141,6 +154,7 @@ Docker Networks:
 - Config drift detected (integration with Nautobot)
 
 **Exporters to Include:**
+
 - node-exporter (for monitoring host system)
 - blackbox-exporter (for probing HTTP/TCP/ICMP)
 - snmp-exporter (alternative/complement to Telegraf)
@@ -151,18 +165,21 @@ Docker Networks:
 **Purpose:** Metrics visualization, dashboards, and analytics
 
 **Data Sources:**
+
 - Prometheus (metrics)
 - Loki (logs) - see syslog section
 - Nautobot (via GraphQL/REST)
 - PostgreSQL (direct database queries if needed)
 
 **Required Plugins:**
+
 - FlowCharting - Network topology diagrams
 - Worldmap Panel - Geographic device mapping
 - Status Panel - Service health overview
 - Pie Chart - Distribution visualizations
 
 **Pre-built Dashboards Required:**
+
 1. **Network Overview** - Fleet-wide health and statistics
 2. **Device Detail** - Per-device deep dive (CPU, memory, interfaces)
 3. **Interface Analytics** - Traffic patterns, top talkers, utilization trends
@@ -175,6 +192,7 @@ Docker Networks:
 10. **SLA Monitoring** - Latency, jitter, packet loss dashboards
 
 **Additional Features:**
+
 - Annotation support (link changes to events in Nautobot)
 - Alert notification channels (Slack, email, PagerDuty, webhook)
 - Dashboard variables for site/device filtering
@@ -187,7 +205,8 @@ Docker Networks:
 
 **Solution Options** (agent should choose one and justify):
 
-#### Promtail + Loki (Recommended for TPG Stack Integration)**
+#### Promtail + Loki (Recommended for TPG Stack Integration)\*\*
+
 - Promtail as syslog receiver
 - Loki for log storage and querying
 - Native Grafana integration
@@ -195,6 +214,7 @@ Docker Networks:
 - Label-based indexing
 
 **Requirements:**
+
 - Support RFC3164 and RFC5424 syslog formats
 - UDP/514, TCP/514, TCP/6514 (TLS) listeners
 - Log parsing and field extraction
@@ -206,6 +226,7 @@ Docker Networks:
 - Integration with alerting (send critical syslogs to Prometheus Alertmanager)
 
 **Log Use Cases:**
+
 - AAA authentication events
 - Configuration changes
 - Interface state changes
@@ -214,6 +235,7 @@ Docker Networks:
 - System errors and warnings
 
 **Integration:**
+
 - Parse device info and enrich with Nautobot data (site, role, tags)
 - Extract metrics from logs (failed login attempts, config changes/day)
 - Trigger webhooks to Nautobot on specific events
@@ -228,6 +250,7 @@ Docker Networks:
 **Base Image:** Python 3.11+ with Ansible Core 2.15+
 
 **Required Collections:**
+
 - `ansible.netcommon`
 - `ansible.utils`
 - `arista.eos`
@@ -241,11 +264,13 @@ Docker Networks:
 ### **3.2 Dynamic Inventory**
 
 **Sources:**
+
 - Nautobot inventory plugin (primary)
 - Static inventory for lab devices
 - Inventory variables from Nautobot config contexts
 
 **Requirements:**
+
 - Group devices by: site, role, platform, manufacturer, tags
 - Automatic credential management (Nautobot secrets integration)
 - Inventory caching for performance
@@ -253,6 +278,7 @@ Docker Networks:
 ### **3.3 Playbook Library**
 
 **Network Operations:**
+
 - `deploy_config.yml` - Push configurations from Nautobot Golden Config
 - `backup_config.yml` - Backup all device configs to Nautobot
 - `compliance_check.yml` - Run compliance checks (Golden Config)
@@ -263,6 +289,7 @@ Docker Networks:
 - `clear_bgp_session.yml` - Reset BGP sessions with safeguards
 
 **Operational Verification:**
+
 - `health_check.yml` - Multi-vendor health checks (CPU, memory, protocols)
 - `connectivity_test.yml` - End-to-end reachability tests
 - `validate_bgp.yml` - BGP state validation
@@ -270,18 +297,21 @@ Docker Networks:
 - `check_hardware.yml` - Hardware component status
 
 **Reporting & Auditing:**
+
 - `generate_inventory_report.yml` - Export device inventory to CSV/JSON
 - `collect_facts.yml` - Gather device facts and sync to Nautobot
 - `audit_config.yml` - Configuration audit against baselines
 - `document_topology.yml` - Auto-generate topology documentation
 
 **Disaster Recovery:**
+
 - `full_backup.yml` - Comprehensive backup of all configs
 - `restore_device.yml` - Restore device from backup
 
 ### **3.4 Ansible Roles**
 
 **Required Roles:**
+
 - `common` - Common tasks for all devices (NTP, SNMP, syslog, banners)
 - `interfaces` - Interface configuration management
 - `routing` - Routing protocol configuration (BGP, OSPF, static)
@@ -293,6 +323,7 @@ Docker Networks:
 ### **3.5 Ansible Tower/AWX Consideration**
 
 **Optional but Recommended:**
+
 - Provide setup for Ansible AWX (open-source Tower) in docker-compose
 - Job templates for common playbooks
 - Surveys for user-driven automation
@@ -308,6 +339,7 @@ Docker Networks:
 ### **4.1 AI Agent Framework**
 
 **Architecture:**
+
 - LangChain or LlamaIndex based framework
 - OpenAI API support (GPT-4) with fallback to local models (Ollama)
 - LangSmith or LangFuse for observability
@@ -320,6 +352,7 @@ Docker Networks:
 **Purpose:** Autonomous monitoring and incident response
 
 **Capabilities:**
+
 - Monitor Prometheus alerts and investigate root causes
 - Query logs in Loki/Elasticsearch for error patterns
 - Correlate events across systems (metrics + logs + config changes)
@@ -329,6 +362,7 @@ Docker Networks:
 - Execute approved remediations via Ansible (with confirmation)
 
 **Tools/Functions:**
+
 - `query_prometheus(query)` - Run PromQL queries
 - `query_logs(device, timerange, pattern)` - Search logs
 - `get_device_info(device_name)` - Get device details from Nautobot
@@ -338,6 +372,7 @@ Docker Networks:
 - `create_incident(title, description, affected_devices)` - Create ticket
 
 **Example Use Cases:**
+
 - "Why is router1 showing high CPU?"
 - "What changed in the last hour on devices in site-nyc?"
 - "Investigate BGP peer down alert for router2"
@@ -348,6 +383,7 @@ Docker Networks:
 **Purpose:** Assist with design, implementation, and documentation
 
 **Capabilities:**
+
 - Design network configurations based on requirements
 - Generate Ansible playbooks from natural language
 - Create device configurations (validated against vendor syntax)
@@ -360,6 +396,7 @@ Docker Networks:
 - Review configurations for best practices and security issues
 
 **Tools/Functions:**
+
 - `search_nautobot(query)` - Semantic search in Nautobot
 - `get_available_ips(prefix, count)` - IP allocation
 - `validate_config(device_type, config_snippet)` - Syntax validation
@@ -370,6 +407,7 @@ Docker Networks:
 - `preview_change_impact(device, config_change)` - Impact analysis
 
 **Example Use Cases:**
+
 - "Design BGP configuration for new router in site-sfo"
 - "Show me all devices with software version older than 4.28"
 - "Generate a playbook to configure VLANs 100-110 on all switches"
@@ -379,12 +417,14 @@ Docker Networks:
 ### **4.4 Agent User Interfaces**
 
 **Chat Interface Options:**
+
 1. **Web UI** - Gradio or Streamlit based chat interface
 2. **Slack Bot** - Slack app integration via ChatOps
 3. **CLI Tool** - Command-line interface for agent interaction
 4. **API Service** - REST API for programmatic access
 
 **Requirements:**
+
 - Support multi-turn conversations
 - Show agent reasoning steps (thoughts/actions)
 - Display data in formatted tables/JSON
@@ -397,6 +437,7 @@ Docker Networks:
 ### **4.5 Agent Safety and Guardrails**
 
 **Critical Requirements:**
+
 - Read-only mode by default
 - Explicit user approval for write operations (config changes, device actions)
 - Dry-run/check mode for Ansible execution before actual run
@@ -416,6 +457,7 @@ Docker Networks:
 **Solution:** Gitea or GitLab CE
 
 **Purpose:**
+
 - Version control for Nautobot Golden Config backups
 - Store Ansible playbooks, roles, inventory
 - Track configuration changes over time
@@ -423,6 +465,7 @@ Docker Networks:
 - Integration with Nautobot Golden Config plugin
 
 **Features:**
+
 - Automated commits from Nautobot on config changes
 - Diff visualization
 - Webhook triggers on commits
@@ -433,12 +476,14 @@ Docker Networks:
 **Solution:** RabbitMQ or Redis Streams
 
 **Purpose:**
+
 - Event bus for inter-service communication
 - Decouple services via pub/sub
 - Queue tasks for asynchronous processing
 - WebSocket support for real-time updates
 
 **Use Cases:**
+
 - Nautobot events → trigger Ansible playbooks
 - Alert events → notify AI agents
 - Config changes → update Git
@@ -449,6 +494,7 @@ Docker Networks:
 **Solution:** Kong or Traefik
 
 **Purpose:**
+
 - Single entry point for all APIs
 - Authentication and authorization
 - Rate limiting and throttling
@@ -460,6 +506,7 @@ Docker Networks:
 **Solution:** GoFlow2 or nfsen
 
 **Purpose:**
+
 - Collect and analyze network flow data
 - Integration with Grafana for visualization
 - Top talkers, application visibility
@@ -469,11 +516,13 @@ Docker Networks:
 **Solution:** Nornir + Markdown/MkDocs
 
 **Purpose:**
+
 - Auto-generate network documentation from device state
 - Create topology diagrams
 - Build searchable documentation site
 
 **Features:**
+
 - Schedule documentation refreshes
 - Export to PDF/HTML
 - Version controlled in Git
@@ -485,18 +534,21 @@ Docker Networks:
 ### **6.1 Containerlab Topology**
 
 **Topology Design:**
+
 - **Minimum:** 5-node topology (2 spines, 3 leaves) for Clos fabric
 - **Device Types:** Mix of Arista cEOS, Cisco cEOS-lab, Nokia SR Linux
 - **Protocols:** BGP (eBGP/iBGP), OSPF, VXLAN/EVPN
 - **Services:** L2 VPN, L3 VPN, Anycast Gateway
 
 **Topology File:**
+
 - YAML-based Containerlab definition
 - Automated startup configs
 - Management network auto-configuration
 - Simulated client nodes (Linux containers) for testing
 
 **Integration:**
+
 - Automatic registration in Nautobot on deployment
 - Pre-configured SNMP, syslog, streaming telemetry
 - Ansible inventory sync script
@@ -505,6 +557,7 @@ Docker Networks:
 ### **6.2 Traffic Generation**
 
 **Tools:**
+
 - iperf3 containers for bandwidth testing
 - ping/mtr for latency monitoring
 - Scapy for custom packet generation
@@ -516,6 +569,7 @@ Docker Networks:
 ### **7.1 Docker Compose**
 
 **Requirements:**
+
 - Docker Compose v2.20+
 - All services defined in docker-compose.yml
 - Environment variables in .env file (with .env.example template)
@@ -528,11 +582,12 @@ Docker Networks:
 - Logging drivers configured (json-file with rotation)
 
 **Service Organization:**
+
 ```
 services:
   # Source of Truth
   - nautobot (+ postgres, redis, celery workers)
-  
+
   # Monitoring & Observability
   - prometheus
   - grafana
@@ -540,23 +595,23 @@ services:
   - alertmanager
   - node-exporter
   - blackbox-exporter
-  
+
   # Logging
   - promtail (or rsyslog)
   - loki (or elasticsearch + kibana)
-  
+
   # Automation
   - ansible
   - awx (optional)
-  
+
   # Version Control
   - gitea
-  
+
   # AI Agents
   - ai-ops-agent
   - network-eng-agent
   - agent-ui (web interface)
-  
+
   # Supporting Services
   - rabbitmq (optional)
   - redis (shared cache)
@@ -565,6 +620,7 @@ services:
 ### **7.2 Makefile**
 
 **Essential Targets:**
+
 ```makefile
 init           - Initialize environment
 start          - Start all services
@@ -588,6 +644,7 @@ health-check   - Run comprehensive health check
 ### **7.3 Initialization & Setup**
 
 **Setup Script (`setup.sh`):**
+
 ```bash
 # Automated setup script should:
 1. Check prerequisites (Docker, Containerlab, Python version)
@@ -607,6 +664,7 @@ health-check   - Run comprehensive health check
 ### **7.4 Health Monitoring**
 
 **Health Check Script (health_check.sh):**
+
 - Verify all containers are running
 - Check service health endpoints
 - Test database connectivity
@@ -659,6 +717,7 @@ health-check   - Run comprehensive health check
 ### **9.2 Documentation Site (MkDocs)**
 
 **Sections:**
+
 1. **Getting Started**
    - Installation
    - Configuration
@@ -719,17 +778,20 @@ health-check   - Run comprehensive health check
 ### **10.1 Automated Tests**
 
 **Infrastructure Tests:**
+
 - All services start successfully
 - Health checks pass
 - Inter-service connectivity works
 - APIs are accessible
 
 **Ansible Tests:**
+
 - Playbook syntax validation (ansible-lint)
 - Dry-run execution against lab devices
 - Idempotency tests (run playbook twice, no changes second time)
 
 **Agent Tests:**
+
 - Unit tests for agent tools/functions
 - Integration tests with mock APIs
 - Example conversation tests
@@ -738,6 +800,7 @@ health-check   - Run comprehensive health check
 ### **10.2 Test Lab Scenarios**
 
 **Scenario Scripts:**
+
 1. Deploy lab → Add to Nautobot → Configure monitoring → Run health check
 2. Introduce device failure → Agent detects and reports → Remediate
 3. Config drift simulation → Compliance check → Auto-remediation
@@ -751,12 +814,14 @@ health-check   - Run comprehensive health check
 ### **11.1 System Requirements**
 
 **Minimum:**
+
 - CPU: 8 cores
 - RAM: 32 GB
 - Disk: 100 GB SSD
 - OS: Ubuntu 22.04 LTS or Debian 12
 
 **Recommended:**
+
 - CPU: 16 cores
 - RAM: 64 GB
 - Disk: 500 GB NVMe SSD
@@ -772,17 +837,20 @@ health-check   - Run comprehensive health check
 ### **11.3 Backup Strategy**
 
 **Automated Backups:**
+
 - Database dumps (Nautobot Postgres, Prometheus data)
 - Volume snapshots
 - Git repository backups
 - Configuration files
 
 **Backup Schedule:**
+
 - Daily incremental backups
 - Weekly full backups
 - Retain last 30 days
 
 **Restore Procedure:**
+
 - Documented step-by-step restore process
 - Tested regularly (quarterly restore drill)
 
@@ -793,6 +861,7 @@ health-check   - Run comprehensive health check
 The AI agent must create a complete, runnable project with:
 
 ### **13.1 Repository Structure**
+
 ```
 .
 ├── README.md
@@ -856,6 +925,7 @@ The AI agent must create a complete, runnable project with:
 ### **13.2 Working Features**
 
 On initial deployment (`make init && make start`):
+
 - All services healthy and accessible
 - Nautobot populated with source data
 - Prometheus scraping configured services
@@ -868,6 +938,7 @@ On initial deployment (`make init && make start`):
 ### **13.3 Example Workflows**
 
 Provide complete, tested examples of:
+
 1. Deploying a new device
 2. Monitoring device health with AI agent
 3. Configuring a service using AI-generated playbook
@@ -892,6 +963,7 @@ Provide complete, tested examples of:
 ## **15. OPTIONAL ENHANCEMENTS (STRETCH GOALS)**
 
 If time permits or for future iterations:
+
 - Kubernetes Helm charts for cloud deployment
 - Terraform modules for infrastructure as code
 - CI/CD pipeline (GitHub Actions) for testing and deployment
@@ -908,6 +980,7 @@ If time permits or for future iterations:
 ## **16. SUCCESS CRITERIA**
 
 The project is successful if:
+
 1. ✅ All services start successfully on a fresh system
 2. ✅ Containerlab devices are monitored (metrics + logs)
 3. ✅ Grafana dashboards show real-time data

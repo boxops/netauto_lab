@@ -197,6 +197,12 @@ class ChaosTaskRunner:
                     notes=f"Chaos validation of eng fix: {notes}",
                 )
 
+            # Positive verdict → gate on human approval before execution.
+            # The engineering agent always runs check_mode=True; an approval_gate
+            # is the only path that authorises check_mode=False execution.
+            if verdict in ("correct", "partial"):
+                self._create_approval_gate(task, fix_proposal, rca, verdict, risk_c, notes)
+
             logger.info(
                 "ChaosTaskRunner: completed validation task=%s verdict=%s confidence=%s",
                 task_id, verdict, conf,
@@ -207,3 +213,55 @@ class ChaosTaskRunner:
         except Exception as exc:
             self._task_store.fail_task(task_id, AGENT_NAME, str(exc)[:500])
             logger.exception("ChaosTaskRunner: task=%s failed", task_id)
+
+    # ── child task creation ───────────────────────────────────────────────────
+
+    def _create_approval_gate(
+        self,
+        validation_task: dict,
+        fix_proposal: dict,
+        rca: dict,
+        verdict: str,
+        risk_confirmed: str,
+        notes: str,
+    ) -> None:
+        fp     = validation_task.get("alert_fingerprint", "")
+        device = fix_proposal.get("device", "unknown")
+        fix_type = fix_proposal.get("fix_type", "config_change")
+        commands = fix_proposal.get("commands", "none")
+
+        priority_map = {"high": "high", "medium": "normal", "low": "low"}
+        priority = priority_map.get(risk_confirmed, "normal")
+
+        try:
+            child = self._task_store.create_task(
+                type="approval_gate",
+                created_by=AGENT_NAME,
+                assigned_to="human",
+                title=f"APPROVAL REQUIRED: {fix_type} on {device} "
+                      f"[risk={risk_confirmed}, verdict={verdict}]",
+                parent_id=validation_task["id"],
+                alert_fingerprint=fp,
+                priority=priority,
+                content={
+                    "fix_proposal":   fix_proposal,
+                    "rca":            rca,
+                    "validation_verdict": verdict,
+                    "risk_confirmed": risk_confirmed,
+                    "chaos_notes":    notes,
+                    "commands":       commands,
+                    "device":         device,
+                    "reason": (
+                        f"Chaos agent validated fix as '{verdict}' (risk={risk_confirmed}). "
+                        f"Human approval required to execute with check_mode=False."
+                    ),
+                },
+            )
+            self._task_store.request_approval(child["id"], AGENT_NAME)
+            logger.info(
+                "ChaosTaskRunner: created approval_gate task=%s for validation=%s "
+                "(verdict=%s risk=%s)",
+                child["id"], validation_task["id"], verdict, risk_confirmed,
+            )
+        except Exception as exc:
+            logger.error("ChaosTaskRunner: failed to create approval_gate task: %s", exc)

@@ -43,6 +43,7 @@ first grounding in inventory data — is the primary cause of poor agent respons
 ## Data Sources
 
 ### Nautobot (Source of Truth)
+
 - **Endpoint base**: `http://nautobot:8080/api/`
 - **Auth**: Token in `Authorization` header
 - **Key models**: `dcim/devices/`, `dcim/interfaces/`, `dcim/cables/`, `ipam/prefixes/`,
@@ -54,6 +55,7 @@ first grounding in inventory data — is the primary cause of poor agent respons
   The device name is extracted as `natural_slug.split("__")[0]`.
 
 ### Prometheus
+
 - **Endpoint**: `http://prometheus:9090/api/v1/`
 - **Key metric families**:
   | Metric prefix | Source | Key labels |
@@ -70,6 +72,7 @@ first grounding in inventory data — is the primary cause of poor agent respons
   tools handle this gracefully.
 
 ### Loki
+
 - **Endpoint**: `http://loki:3100/loki/api/v1/`
 - **Log stream**: `{job="syslog"}`, optionally with `device="hostname"` label
 - **Query language**: LogQL — tools use `|~` for case-insensitive regex matching
@@ -79,12 +82,13 @@ first grounding in inventory data — is the primary cause of poor agent respons
 
 Actions are executed by submitting jobs to the Nautobot Celery queue. The two jobs used by agents:
 
-| Job display name | Class | Purpose |
-|---|---|---|
-| `Commands Runner` | `CommandRunner` | Read-only show commands (`is_config=False`) or config-mode commands (`is_config=True`) |
-| `Deploy Device Configurations` | `DeployConfigurations` | Push arbitrary configuration blocks to devices |
+| Job display name               | Class                  | Purpose                                                                                |
+| ------------------------------ | ---------------------- | -------------------------------------------------------------------------------------- |
+| `Commands Runner`              | `CommandRunner`        | Read-only show commands (`is_config=False`) or config-mode commands (`is_config=True`) |
+| `Deploy Device Configurations` | `DeployConfigurations` | Push arbitrary configuration blocks to devices                                         |
 
 **API flow for every action tool:**
+
 ```
 1. Resolve device hostname → UUID
    GET /api/dcim/devices/?name=leaf1 → results[0].id
@@ -115,52 +119,52 @@ Actions are executed by submitting jobs to the Nautobot Celery queue. The two jo
 
 ### Tier 1 — Nautobot Discovery
 
-| Tool | When to use | Key argument |
-|---|---|---|
-| `get_all_devices()` | First step for any multi-device task | — |
-| `get_device_info(device_name)` | Full detail on one known device | exact hostname |
-| `get_device_interfaces(device_name)` | Interface list with neighbors and IPs | exact hostname |
-| `get_topology()` | Full physical topology / blast-radius analysis | — |
-| `get_connected_devices(device_name)` | Quick neighbor lookup | exact hostname |
-| `get_vlans()` | VLAN inventory | — |
-| `get_prefixes()` | Prefix/subnet inventory | — |
-| `get_ip_addresses(device_name, prefix)` | IPs by device or within a prefix | optional filters |
-| `get_available_ips(prefix, count)` | Find free IPs for allocation | prefix string |
-| `search_nautobot(query)` | Keyword search across all object types | search term |
-| `get_devices_by_location(location_name)` | All devices at one site | location name |
+| Tool                                     | When to use                                    | Key argument     |
+| ---------------------------------------- | ---------------------------------------------- | ---------------- |
+| `get_all_devices()`                      | First step for any multi-device task           | —                |
+| `get_device_info(device_name)`           | Full detail on one known device                | exact hostname   |
+| `get_device_interfaces(device_name)`     | Interface list with neighbors and IPs          | exact hostname   |
+| `get_topology()`                         | Full physical topology / blast-radius analysis | —                |
+| `get_connected_devices(device_name)`     | Quick neighbor lookup                          | exact hostname   |
+| `get_vlans()`                            | VLAN inventory                                 | —                |
+| `get_prefixes()`                         | Prefix/subnet inventory                        | —                |
+| `get_ip_addresses(device_name, prefix)`  | IPs by device or within a prefix               | optional filters |
+| `get_available_ips(prefix, count)`       | Find free IPs for allocation                   | prefix string    |
+| `search_nautobot(query)`                 | Keyword search across all object types         | search term      |
+| `get_devices_by_location(location_name)` | All devices at one site                        | location name    |
 
 ### Tier 2 — Prometheus Metrics
 
-| Tool | When to use |
-|---|---|
-| `get_active_alerts()` | Start of every incident investigation |
-| `get_recent_alert_events(limit)` | Alert history including resolved |
-| `get_device_metrics(device_name)` | Reachability, RTT, packet loss per device |
-| `get_interface_metrics(device_name, interface_name)` | Interface traffic and error counters |
-| `query_prometheus(promql, minutes)` | Custom PromQL for advanced queries |
+| Tool                                                 | When to use                               |
+| ---------------------------------------------------- | ----------------------------------------- |
+| `get_active_alerts()`                                | Start of every incident investigation     |
+| `get_recent_alert_events(limit)`                     | Alert history including resolved          |
+| `get_device_metrics(device_name)`                    | Reachability, RTT, packet loss per device |
+| `get_interface_metrics(device_name, interface_name)` | Interface traffic and error counters      |
+| `query_prometheus(promql, minutes)`                  | Custom PromQL for advanced queries        |
 
 ### Tier 3 — Loki Logs
 
-| Tool | Searches for |
-|---|---|
-| `get_interface_events(device_name, minutes)` | Link up/down, protocol changes |
-| `get_bgp_events(device_name, minutes)` | BGP state transitions, Established/Idle |
-| `get_recent_errors(device_name, minutes)` | ERROR/WARNING/CRITICAL log lines |
-| `query_logs(device, pattern, minutes)` | Arbitrary log pattern (LogQL) |
+| Tool                                         | Searches for                            |
+| -------------------------------------------- | --------------------------------------- |
+| `get_interface_events(device_name, minutes)` | Link up/down, protocol changes          |
+| `get_bgp_events(device_name, minutes)`       | BGP state transitions, Established/Idle |
+| `get_recent_errors(device_name, minutes)`    | ERROR/WARNING/CRITICAL log lines        |
+| `query_logs(device, pattern, minutes)`       | Arbitrary log pattern (LogQL)           |
 
 ### Tier 4 — Actions (Nautobot Jobs)
 
 All action tools submit jobs to the Nautobot Celery queue and poll for completion.
 Output is read from `GET /api/extras/job-results/{id}/logs/`.
 
-| Tool | Nautobot Job | Notes |
-|---|---|---|
-| `run_show_commands(device_name, commands)` | Commands Runner (`is_config=False`) | Read-only; any show command |
-| `run_config_commands(device_name, config_lines, check_mode)` | Deploy Device Configurations | check_mode=True (default) = simulation only |
-| `shutdown_interface(device, interface, check_mode)` | Deploy Device Configurations | Chaos — admin-shut; check=True shows current state first |
-| `restore_interface(device, interface, check_mode)` | Deploy Device Configurations | Chaos — no shutdown |
-| `flap_bgp_neighbor(device, neighbor_ip, method, check_mode)` | Commands Runner (`is_config=True`) | Chaos — clear BGP session |
-| `verify_bgp_state(device, neighbor_ip)` | Commands Runner (`is_config=False`) | Chaos — confirm BGP is Established |
+| Tool                                                         | Nautobot Job                        | Notes                                                    |
+| ------------------------------------------------------------ | ----------------------------------- | -------------------------------------------------------- |
+| `run_show_commands(device_name, commands)`                   | Commands Runner (`is_config=False`) | Read-only; any show command                              |
+| `run_config_commands(device_name, config_lines, check_mode)` | Deploy Device Configurations        | check_mode=True (default) = simulation only              |
+| `shutdown_interface(device, interface, check_mode)`          | Deploy Device Configurations        | Chaos — admin-shut; check=True shows current state first |
+| `restore_interface(device, interface, check_mode)`           | Deploy Device Configurations        | Chaos — no shutdown                                      |
+| `flap_bgp_neighbor(device, neighbor_ip, method, check_mode)` | Commands Runner (`is_config=True`)  | Chaos — clear BGP session                                |
+| `verify_bgp_state(device, neighbor_ip)`                      | Commands Runner (`is_config=False`) | Chaos — confirm BGP is Established                       |
 
 ---
 
@@ -242,6 +246,7 @@ get_device_metrics(target_device)
 ```
 
 After the experiment:
+
 ```
 get_active_alerts()             → verify expected alerts fired
 get_interface_events(device)    → observe syslog event timeline
@@ -271,34 +276,34 @@ get_recent_errors(minutes=60)
 
 ## Agent Tool Sets
 
-| Tool | Ops | Engineering | Chaos |
-|---|:---:|:---:|:---:|
-| get_all_devices | ✓ | ✓ | ✓ |
-| get_device_info | ✓ | ✓ | ✓ |
-| get_device_interfaces | ✓ | ✓ | ✓ |
-| get_topology | ✓ | ✓ | ✓ |
-| get_connected_devices | ✓ | ✓ | ✓ |
-| get_vlans | ✓ | ✓ | — |
-| get_prefixes | ✓ | ✓ | — |
-| get_ip_addresses | ✓ | ✓ | — |
-| get_available_ips | ✓ | ✓ | — |
-| search_nautobot | ✓ | ✓ | — |
-| get_devices_by_location | ✓ | ✓ | — |
-| get_active_alerts | ✓ | ✓ | ✓ |
-| get_recent_alert_events | ✓ | — | ✓ |
-| get_device_metrics | ✓ | ✓ | ✓ |
-| get_interface_metrics | ✓ | ✓ | ✓ |
-| query_prometheus | ✓ | — | ✓ |
-| get_interface_events | ✓ | — | ✓ |
-| get_bgp_events | ✓ | — | ✓ |
-| get_recent_errors | ✓ | — | ✓ |
-| query_logs | ✓ | — | ✓ |
-| run_show_commands | ✓ | ✓ | ✓ |
-| run_config_commands | ✓ | ✓ | ✓ |
-| shutdown_interface | — | — | ✓ |
-| restore_interface | — | — | ✓ |
-| flap_bgp_neighbor | — | — | ✓ |
-| verify_bgp_state | — | — | ✓ |
+| Tool                    | Ops | Engineering | Chaos |
+| ----------------------- | :-: | :---------: | :---: |
+| get_all_devices         |  ✓  |      ✓      |   ✓   |
+| get_device_info         |  ✓  |      ✓      |   ✓   |
+| get_device_interfaces   |  ✓  |      ✓      |   ✓   |
+| get_topology            |  ✓  |      ✓      |   ✓   |
+| get_connected_devices   |  ✓  |      ✓      |   ✓   |
+| get_vlans               |  ✓  |      ✓      |   —   |
+| get_prefixes            |  ✓  |      ✓      |   —   |
+| get_ip_addresses        |  ✓  |      ✓      |   —   |
+| get_available_ips       |  ✓  |      ✓      |   —   |
+| search_nautobot         |  ✓  |      ✓      |   —   |
+| get_devices_by_location |  ✓  |      ✓      |   —   |
+| get_active_alerts       |  ✓  |      ✓      |   ✓   |
+| get_recent_alert_events |  ✓  |      —      |   ✓   |
+| get_device_metrics      |  ✓  |      ✓      |   ✓   |
+| get_interface_metrics   |  ✓  |      ✓      |   ✓   |
+| query_prometheus        |  ✓  |      —      |   ✓   |
+| get_interface_events    |  ✓  |      —      |   ✓   |
+| get_bgp_events          |  ✓  |      —      |   ✓   |
+| get_recent_errors       |  ✓  |      —      |   ✓   |
+| query_logs              |  ✓  |      —      |   ✓   |
+| run_show_commands       |  ✓  |      ✓      |   ✓   |
+| run_config_commands     |  ✓  |      ✓      |   ✓   |
+| shutdown_interface      |  —  |      —      |   ✓   |
+| restore_interface       |  —  |      —      |   ✓   |
+| flap_bgp_neighbor       |  —  |      —      |   ✓   |
+| verify_bgp_state        |  —  |      —      |   ✓   |
 
 ---
 

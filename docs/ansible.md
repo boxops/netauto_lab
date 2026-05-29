@@ -29,6 +29,7 @@ ansible-playbook playbooks/health_check.yml -i inventory/nautobot.yml
 ```
 
 **What it does:**
+
 - Gathers device facts (OS version, uptime, serial number)
 - Checks interface operational states
 - Verifies BGP peer adjacencies (if configured)
@@ -45,6 +46,7 @@ ansible-playbook playbooks/backup_config.yml -i inventory/nautobot.yml
 ```
 
 **Variables:**
+
 - `backup_dir` (default: `/backups`) — local path for config files
 - `push_to_git` (default: `true`) — commit and push configs to Gitea
 
@@ -63,6 +65,7 @@ ansible-playbook playbooks/deploy_config.yml \
 ```
 
 **Variables:**
+
 - `config_source` — Nautobot Golden Config rendered template
 - `rollback_on_failure` (default: `true`)
 
@@ -91,6 +94,7 @@ ansible-playbook playbooks/provision_device.yml \
 ```
 
 **Workflow:**
+
 1. Creates device record in Nautobot
 2. Assigns management IP from IPAM
 3. Configures baseline config (common role)
@@ -116,18 +120,18 @@ Located at `ansible/inventory/lab.yml`. Hard-coded Containerlab management IPs f
 ```yaml
 # Example: target just spines
 ansible-playbook playbooks/health_check.yml \
-  -i inventory/lab.yml --limit spines
+-i inventory/lab.yml --limit spines
 ```
 
 ## Ansible Roles
 
-| Role | Purpose |
-|------|---------|
-| `common` | Hostname, DNS, NTP, management ACL, logging baseline |
-| `monitoring` | SNMPv3 credentials, syslog server config |
+| Role         | Purpose                                                  |
+| ------------ | -------------------------------------------------------- |
+| `common`     | Hostname, DNS, NTP, management ACL, logging baseline     |
+| `monitoring` | SNMPv3 credentials, syslog server config                 |
 | `interfaces` | Interface descriptions, L3 IPs, trunk/access VLAN config |
-| `routing` | BGP, OSPF, and static route configuration |
-| `security` | SSH hardening, AAA (TACACS/RADIUS), control-plane policy |
+| `routing`    | BGP, OSPF, and static route configuration                |
+| `security`   | SSH hardening, AAA (TACACS/RADIUS), control-plane policy |
 
 ## Linting
 
