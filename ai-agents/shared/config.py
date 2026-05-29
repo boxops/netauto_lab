@@ -44,6 +44,17 @@ class Settings(BaseSettings):
     eng_agent_port: int = 8001
     chaos_agent_port: int = 8002
 
+    # Cost control — token budgets and pricing
+    # The hourly limit is set high so the daily dollar budget is the real hard stop.
+    # A low hourly limit causes problems during testing when multiple runs happen
+    # within the same clock-hour window.
+    max_tokens_per_agent_per_hour: int = 2_000_000
+    max_tokens_per_agent_per_day: int = 1_000_000
+    daily_budget_usd: float = 5.00
+    # GPT-4o pricing per 1k tokens (update when model changes)
+    openai_input_cost_per_1k: float = 0.005
+    openai_output_cost_per_1k: float = 0.015
+
     @property
     def use_openai(self) -> bool:
         """Return True if OpenAI API key is configured."""

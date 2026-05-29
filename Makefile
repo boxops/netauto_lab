@@ -154,7 +154,7 @@ clean:  ## Remove all containers and data (DESTRUCTIVE – prompts for confirmat
 	  echo "Cancelled."; \
 	fi
 
-##@ Lab
+##@ Containerlab
 
 deploy-lab:  ## Deploy Containerlab spine-leaf topology
 	@echo -e "$(GREEN)Deploying Containerlab topology...$(NC)"

@@ -517,6 +517,9 @@ services:
       PROMETHEUS_URL: "http://prometheus:9090"
       LOKI_URL: "http://loki:3100"
       ALERT_EVENT_RECEIVER_URL: "http://alert-event-receiver:8770"
+      ACTIVITY_DB_PATH: "/app/data/activity.db"
+    volumes:
+      - agent-activity-data:/app/data
     networks:
       - mgmt-network
       - monitoring-network
@@ -543,6 +546,9 @@ services:
       AGENT_TYPE: engineering
       NAUTOBOT_URL: "http://nautobot:8080"
       NAUTOBOT_TOKEN: "${NAUTOBOT_SUPERUSER_API_TOKEN}"
+      ACTIVITY_DB_PATH: "/app/data/activity.db"
+    volumes:
+      - agent-activity-data:/app/data
     networks:
       - mgmt-network
     depends_on:
@@ -568,6 +574,9 @@ services:
       PROMETHEUS_URL: "http://prometheus:9090"
       LOKI_URL: "http://loki:3100"
       ALERT_EVENT_RECEIVER_URL: "http://alert-event-receiver:8770"
+      ACTIVITY_DB_PATH: "/app/data/activity.db"
+    volumes:
+      - agent-activity-data:/app/data
     networks:
       - mgmt-network
       - monitoring-network

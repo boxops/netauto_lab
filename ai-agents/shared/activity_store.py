@@ -56,6 +56,9 @@ class ActivityStore:
         self._db_path = db_path
         self._lock = threading.Lock()
         with self._connect() as conn:
+            # WAL mode allows concurrent reads + one writer across multiple processes
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
             conn.executescript(_SCHEMA)
 
     @contextmanager

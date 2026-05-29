@@ -63,25 +63,11 @@ scrape_configs:
     static_configs:
       - targets: ['alertmanager:9093']
 
-  # SNMP exporter for network devices
-  - job_name: snmp-devices
-    static_configs:
-      - targets:
-          - 172.20.20.11   # spine1
-          - 172.20.20.12   # spine2
-          - 172.20.20.21   # leaf1
-          - 172.20.20.22   # leaf2
-          - 172.20.20.23   # leaf3
-    metrics_path: /snmp
-    params:
-      module: [if_mib]
-    relabel_configs:
-      - source_labels: [__address__]
-        target_label: __param_target
-      - source_labels: [__param_target]
-        target_label: instance
-      - target_label: __address__
-        replacement: blackbox-exporter:9115
+  # NOTE: SNMP interface and BGP metrics are collected by Telegraf (inputs.snmp)
+  # and exposed via the 'telegraf' job above on port 9273.
+  # A dedicated snmp-devices job using blackbox-exporter was removed — the
+  # blackbox-exporter has no SNMP module and was producing up=0 false positives
+  # for all devices, causing spurious DeviceDown alerts across the whole network.
 
   # Nautobot dynamic targets (written by PrometheusTargetSync job)
   - job_name: nautobot-devices

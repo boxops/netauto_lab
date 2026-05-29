@@ -1,26 +1,36 @@
 """
 Network Operations AI Agent
-
-Capabilities:
-- Monitor Prometheus alerts and investigate root causes
-- Query Loki for log patterns and correlate with metrics
-- Identify affected devices and suggest remediations
-- Execute approved remediations via Ansible (check mode by default)
 """
 from __future__ import annotations
 
 import logging
 from typing import AsyncGenerator
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
 from shared.config import settings
 from shared.llm import get_llm
 from shared.tools import OPS_TOOLS
+from shared.rate_limiter import RateLimiter, BudgetExceededError
+from shared.task_store import TaskStore
+from shared.status_tracker import AgentStatus, StatusCallbackHandler
 
 logger = logging.getLogger(__name__)
+
+AGENT_NAME = "ops_agent"
+
+# Module-level singletons — shared by the FastAPI server and the agent
+agent_status   = AgentStatus(agent_name=AGENT_NAME)
+task_store     = TaskStore()
+rate_limiter   = RateLimiter()
+status_handler = StatusCallbackHandler(
+    status=agent_status,
+    agent_name=AGENT_NAME,
+    task_store=task_store,
+    rate_limiter=rate_limiter,
+)
 
 SYSTEM_PROMPT = """You are an expert Network Operations AI agent for a network automation lab.
 
@@ -60,13 +70,7 @@ and Ansible (automation). Always reason step-by-step and cite tool results in yo
 
 ### Tier 4 — Actions (check_mode=True by default; requires explicit approval to execute)
 - run_show_commands(device_name, commands)
-    → send any show/read command to a device via the Nautobot 'Commands Runner' job
-    → example: run_show_commands("leaf1", "show interfaces Ethernet1 status")
 - run_config_commands(device_name, config_lines, check_mode)
-    → apply configuration to a device via the Nautobot 'Deploy Device Configurations' job
-    → check_mode=True (default): SIMULATION — returns what WOULD be sent, device unchanged
-    → check_mode=False: applies the config — only after explicit user approval
-    → example: run_config_commands("leaf1", "interface Ethernet1\nshutdown", check_mode=False)
 
 ## Workflow Patterns
 
@@ -77,17 +81,6 @@ and Ansible (automation). Always reason step-by-step and cite tool results in yo
 4. get_bgp_events(device) → check for BGP changes if routing-related
 5. get_device_interfaces(device) + get_topology() → understand blast radius
 6. Summarise findings with timeline and recommend remediation
-
-**Device health check**
-1. get_all_devices() → confirm device exists and get primary IP
-2. get_device_metrics(device) → reachability, RTT, packet loss
-3. get_recent_errors(device) → any recent error logs
-4. get_interface_metrics(device) → error counters on interfaces
-
-**Topology and redundancy review**
-1. get_topology() → full physical connections
-2. get_device_interfaces(device) → per-device interface details
-3. Identify single points of failure, count uplinks per device
 """
 
 
@@ -109,14 +102,32 @@ class OpsAgent:
         return response
 
     def chat_with_trace(
-        self, message: str, session_id: str = "default"
+        self,
+        message: str,
+        session_id: str = "default",
+        task_id: str | None = None,
+        task_type: str | None = None,
     ) -> tuple[str, list[dict]]:
         """Return (response, tool_calls) capturing every tool invoked in the ReAct loop."""
-        config = {"configurable": {"thread_id": session_id}}
-        result = self.agent.invoke(
-            {"messages": [HumanMessage(content=message)]},
-            config=config,
+        rate_limiter.check_budget(AGENT_NAME)
+
+        status_handler.set_context(
+            session_id=session_id,
+            task_id=task_id,
+            task_type=task_type,
         )
+        config = {
+            "configurable": {"thread_id": session_id},
+            "callbacks": [status_handler],
+        }
+        try:
+            result = self.agent.invoke(
+                {"messages": [HumanMessage(content=message)]},
+                config=config,
+            )
+        finally:
+            status_handler.clear_context()
+
         tool_calls: list[dict] = []
         for msg in result["messages"]:
             if isinstance(msg, ToolMessage):
@@ -133,22 +144,19 @@ class OpsAgent:
         return result["messages"][-1].content, tool_calls
 
     async def astream(self, message: str, session_id: str = "default") -> AsyncGenerator[str, None]:
-        """
-        Stream the agent's response token by token.
-
-        Args:
-            message: User input text.
-            session_id: Conversation session identifier.
-
-        Yields:
-            Response text chunks.
-        """
-        config = {"configurable": {"thread_id": session_id}}
-        async for chunk in self.agent.astream(
-            {"messages": [HumanMessage(content=message)]},
-            config=config,
-            stream_mode="messages",
-        ):
-            for msg in chunk:
-                if isinstance(msg, AIMessage) and msg.content:
-                    yield msg.content
+        config = {
+            "configurable": {"thread_id": session_id},
+            "callbacks": [status_handler],
+        }
+        status_handler.set_context(session_id=session_id)
+        try:
+            async for chunk in self.agent.astream(
+                {"messages": [HumanMessage(content=message)]},
+                config=config,
+                stream_mode="messages",
+            ):
+                for msg in chunk:
+                    if isinstance(msg, AIMessage) and msg.content:
+                        yield msg.content
+        finally:
+            status_handler.clear_context()

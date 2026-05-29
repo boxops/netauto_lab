@@ -24,6 +24,9 @@ def get_llm(temperature: float = 0.1) -> BaseChatModel:
             model=settings.openai_model,
             temperature=temperature,
             api_key=settings.openai_api_key,
+            # Retry up to 4 times on transient errors (including 429 rate limits).
+            # LangChain uses exponential backoff between retries.
+            max_retries=4,
         )
     else:
         from langchain_ollama import ChatOllama

@@ -1,11 +1,5 @@
 """
 Network Chaos Monkey AI Agent
-
-Capabilities:
-- Propose controlled chaos experiments in lab environments
-- Assess blast radius before suggesting disruptive actions
-- Recommend simulation-first checks and rollback strategies
-- Execute approved low-risk playbooks in check mode by default
 """
 from __future__ import annotations
 
@@ -19,8 +13,23 @@ from langgraph.prebuilt import create_react_agent
 from chaos_agent.chaos_tools import CHAOS_TOOLS
 from shared.llm import get_llm
 from shared.tools import OPS_TOOLS
+from shared.rate_limiter import RateLimiter, BudgetExceededError
+from shared.task_store import TaskStore
+from shared.status_tracker import AgentStatus, StatusCallbackHandler
 
 logger = logging.getLogger(__name__)
+
+AGENT_NAME = "chaos_agent"
+
+agent_status   = AgentStatus(agent_name=AGENT_NAME)
+task_store     = TaskStore()
+rate_limiter   = RateLimiter()
+status_handler = StatusCallbackHandler(
+    status=agent_status,
+    agent_name=AGENT_NAME,
+    task_store=task_store,
+    rate_limiter=rate_limiter,
+)
 
 SYSTEM_PROMPT = """You are a Chaos Monkey AI agent for a network automation lab.
 
@@ -31,81 +40,31 @@ validate detection, observability, and recovery workflows. This agent is lab-onl
 - NEVER suggest actions for production environments.
 - Always default to check_mode=True. Only set check_mode=False when the user says "approved", "execute", or "apply".
 - Always assess blast radius BEFORE proposing any disruptive action.
-- If a requested action is too broad or unsafe, propose a scoped-down alternative.
-- Never expose credentials, secrets, or tokens.
 
 ## Tool Guide
 
-### Tier 1 — Nautobot Discovery (assess topology and blast radius FIRST)
-- get_all_devices()                          → full device list with roles and IPs
-- get_device_info(device_name)               → role, platform, primary IP for one device
-- get_device_interfaces(device_name)         → all interfaces with type, neighbor, and status
-- get_topology()                             → ALL cable connections; essential for blast-radius analysis
-- get_connected_devices(device_name)         → quick neighbor list for one device
+### Tier 1 — Nautobot Discovery
+- get_all_devices(), get_device_info(), get_device_interfaces(), get_topology(), get_connected_devices()
 
-### Tier 2 — Prometheus (establish baseline and verify recovery)
-- get_active_alerts()                        → check baseline alert state BEFORE the experiment
-- get_device_metrics(device_name)            → reachability and interface oper status
-- get_interface_metrics(device_name, iface)  → traffic baseline before disruption
-- query_prometheus(promql)                   → custom queries (e.g., BGP session counts)
+### Tier 2 — Prometheus
+- get_active_alerts(), get_device_metrics(), get_interface_metrics(), query_prometheus()
 
-### Tier 3 — Loki (observe experiment signals)
-- get_interface_events(device_name, minutes) → watch for interface up/down events during experiment
-- get_bgp_events(device_name, minutes)       → watch for BGP reconvergence events
-- get_recent_errors(device_name, minutes)    → check for cascading errors
+### Tier 3 — Loki
+- get_interface_events(), get_bgp_events(), get_recent_errors()
 
 ### Tier 4 — Chaos Actions (always check_mode=True by default)
 - shutdown_interface(device, interface, check_mode)
-    → admin-shut a link via 'Deploy Device Configurations' job
-    → check_mode=True: shows current interface state + SIMULATION of what would happen
 - restore_interface(device, interface, check_mode)
-    → no-shutdown via 'Deploy Device Configurations' job
 - flap_bgp_neighbor(device, neighbor_ip, method, check_mode)
-    → clear BGP session via 'Commands Runner' job (is_config=True)
 - verify_bgp_state(device, neighbor_ip)
-    → check BGP session state via 'Commands Runner' job (read-only)
 
-### Tier 4 — General Device Actions
+### Tier 4 — General Actions
 - run_show_commands(device_name, commands)
-    → send any show/read command via the Nautobot 'Commands Runner' job
 - run_config_commands(device_name, config_lines, check_mode)
-    → apply arbitrary config via the Nautobot 'Deploy Device Configurations' job
-
-## Workflow Patterns
-
-**Designing a new chaos experiment**
-1. get_topology() → understand physical redundancy (which links are single points of failure?)
-2. get_all_devices() → identify device roles (spines vs. leaves vs. clients)
-3. get_device_interfaces(target_device) → identify exact interface names for shutdown_interface
-4. get_active_alerts() → document the pre-experiment baseline
-5. get_device_metrics(target_device) → confirm device is reachable before disruption
-6. Define: goal, blast radius, expected signals, rollback steps, success criteria
-
-**Running a link-failure experiment**
-1. get_topology() → confirm redundant paths exist before disrupting
-2. get_device_interfaces(device) → get exact interface name
-3. get_device_metrics(device) → baseline reachability
-4. shutdown_interface(device, interface, check_mode=True) → dry-run first
-5. [With approval] shutdown_interface(device, interface, check_mode=False)
-6. get_active_alerts() → verify alert fired as expected
-7. get_interface_events(device) → observe the syslog event
-8. restore_interface(device, interface, check_mode=False) → rollback
-9. get_device_metrics(device) + get_bgp_events(device) → verify recovery
-
-**Blast radius assessment**
-1. get_topology() → map all connections to/from the target device
-2. get_device_interfaces(device) → count uplinks and access ports
-3. Identify: which devices lose connectivity, which routing adjacencies drop,
-   which services are affected, whether redundant paths exist
 
 ## Experiment Report Format
-Always structure experiment proposals as:
-- **Goal**: what hypothesis is being tested
-- **Pre-conditions**: what must be true before starting (redundancy exists, alerts at baseline)
-- **Procedure**: numbered steps using specific tool calls
-- **Expected signals**: which alerts fire, which log patterns appear, which metrics change
-- **Success criteria**: what proves the experiment passed
-- **Rollback**: exact steps and tools to restore normal state
+Always structure proposals with: Goal, Pre-conditions, Procedure, Expected signals,
+Success criteria, Rollback steps.
 """
 
 
@@ -123,20 +82,35 @@ class ChaosAgent:
         )
 
     def chat(self, message: str, session_id: str = "default") -> str:
-        """Send a message to the chaos agent and get a response."""
         response, _ = self.chat_with_trace(message, session_id=session_id)
         return response
 
     def chat_with_trace(
-        self, message: str, session_id: str = "default"
+        self,
+        message: str,
+        session_id: str = "default",
+        task_id: str | None = None,
+        task_type: str | None = None,
     ) -> tuple[str, list[dict]]:
-        """Send a message and return (response, tool_calls) where tool_calls captures
-        every tool invocation made during the ReAct loop."""
-        config = {"configurable": {"thread_id": session_id}}
-        result = self.agent.invoke(
-            {"messages": [HumanMessage(content=message)]},
-            config=config,
+        rate_limiter.check_budget(AGENT_NAME)
+
+        status_handler.set_context(
+            session_id=session_id,
+            task_id=task_id,
+            task_type=task_type,
         )
+        config = {
+            "configurable": {"thread_id": session_id},
+            "callbacks": [status_handler],
+        }
+        try:
+            result = self.agent.invoke(
+                {"messages": [HumanMessage(content=message)]},
+                config=config,
+            )
+        finally:
+            status_handler.clear_context()
+
         tool_calls: list[dict] = []
         for msg in result["messages"]:
             if isinstance(msg, ToolMessage):
@@ -153,13 +127,19 @@ class ChaosAgent:
         return result["messages"][-1].content, tool_calls
 
     async def astream(self, message: str, session_id: str = "default") -> AsyncGenerator[str, None]:
-        """Stream the chaos agent response."""
-        config = {"configurable": {"thread_id": session_id}}
-        async for chunk in self.agent.astream(
-            {"messages": [HumanMessage(content=message)]},
-            config=config,
-            stream_mode="messages",
-        ):
-            for msg in chunk:
-                if isinstance(msg, AIMessage) and msg.content:
-                    yield msg.content
+        config = {
+            "configurable": {"thread_id": session_id},
+            "callbacks": [status_handler],
+        }
+        status_handler.set_context(session_id=session_id)
+        try:
+            async for chunk in self.agent.astream(
+                {"messages": [HumanMessage(content=message)]},
+                config=config,
+                stream_mode="messages",
+            ):
+                for msg in chunk:
+                    if isinstance(msg, AIMessage) and msg.content:
+                        yield msg.content
+        finally:
+            status_handler.clear_context()

@@ -1,12 +1,5 @@
 """
 Network Engineering AI Agent
-
-Capabilities:
-- Design and generate device configurations from natural language
-- IP address and VLAN planning via Nautobot
-- Generate Ansible playbooks
-- Review configurations for best practices
-- Answer network design questions
 """
 from __future__ import annotations
 
@@ -19,8 +12,23 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from shared.llm import get_llm
 from shared.tools import ENG_TOOLS
+from shared.rate_limiter import RateLimiter, BudgetExceededError
+from shared.task_store import TaskStore
+from shared.status_tracker import AgentStatus, StatusCallbackHandler
 
 logger = logging.getLogger(__name__)
+
+AGENT_NAME = "eng_agent"
+
+agent_status   = AgentStatus(agent_name=AGENT_NAME)
+task_store     = TaskStore()
+rate_limiter   = RateLimiter()
+status_handler = StatusCallbackHandler(
+    status=agent_status,
+    agent_name=AGENT_NAME,
+    task_store=task_store,
+    rate_limiter=rate_limiter,
+)
 
 SYSTEM_PROMPT = """You are an expert Network Engineering AI assistant for a multi-vendor network automation lab.
 
@@ -48,58 +56,10 @@ Always query Nautobot first to ground your answers in actual lab data before gen
 
 ### Tier 3 — Actions (check_mode=True by default; requires explicit approval to execute)
 - run_show_commands(device_name, commands)
-    → send any show/read command to a device via the Nautobot 'Commands Runner' job
-    → example: run_show_commands("leaf1", "show running-config interface Ethernet1")
 - run_config_commands(device_name, config_lines, check_mode)
-    → apply configuration to a device via the Nautobot 'Deploy Device Configurations' job
-    → check_mode=True (default): SIMULATION — returns what WOULD be sent, device unchanged
-    → check_mode=False: applies the config — only after explicit user approval
-    → example: run_config_commands("leaf1", "interface Ethernet1\n description Uplink to spine1", check_mode=False)
-
-## Workflow Patterns
-
-**"Find all devices and their interfaces / generate interface descriptions"**
-1. get_all_devices() → get device names and roles
-2. get_device_interfaces(device) for each device → get interface details and neighbors
-3. Use description and connected_to fields to generate standardised descriptions
-
-**"Design config for a new device"**
-1. get_all_devices() + get_topology() → understand existing topology and naming
-2. get_vlans() → see existing VLANs to reference
-3. get_prefixes() → understand IP addressing scheme
-4. get_available_ips(prefix) → allocate management IP
-5. Generate config using lab conventions (device names, AS numbers, VLAN IDs)
-
-**"Plan IP addressing for a new subnet"**
-1. get_prefixes() → review existing prefixes to avoid overlap
-2. get_ip_addresses(prefix=parent_prefix) → see what's already allocated
-3. get_available_ips(prefix, count) → find free addresses
-
-**"Verify or read current device state"**
-1. run_show_commands(device, "show running-config") → see current configuration
-2. run_show_commands(device, "show interfaces") → see interface state
-
-**"Apply a configuration change"**
-1. run_show_commands(device, "show running-config interface X") → capture current state
-2. run_config_commands(device, config_lines, check_mode=True) → simulate the change
-3. Get user approval → run_config_commands(device, config_lines, check_mode=False)
-
-**"Document the topology"**
-1. get_topology() → all cable connections
-2. get_all_devices() → device roles and platforms
-3. get_vlans() + get_prefixes() → layer 2/3 context
-4. Produce Mermaid diagram and written description
-
-## Configuration Standards
-- Always validate syntax against the target platform
-- Security: SSH only, SNMPv3, no default credentials
-- Include NTP, syslog, and SNMP monitoring in all device configs
-- Use consistent naming: interfaces as shown in Nautobot, descriptions as "peer_device:peer_interface"
-- For configuration verification, use run_show_commands() before and after any change
 
 ## Confirmation Required Before
 - Allocating IPs or VLANs that modify Nautobot
-- Generating configs that would change production behaviour
 - Applying config changes with check_mode=False
 """
 
@@ -122,14 +82,31 @@ class EngineeringAgent:
         return response
 
     def chat_with_trace(
-        self, message: str, session_id: str = "default"
+        self,
+        message: str,
+        session_id: str = "default",
+        task_id: str | None = None,
+        task_type: str | None = None,
     ) -> tuple[str, list[dict]]:
-        """Return (response, tool_calls) capturing every tool invoked in the ReAct loop."""
-        config = {"configurable": {"thread_id": session_id}}
-        result = self.agent.invoke(
-            {"messages": [HumanMessage(content=message)]},
-            config=config,
+        rate_limiter.check_budget(AGENT_NAME)
+
+        status_handler.set_context(
+            session_id=session_id,
+            task_id=task_id,
+            task_type=task_type,
         )
+        config = {
+            "configurable": {"thread_id": session_id},
+            "callbacks": [status_handler],
+        }
+        try:
+            result = self.agent.invoke(
+                {"messages": [HumanMessage(content=message)]},
+                config=config,
+            )
+        finally:
+            status_handler.clear_context()
+
         tool_calls: list[dict] = []
         for msg in result["messages"]:
             if isinstance(msg, ToolMessage):
@@ -146,12 +123,19 @@ class EngineeringAgent:
         return result["messages"][-1].content, tool_calls
 
     async def astream(self, message: str, session_id: str = "default") -> AsyncGenerator[str, None]:
-        config = {"configurable": {"thread_id": session_id}}
-        async for chunk in self.agent.astream(
-            {"messages": [HumanMessage(content=message)]},
-            config=config,
-            stream_mode="messages",
-        ):
-            for msg in chunk:
-                if isinstance(msg, AIMessage) and msg.content:
-                    yield msg.content
+        config = {
+            "configurable": {"thread_id": session_id},
+            "callbacks": [status_handler],
+        }
+        status_handler.set_context(session_id=session_id)
+        try:
+            async for chunk in self.agent.astream(
+                {"messages": [HumanMessage(content=message)]},
+                config=config,
+                stream_mode="messages",
+            ):
+                for msg in chunk:
+                    if isinstance(msg, AIMessage) and msg.content:
+                        yield msg.content
+        finally:
+            status_handler.clear_context()
