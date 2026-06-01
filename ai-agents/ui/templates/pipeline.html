@@ -4,8 +4,21 @@
 
 {% block content %}
 <p class="muted mb-16" style="font-size:0.83em">
-  Live agent states refresh every 2 s · Task queue refreshes every 3 s · Cost &amp; KPIs refresh every 30 s
+  Live agent states refresh every 2 s · Task queue refreshes every 3 s · Alert pipeline refreshes every 3 s
 </p>
+
+{# ── Live Agent Status ─────────────────────────────────────────────────────── #}
+<div class="section">
+  <div class="section-title">🤖 Live Agent Status</div>
+  <div id="agent-status"
+       hx-get="/partials/agent-status"
+       hx-trigger="every 2s"
+       hx-swap="outerHTML">
+    {% include "partials/agent_status.html" %}
+  </div>
+</div>
+
+<hr class="divider">
 
 {# ── Alert Pipeline Visualiser ────────────────────────────────────────────── #}
 <div class="section">
@@ -39,24 +52,18 @@
   <div id="pipeline-visual"
        hx-get="/partials/pipeline"
        hx-vals='js:{"fp": document.getElementById("fp-select")?.value || ""}'
-       hx-trigger="every 3s"
+       hx-trigger="load, every 3s"
        hx-swap="outerHTML">
-    {% include "partials/pipeline_visual.html" %}
+    <span class="muted" style="font-size:0.83em">Loading pipeline…</span>
   </div>
+</div>
+
+{# ── Task detail panel — outside the polling boundary so it survives refreshes #}
+<div id="pipeline-task-detail" class="detail-panel mb-16"
+     style="display:none">
 </div>
 
 <hr class="divider">
-
-{# ── Live Agent Status ─────────────────────────────────────────────────────── #}
-<div class="section">
-  <div class="section-title">🤖 Live Agent Status</div>
-  <div id="agent-status"
-       hx-get="/partials/agent-status"
-       hx-trigger="every 2s"
-       hx-swap="outerHTML">
-    {% include "partials/agent_status.html" %}
-  </div>
-</div>
 
 {# ── Task Queue ────────────────────────────────────────────────────────────── #}
 <div class="section">
@@ -116,20 +123,8 @@
   <div class="flex gap-8 items-center flex-wrap mb-8">
     <input id="approval-task-id" type="text" placeholder="Task ID (e.g. app-1a2b3c4d)"
            style="flex:1; max-width:320px; background:var(--bg2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:7px 12px; font-size:0.83em;">
-    <button class="btn btn-primary btn-sm"
-            hx-post="/tasks/__task_id__/approve"
-            hx-target="#approval-status"
-            hx-swap="innerHTML"
-            onclick="this.setAttribute('hx-post','/tasks/'+document.getElementById('approval-task-id').value+'/approve')">
-      ✅ Approve
-    </button>
-    <button class="btn btn-danger btn-sm"
-            hx-post="/tasks/__task_id__/reject"
-            hx-target="#approval-status"
-            hx-swap="innerHTML"
-            onclick="this.setAttribute('hx-post','/tasks/'+document.getElementById('approval-task-id').value+'/reject')">
-      ❌ Reject
-    </button>
+    <button class="btn btn-primary btn-sm" id="approve-btn">✅ Approve</button>
+    <button class="btn btn-danger btn-sm"  id="reject-btn">❌ Reject</button>
   </div>
   <div id="approval-status"></div>
 
@@ -155,19 +150,17 @@
   </div>
 </div>
 
-{# ── Cost Monitor & KPIs ───────────────────────────────────────────────────── #}
-<div class="section">
-  <div class="section-title">💰 Cost Monitor &amp; KPIs</div>
-  <div id="cost-kpis"
-       hx-get="/partials/cost-kpis"
-       hx-trigger="load, every 30s"
-       hx-swap="outerHTML">
-    <span class="muted" style="font-size:0.83em">Loading cost monitor…</span>
-  </div>
-</div>
-
 <script>
-// Wire task row clicks to load detail panel
+// ── Show pipeline-task-detail panel when a Details button populates it ───────
+document.body.addEventListener('htmx:afterSettle', function(e) {
+  if (e.detail.target.id === 'pipeline-task-detail') {
+    var panel = document.getElementById('pipeline-task-detail');
+    panel.style.display = 'block';
+    panel.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  }
+});
+
+// ── Task row click → fill approval input + load detail panel ─────────────────
 document.addEventListener('htmx:afterSwap', function(e) {
   if (e.detail.target.id === 'task-queue-body') attachRowClicks();
 });
@@ -183,16 +176,21 @@ function attachRowClicks() {
   });
 }
 
-// Wire approval buttons to read the task id input at click time
-document.addEventListener('click', function(e) {
-  var btn = e.target.closest('[hx-post]');
-  if (!btn) return;
-  var post = btn.getAttribute('hx-post');
-  if (post && post.includes('__task_id__')) {
-    var id = document.getElementById('approval-task-id').value.trim();
-    if (!id) { e.preventDefault(); return; }
-    btn.setAttribute('hx-post', post.replace('__task_id__', id));
-  }
+// ── Approve / Reject buttons ──────────────────────────────────────────────────
+function getApprovalTaskId() {
+  return document.getElementById('approval-task-id').value.trim();
+}
+
+document.getElementById('approve-btn').addEventListener('click', function() {
+  var id = getApprovalTaskId();
+  if (!id) { document.getElementById('approval-status').innerHTML = '<div class="action-status err">Enter a Task ID first.</div>'; return; }
+  htmx.ajax('POST', '/tasks/' + id + '/approve', {target: '#approval-status', swap: 'innerHTML'});
+});
+
+document.getElementById('reject-btn').addEventListener('click', function() {
+  var id = getApprovalTaskId();
+  if (!id) { document.getElementById('approval-status').innerHTML = '<div class="action-status err">Enter a Task ID first.</div>'; return; }
+  htmx.ajax('POST', '/tasks/' + id + '/reject', {target: '#approval-status', swap: 'innerHTML'});
 });
 </script>
 {% endblock %}

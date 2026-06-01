@@ -178,18 +178,17 @@ async def _fetch_agent_usage(client: httpx.AsyncClient, url: str) -> dict:
     return {}
 
 
-def _get_pipeline_tasks(fp: str) -> dict[str, dict | None]:
+def _get_pipeline_tasks(fp: str) -> dict[str, list[dict]]:
+    """Return ALL tasks for every stage belonging to this alert fingerprint."""
     stages = ["rca", "fix_proposal", "validation", "approval_gate"]
-    by_type: dict[str, dict | None] = {s: None for s in stages}
+    by_type: dict[str, list[dict]] = {s: [] for s in stages}
     if not fp:
         return by_type
-    tasks = task_store.list_tasks(alert_fingerprint=fp, limit=50)
+    tasks = task_store.list_tasks(alert_fingerprint=fp, limit=200)
     for t in tasks:
         tp = t["type"]
         if tp in by_type:
-            cur = by_type[tp]
-            if cur is None or t["created_at"] > cur["created_at"]:
-                by_type[tp] = t
+            by_type[tp].append(t)
     return by_type
 
 
@@ -307,20 +306,12 @@ def _task_detail_context(task_id: str) -> dict:
 async def index(request: Request):
     fps = _pipeline_fingerprints()
     sel_fp = fps[0][0] if fps else ""
-    pipeline_tasks = _get_pipeline_tasks(sel_fp)
     task_ctx = _task_queue_context()
-    kpis = task_store.get_kpis()
     return templates.TemplateResponse(request, "pipeline.html", {
-        "request":        request,
-        "fps":            fps,
-        "sel_fp":         sel_fp,
-        "pipeline_tasks": pipeline_tasks,
-        "type_icons":     TYPE_ICONS,
-        "status_colors":  STATUS_COLORS,
-        "truncate":       _truncate,
-        "age":            _age,
+        "request":  request,
+        "fps":      fps,
+        "sel_fp":   sel_fp,
         **task_ctx,
-        "kpis":           kpis,
     })
 
 
@@ -337,6 +328,11 @@ async def chat_page(request: Request, agent_name: str):
         "quick_prompts": AGENT_QUICK_PROMPTS.get(agent_name, []),
         "session_id":   str(uuid.uuid4()),
     })
+
+
+@app.get("/cost", response_class=HTMLResponse)
+async def cost_page(request: Request):
+    return templates.TemplateResponse(request, "cost_monitor.html", {"request": request})
 
 
 @app.get("/activity", response_class=HTMLResponse)

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% set active_tab = "cost" %}
+{% block title %}Cost Monitor — Network AI Agents{% endblock %}
+
+{% block content %}
+<p class="muted mb-16" style="font-size:0.83em">
+  Cost and token usage refresh every 30 s · KPIs are calculated from today's pipeline tasks
+</p>
+
+<div id="cost-kpis"
+     hx-get="/partials/cost-kpis"
+     hx-trigger="load, every 30s"
+     hx-swap="outerHTML">
+  <span class="muted" style="font-size:0.83em">Loading cost monitor…</span>
+</div>
+{% endblock %}

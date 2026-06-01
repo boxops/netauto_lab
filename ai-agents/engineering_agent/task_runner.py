@@ -9,6 +9,9 @@ Task lifecycle this runner owns:
   fix_proposal: pending → claimed → running → complete | failed
   (creates)  →  validation: pending       (if risk low/medium)
              →  approval_gate: pending    (if risk high or fix_type escalate_human)
+
+  approval_gate: complete + approved event → execution_started event → execution_complete/failed event
+  (runs approved fixes with check_mode=False)
 """
 from __future__ import annotations
 
@@ -29,7 +32,8 @@ MAX_PER_CYCLE  = 1      # process one fix at a time; fixes are expensive
 INTER_TASK_DELAY = 10   # seconds between consecutive tasks in one cycle
 
 # Structured keys the engineering agent is prompted to emit
-_FIX_KEYS = {"FIX_TYPE", "DEVICE", "COMMANDS", "RISK", "CONFIDENCE", "REASON"}
+_FIX_KEYS       = {"FIX_TYPE", "DEVICE", "COMMANDS", "RISK", "CONFIDENCE", "REASON"}
+_EXECUTION_KEYS = {"EXECUTION_STATUS", "DEVICE", "CHANGES_APPLIED"}
 
 
 def _parse_tail(text: str, keys: set) -> dict:
@@ -68,7 +72,11 @@ class EngTaskRunner:
             try:
                 self._poll_once()
             except Exception:
-                logger.exception("EngTaskRunner: unhandled error in poll cycle")
+                logger.exception("EngTaskRunner: unhandled error in fix_proposal cycle")
+            try:
+                self._poll_approved_gates()
+            except Exception:
+                logger.exception("EngTaskRunner: unhandled error in execution cycle")
 
     def _poll_once(self) -> None:
         pending = self._task_store.list_tasks(
@@ -260,3 +268,107 @@ class EngTaskRunner:
             )
         except Exception as exc:
             logger.error("EngTaskRunner: failed to create approval_gate task: %s", exc)
+
+    # ── post-approval execution ───────────────────────────────────────────────
+
+    def _poll_approved_gates(self) -> None:
+        """Execute fixes for approval_gate tasks approved by a human."""
+        gates = self._task_store.list_approved_unexecuted_gates(limit=MAX_PER_CYCLE)
+        for gate in gates:
+            if self._stop.is_set():
+                break
+            self._execute_approved_gate(gate)
+
+    def _execute_approved_gate(self, gate: dict) -> None:
+        gate_id = gate["id"]
+
+        try:
+            self._rate_limiter.check_budget(AGENT_NAME)
+        except BudgetExceededError as exc:
+            logger.warning("EngTaskRunner: budget exceeded for gate=%s: %s", gate_id, exc)
+            return
+
+        content = {}
+        try:
+            content = json.loads(gate.get("content") or "{}")
+        except json.JSONDecodeError:
+            pass
+
+        fix_proposal = content.get("fix_proposal", {})
+        device   = fix_proposal.get("device") or content.get("device", "unknown")
+        commands = fix_proposal.get("commands") or content.get("commands", "none")
+        fix_type = fix_proposal.get("fix_type", "config_change")
+
+        # Mark as started immediately so a restart cannot double-execute
+        self._task_store.add_event(
+            gate_id, AGENT_NAME, "execution_started",
+            {"device": device, "commands": commands},
+        )
+
+        if commands == "none" or fix_type == "no_action":
+            self._task_store.add_event(
+                gate_id, AGENT_NAME, "execution_complete",
+                {"result": "No configuration commands to apply."},
+            )
+            logger.info("EngTaskRunner: gate=%s has no commands — skipping execution", gate_id)
+            return
+
+        logger.info(
+            "EngTaskRunner: executing approved gate=%s device=%s", gate_id, device
+        )
+
+        prompt = (
+            f"APPROVED FIX EXECUTION REQUEST\n\n"
+            f"A human has reviewed and approved this configuration change.\n"
+            f"Execute it now with check_mode=False.\n\n"
+            f"  Approval gate ID: {gate_id}\n"
+            f"  Device:           {device}\n"
+            f"  Configuration commands:\n"
+            f"    {commands}\n\n"
+            f"Steps:\n"
+            f"1. get_device_info('{device}') — confirm the device is reachable\n"
+            f"2. run_config_commands('{device}', config_lines, check_mode=False) "
+            f"— apply the approved fix (this is the only time check_mode=False is allowed)\n"
+            f"3. run_show_commands('{device}', 'show running-config') — verify the change\n\n"
+            f"End your response with exactly these lines:\n"
+            f"EXECUTION_STATUS: success | failed\n"
+            f"DEVICE: <hostname>\n"
+            f"CHANGES_APPLIED: <brief description of what was applied or why it failed>"
+        )
+
+        try:
+            response, tool_calls = self._agent.chat_with_trace(
+                prompt,
+                session_id=f"exec-{gate_id}",
+                task_id=gate_id,
+                task_type="approval_gate",
+            )
+            parsed      = _parse_tail(response, _EXECUTION_KEYS)
+            exec_status = parsed.get("EXECUTION_STATUS", "unknown").lower()
+            changes     = parsed.get("CHANGES_APPLIED", "")
+
+            self._task_store.add_event(
+                gate_id, AGENT_NAME, "execution_complete",
+                {
+                    "status":          exec_status,
+                    "device":          device,
+                    "changes_applied": changes,
+                    "tool_calls":      len(tool_calls),
+                },
+            )
+            logger.info(
+                "EngTaskRunner: executed gate=%s status=%s device=%s",
+                gate_id, exec_status, device,
+            )
+        except BudgetExceededError as exc:
+            self._task_store.add_event(
+                gate_id, AGENT_NAME, "execution_failed",
+                {"error": f"Budget exceeded: {exc}"},
+            )
+            logger.warning("EngTaskRunner: budget exceeded executing gate=%s", gate_id)
+        except Exception as exc:
+            self._task_store.add_event(
+                gate_id, AGENT_NAME, "execution_failed",
+                {"error": str(exc)[:500]},
+            )
+            logger.exception("EngTaskRunner: failed to execute gate=%s", gate_id)

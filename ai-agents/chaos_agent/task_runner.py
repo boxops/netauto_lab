@@ -197,11 +197,10 @@ class ChaosTaskRunner:
                     notes=f"Chaos validation of eng fix: {notes}",
                 )
 
-            # Positive verdict → gate on human approval before execution.
-            # The engineering agent always runs check_mode=True; an approval_gate
-            # is the only path that authorises check_mode=False execution.
-            if verdict in ("correct", "partial"):
-                self._create_approval_gate(task, fix_proposal, rca, verdict, risk_c, notes)
+            # All config changes require human approval before check_mode=False
+            # execution, regardless of the chaos agent's verdict. The verdict is
+            # surfaced in the approval_gate content so the human can factor it in.
+            self._create_approval_gate(task, fix_proposal, rca, verdict, risk_c, notes)
 
             logger.info(
                 "ChaosTaskRunner: completed validation task=%s verdict=%s confidence=%s",
@@ -239,7 +238,7 @@ class ChaosTaskRunner:
                 created_by=AGENT_NAME,
                 assigned_to="human",
                 title=f"APPROVAL REQUIRED: {fix_type} on {device} "
-                      f"[risk={risk_confirmed}, verdict={verdict}]",
+                      f"[verdict={verdict}, risk={risk_confirmed}]",
                 parent_id=validation_task["id"],
                 alert_fingerprint=fp,
                 priority=priority,

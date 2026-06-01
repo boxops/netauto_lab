@@ -376,6 +376,35 @@ class TaskStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def list_approved_unexecuted_gates(self, limit: int = 10) -> list[dict]:
+        """
+        Return approval_gate tasks approved by a human but not yet executed.
+
+        A gate is considered approved-but-unexecuted when it has an 'approved'
+        event (written by approve_task) but no 'execution_started' event.  This
+        prevents double-execution if the eng_agent container restarts mid-run.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT t.* FROM tasks t
+                WHERE t.type = 'approval_gate'
+                  AND t.status = 'complete'
+                  AND EXISTS (
+                      SELECT 1 FROM task_events e
+                      WHERE e.task_id = t.id AND e.event_type = 'approved'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM task_events e
+                      WHERE e.task_id = t.id AND e.event_type = 'execution_started'
+                  )
+                ORDER BY t.created_at ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def get_active_task_for_fingerprint(self, fingerprint: str) -> dict | None:
         """
         Return the most recent task for this alert fingerprint that is NOT

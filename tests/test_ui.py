@@ -87,6 +87,41 @@ class TestPageRoutes:
         assert "Engineering Agent" in r.text
         assert "Chaos Agent" in r.text
         assert "Activity" in r.text
+        assert "Cost Monitor" in r.text
+
+    def test_pipeline_agent_status_is_first_section(self, client):
+        r = client.get("/")
+        agent_pos = r.text.find("Live Agent Status")
+        pipeline_pos = r.text.find("Alert Processing Pipeline")
+        assert agent_pos != -1
+        assert pipeline_pos != -1
+        assert agent_pos < pipeline_pos
+
+    def test_pipeline_does_not_contain_cost_monitor_widget(self, client):
+        r = client.get("/")
+        assert "cost-kpis" not in r.text
+
+    def test_pipeline_has_detail_panel_outside_polling_div(self, client):
+        r = client.get("/")
+        # The detail panel must exist in the page HTML so clicks can target it
+        assert "pipeline-task-detail" in r.text
+
+    def test_cost_monitor_page_returns_200(self, client):
+        r = client.get("/cost")
+        assert r.status_code == 200
+
+    def test_cost_monitor_page_is_html(self, client):
+        r = client.get("/cost")
+        assert "text/html" in r.headers["content-type"]
+
+    def test_cost_monitor_page_contains_cost_widget(self, client):
+        r = client.get("/cost")
+        assert "cost-kpis" in r.text
+
+    def test_cost_monitor_page_contains_nav_tabs(self, client):
+        r = client.get("/cost")
+        assert "Cost Monitor" in r.text
+        assert "Pipeline" in r.text
 
     def test_ops_chat_page_returns_200(self, client):
         r = client.get("/chat/ops")
@@ -153,6 +188,37 @@ class TestPartialRoutes:
     def test_pipeline_partial_with_fp_returns_200(self, client):
         r = client.get("/partials/pipeline?fp=abc123")
         assert r.status_code == 200
+
+    def test_pipeline_partial_shows_all_tasks_for_stage(self, client):
+        tasks = [
+            {"id": "rca-aaaa1111", "type": "rca", "status": "complete",
+             "alert_fingerprint": "fp1", "created_at": "2026-01-15 10:00:00 UTC",
+             "title": "first", "content": "{}", "result": None,
+             "priority": "normal", "assigned_to": "ops_agent", "created_by": "system"},
+            {"id": "rca-bbbb2222", "type": "rca", "status": "failed",
+             "alert_fingerprint": "fp1", "created_at": "2026-01-15 09:00:00 UTC",
+             "title": "retry", "content": "{}", "result": None,
+             "priority": "normal", "assigned_to": "ops_agent", "created_by": "system"},
+        ]
+        with patch("ui.main.task_store") as mock_ts:
+            mock_ts.list_tasks.return_value = tasks
+            r = client.get("/partials/pipeline?fp=fp1")
+        assert r.status_code == 200
+        assert "rca-aaaa1111" in r.text
+        assert "rca-bbbb2222" in r.text
+
+    def test_pipeline_partial_details_button_present_for_each_task(self, client):
+        tasks = [
+            {"id": "rca-cccc3333", "type": "rca", "status": "complete",
+             "alert_fingerprint": "fp2", "created_at": "2026-01-15 10:00:00 UTC",
+             "title": "rca", "content": "{}", "result": None,
+             "priority": "normal", "assigned_to": "ops_agent", "created_by": "system"},
+        ]
+        with patch("ui.main.task_store") as mock_ts:
+            mock_ts.list_tasks.return_value = tasks
+            r = client.get("/partials/pipeline?fp=fp2")
+        assert "pipeline-task-detail" in r.text
+        assert "/partials/task/rca-cccc3333" in r.text
 
     def test_task_queue_partial_returns_200(self, client):
         r = client.get("/partials/task-queue")
@@ -397,6 +463,134 @@ class TestHelpers:
     def test_age_bad_format_returns_original(self):
         from ui.main import _age
         assert _age("not-a-date") == "not-a-date"
+
+
+# ── Approval button wiring tests ─────────────────────────────────────────────
+#
+# These tests assert that the pipeline page does NOT embed the static
+# "__task_id__" placeholder in hx-post attributes. The task ID must be
+# supplied at click time via JavaScript (htmx.ajax), not via a pre-baked URL.
+
+class TestApprovalButtonWiring:
+    def test_pipeline_has_no_hx_post_with_task_id_placeholder(self, client):
+        r = client.get("/")
+        assert "__task_id__" not in r.text
+
+    def test_pipeline_approve_button_uses_htmx_ajax_not_hx_post(self, client):
+        r = client.get("/")
+        # Approve/reject task IDs are supplied at click time via htmx.ajax(),
+        # not baked into an hx-post attribute on the button elements.
+        assert 'id="approve-btn"' in r.text
+        assert 'id="reject-btn"' in r.text
+        # Neither approve-btn nor reject-btn should carry an hx-post attribute
+        assert 'id="approve-btn" hx-post' not in r.text
+        assert 'id="reject-btn" hx-post' not in r.text
+        # The htmx.ajax calls must be present in the script block
+        assert "htmx.ajax('POST'" in r.text or 'htmx.ajax("POST"' in r.text
+
+    def test_approve_endpoint_with_real_id_returns_ok(self, client):
+        task = {"id": "app-real123", "status": "awaiting_approval"}
+        with patch("ui.main.task_store") as mock_ts:
+            mock_ts.get_task.return_value = task
+            mock_ts.approve_task.return_value = None
+            r = client.post("/tasks/app-real123/approve")
+        assert r.status_code == 200
+        assert "approved" in r.text.lower()
+
+    def test_reject_endpoint_with_real_id_returns_ok(self, client):
+        task = {"id": "app-real456", "status": "awaiting_approval"}
+        with patch("ui.main.task_store") as mock_ts:
+            mock_ts.get_task.return_value = task
+            mock_ts.reject_task.return_value = None
+            r = client.post("/tasks/app-real456/reject")
+        assert r.status_code == 200
+        assert "rejected" in r.text.lower()
+
+
+# ── Chaos task runner — approval_gate creation tests ─────────────────────────
+
+class TestChaosApprovalGate:
+    """Verify that an approval_gate is created for every validation verdict."""
+
+    def _make_runner(self):
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ai-agents"))
+        from chaos_agent.task_runner import ChaosTaskRunner
+        return ChaosTaskRunner
+
+    def _make_stores_and_runner(self, verdict):
+        ChaosTaskRunner = self._make_runner()
+
+        mock_agent = MagicMock()
+        mock_agent.chat_with_trace.return_value = (
+            f"Analysis complete.\nVERDICT: {verdict}\nCONFIDENCE: medium\n"
+            f"RISK_CONFIRMED: low\nNOTES: test note",
+            [],
+        )
+
+        mock_task_store = MagicMock()
+        mock_task_store.claim_task.return_value = True
+        mock_task_store.get_task.return_value = {"id": "fix-parent", "parent_id": None}
+        mock_task_store.create_task.return_value = {"id": "app-new"}
+
+        mock_rate_limiter = MagicMock()
+        mock_rate_limiter.check_budget.return_value = None
+
+        runner = ChaosTaskRunner(mock_agent, mock_task_store, mock_rate_limiter)
+        return runner, mock_task_store
+
+    def _run_validation_task(self, verdict):
+        runner, mock_task_store = self._make_stores_and_runner(verdict)
+        task = {
+            "id": "val-test",
+            "alert_fingerprint": "fp123",
+            "priority": "normal",
+            "parent_id": "fix-parent",
+            "content": json.dumps({
+                "fix_proposal": {
+                    "fix_type": "config_change",
+                    "device": "spine1",
+                    "commands": "interface Et1\n  no shutdown",
+                    "risk": "low",
+                    "reason": "test fix",
+                },
+                "rca": {"diagnosis": "test diagnosis"},
+                "parent_task_id": "fix-parent",
+            }),
+        }
+        runner._process_task(task)
+        return mock_task_store
+
+    @pytest.mark.parametrize("verdict", ["correct", "partial", "incorrect", "unverifiable"])
+    def test_approval_gate_created_for_all_verdicts(self, verdict):
+        mock_ts = self._run_validation_task(verdict)
+        # create_task should have been called once to make the approval_gate
+        calls = [c for c in mock_ts.create_task.call_args_list
+                 if c.kwargs.get("type") == "approval_gate"
+                 or (c.args and c.args[0] == "approval_gate")]
+        # check via keyword args (create_task uses keyword arguments)
+        approval_calls = [
+            c for c in mock_ts.create_task.call_args_list
+            if c[1].get("type") == "approval_gate"
+        ]
+        assert len(approval_calls) == 1, (
+            f"Expected approval_gate to be created for verdict='{verdict}', "
+            f"but create_task was called with: {mock_ts.create_task.call_args_list}"
+        )
+
+    @pytest.mark.parametrize("verdict", ["correct", "partial", "incorrect", "unverifiable"])
+    def test_approval_gate_set_to_awaiting_for_all_verdicts(self, verdict):
+        mock_ts = self._run_validation_task(verdict)
+        mock_ts.request_approval.assert_called_once()
+
+    def test_approval_gate_title_includes_verdict(self, verdict="incorrect"):
+        mock_ts = self._run_validation_task(verdict)
+        create_call = next(
+            c for c in mock_ts.create_task.call_args_list
+            if c[1].get("type") == "approval_gate"
+        )
+        title = create_call[1].get("title", "")
+        assert "incorrect" in title
 
 
 # ── Static file tests ─────────────────────────────────────────────────────────
