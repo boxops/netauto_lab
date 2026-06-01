@@ -1135,6 +1135,18 @@ def create_ui():
                     'Cost &amp; KPIs refresh every 30 s</p>'
                 )
 
+                # ── Section 1: Live Agent Status ───────────────────────────
+                gr.Markdown("### 🤖 Live Agent Status")
+                live_status_html = gr.HTML(value=_live_agent_status_html())
+
+                gr.Markdown("---")
+
+                # ── Section 4: Cost Monitor + KPIs ─────────────────────────
+                gr.Markdown("### 💰 Cost Monitor & KPIs")
+                cost_kpi_html = gr.HTML(value=_cost_kpi_html())
+
+                gr.Markdown("---")
+
                 # ── Section 0: Alert Pipeline Visualizer ──────────────────
                 gr.Markdown("### 🌐 Alert Processing Pipeline")
                 gr.HTML(
@@ -1162,60 +1174,54 @@ def create_ui():
 
                 gr.Markdown("---")
 
-                # ── Section 1: Live Agent Status ───────────────────────────
-                gr.Markdown("### 🤖 Live Agent Status")
-                live_status_html = gr.HTML(value=_live_agent_status_html())
-
-                # ── Section 2: Task Queue ──────────────────────────────────
-                gr.Markdown("### 📋 Task Queue")
-
-                task_queue_tasks_state = gr.State([])
-
+                # ── Sections 2 + 3: Task Queue (left) + Task Detail (right) ──
                 with gr.Row():
-                    task_status_filter = gr.Dropdown(
-                        choices=["", "pending", "claimed", "running",
-                                 "awaiting_approval", "complete", "failed", "rejected"],
-                        value="", label="Status filter", scale=1)
-                    task_type_filter = gr.Dropdown(
-                        choices=["", "rca", "fix_proposal", "validation", "approval_gate"],
-                        value="", label="Type filter", scale=1)
-                    task_refresh_btn = gr.Button("🔄 Refresh", scale=1, variant="secondary")
+                    with gr.Column(scale=3):
+                        gr.Markdown("### 📋 Task Queue")
 
-                task_queue_table = gr.Dataframe(
-                    headers=["ID", "Type", "Status", "Priority",
-                             "Assigned To", "Created By", "Title", "Age"],
-                    datatype=["str", "str", "str", "str", "str", "str", "str", "str"],
-                    value=[],
-                    interactive=False,
-                    wrap=True,
-                    row_count=10,
-                )
+                        task_queue_tasks_state = gr.State([])
 
-                with gr.Row():
-                    approval_task_id = gr.Textbox(
-                        label="Task ID for approval action", scale=3,
-                        placeholder="e.g. app-1a2b3c4d")
-                    approve_btn = gr.Button("✅ Approve", variant="primary", scale=1)
-                    reject_btn  = gr.Button("❌ Reject",  variant="stop",    scale=1)
-                approval_status = gr.Markdown()
+                        with gr.Row():
+                            task_status_filter = gr.Dropdown(
+                                choices=["", "pending", "claimed", "running",
+                                         "awaiting_approval", "complete", "failed", "rejected"],
+                                value="", label="Status filter", scale=1)
+                            task_type_filter = gr.Dropdown(
+                                choices=["", "rca", "fix_proposal", "validation", "approval_gate"],
+                                value="", label="Type filter", scale=1)
+                            task_refresh_btn = gr.Button("🔄 Refresh", scale=1, variant="secondary")
 
-                gr.Markdown("---")
-                with gr.Row():
-                    clear_armed_state = gr.State(False)
-                    clear_btn         = gr.Button("🗑️ Clear All Tasks", variant="secondary", scale=1)
-                    confirm_clear_btn = gr.Button("⚠️ Confirm Clear", variant="stop", scale=1, visible=False)
-                clear_status = gr.Markdown()
+                        task_queue_table = gr.Dataframe(
+                            headers=["ID", "Type", "Status", "Priority",
+                                     "Assigned To", "Created By", "Title", "Age"],
+                            datatype=["str", "str", "str", "str", "str", "str", "str", "str"],
+                            value=[],
+                            interactive=False,
+                            wrap=True,
+                            row_count=10,
+                        )
 
-                # ── Section 3: Task Detail ─────────────────────────────────
-                gr.Markdown("### 🔍 Task Detail")
-                with gr.Group(elem_classes=["task-detail-panel"]):
-                    task_detail_md = gr.Markdown(
-                        value="*Click a task row above to see its full timeline and context.*"
-                    )
+                        with gr.Row():
+                            approval_task_id = gr.Textbox(
+                                label="Task ID for approval action", scale=3,
+                                placeholder="e.g. app-1a2b3c4d")
+                            approve_btn = gr.Button("✅ Approve", variant="primary", scale=1)
+                            reject_btn  = gr.Button("❌ Reject",  variant="stop",    scale=1)
+                        approval_status = gr.Markdown()
 
-                # ── Section 4: Cost Monitor + KPIs ─────────────────────────
-                gr.Markdown("### 💰 Cost Monitor & KPIs")
-                cost_kpi_html = gr.HTML(value=_cost_kpi_html())
+                        gr.Markdown("---")
+                        with gr.Row():
+                            clear_armed_state = gr.State(False)
+                            clear_btn         = gr.Button("🗑️ Clear All Tasks", variant="secondary", scale=1)
+                            confirm_clear_btn = gr.Button("⚠️ Confirm Clear", variant="stop", scale=1, visible=False)
+                        clear_status = gr.Markdown()
+
+                    with gr.Column(scale=2):
+                        gr.Markdown("### 🔍 Task Detail")
+                        with gr.Group(elem_classes=["task-detail-panel"]):
+                            task_detail_md = gr.Markdown(
+                                value="*Click a task row to see its full timeline and context.*"
+                            )
 
                 # ── Wiring ────────────────────────────────────────────────
 
