@@ -1,0 +1,73 @@
+<div id="cost-kpis"
+     hx-get="/partials/cost-kpis"
+     hx-trigger="every 30s"
+     hx-swap="outerHTML">
+
+  <div class="section-label mb-8">💰 Cost Monitor</div>
+  <div class="cards-row mb-12">
+
+    <div class="metric-card" style="border-top-color:{{ bar_color }}">
+      <div class="metric-title">Today's Spend</div>
+      <div class="metric-value" style="color:{{ bar_color }}">${{ "%.4f"|format(today_cost) }}</div>
+      <div class="metric-sub">{{ "%.1f"|format(pct_used) }}% of ${{ "%.2f"|format(daily_lim) }} budget</div>
+      <div class="progress-track mt-8">
+        <div class="progress-fill" style="background:{{ bar_color }}; width:{{ pct_used }}%"></div>
+      </div>
+    </div>
+
+    <div class="metric-card" style="border-top-color:#6366f1">
+      <div class="metric-title">Today's Tokens</div>
+      <div class="metric-value" style="color:#6366f1">{{ "{:,}".format(today_tok) }}</div>
+      <div class="metric-sub">all agents combined</div>
+    </div>
+
+    <div class="metric-card" style="border-top-color:#8b5cf6">
+      <div class="metric-title">This Hour Tokens</div>
+      <div class="metric-value" style="color:#8b5cf6">{{ "{:,}".format(hour_tok) }}</div>
+      <div class="metric-sub">
+        {% for name, u in usages.items() %}
+          <div>{{ name }}: {{ "{:,}".format(u.get("today",{}).get("total_tokens",0)) }} tok · ${{ "%.4f"|format(u.get("today",{}).get("cost_usd",0.0)) }}</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="metric-card" style="border-top-color:#22c55e">
+      <div class="metric-title">Budget Remaining</div>
+      <div class="metric-value" style="color:#22c55e">${{ "%.4f"|format(remaining) }}</div>
+      <div class="metric-sub">${{ "%.2f"|format(daily_lim) }} daily limit</div>
+    </div>
+
+  </div>
+
+  {% set today_t = kpis.today %}
+  {% set rates   = kpis.rates %}
+
+  <div class="section-label mb-8">📈 KPIs (Today)</div>
+  <div class="cards-row">
+
+    <div class="metric-card" style="border-top-color:#6366f1">
+      <div class="metric-title">Tasks Today</div>
+      <div class="metric-value" style="color:#6366f1">{{ today_t.total_tasks }}</div>
+      <div class="metric-sub">{{ today_t.complete }} complete · {{ today_t.failed }} failed</div>
+    </div>
+
+    <div class="metric-card" style="border-top-color:#22c55e">
+      <div class="metric-title">Auto-Resolved</div>
+      <div class="metric-value" style="color:#22c55e">{{ "%.0f"|format(rates.auto_resolved_pct) }}%</div>
+      <div class="metric-sub">{{ today_t.auto_resolved }} tasks</div>
+    </div>
+
+    <div class="metric-card" style="border-top-color:#10b981">
+      <div class="metric-title">Validation Rate</div>
+      <div class="metric-value" style="color:#10b981">{{ "%.0f"|format(rates.validation_rate_pct) }}%</div>
+      <div class="metric-sub">chaos confirms eng correct</div>
+    </div>
+
+    <div class="metric-card" style="border-top-color:#f97316">
+      <div class="metric-title">Escalation Rate</div>
+      <div class="metric-value" style="color:#f97316">{{ "%.0f"|format(rates.escalation_rate_pct) }}%</div>
+      <div class="metric-sub">{{ today_t.awaiting_approval }} awaiting approval</div>
+    </div>
+
+  </div>
+</div>

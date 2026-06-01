@@ -1,0 +1,42 @@
+{% if msg is defined and msg %}
+  <div class="action-status {{ 'ok' if ok else 'err' }} mb-8">{{ msg }}</div>
+{% endif %}
+
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Job ID</th><th>Interval (min)</th><th>Scenario</th>
+        <th>Next Run</th><th>Last Run</th><th>Last Status</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="mono">{{ row.job_id }}</td>
+        <td>{{ row.interval_minutes }}</td>
+        <td>{{ truncate(row.scenario, 80) }}</td>
+        <td class="muted" style="font-size:0.8em">{{ row.next_run or "—" }}</td>
+        <td class="muted" style="font-size:0.8em">{{ row.last_run or "—" }}</td>
+        <td>
+          {% if row.last_status == "success" %}<span style="color:#22c55e">✅</span>
+          {% elif row.last_status == "failed"  %}<span style="color:#ef4444">❌</span>
+          {% else %}<span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td>
+          <button class="btn btn-danger btn-sm"
+                  hx-delete="/schedules/{{ row.job_id }}"
+                  hx-target="#schedule-table-wrap"
+                  hx-swap="innerHTML"
+                  hx-confirm="Cancel job {{ row.job_id }}?">
+            Cancel
+          </button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="muted" style="text-align:center; padding:16px">No active schedules.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

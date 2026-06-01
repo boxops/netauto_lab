@@ -1,0 +1,5 @@
+{% for fp, label in fps %}
+  <option value="{{ fp }}">{{ label }}</option>
+{% else %}
+  <option value="">No alerts found</option>
+{% endfor %}

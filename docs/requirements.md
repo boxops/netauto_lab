@@ -418,7 +418,7 @@ Docker Networks:
 
 **Chat Interface Options:**
 
-1. **Web UI** - Gradio or Streamlit based chat interface
+1. **Web UI** - FastAPI + Jinja2 + HTMX chat and dashboard interface
 2. **Slack Bot** - Slack app integration via ChatOps
 3. **CLI Tool** - Command-line interface for agent interaction
 4. **API Service** - REST API for programmatic access

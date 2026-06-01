@@ -1,0 +1,54 @@
+{# Summary cards #}
+{% if summary.total > 0 %}
+<div class="cards-row mb-12">
+  {% set cards = [
+    ("Total",   summary.total,   "#6366f1"),
+    ("Success", summary.success, "#22c55e"),
+    ("Failed",  summary.failed,  "#ef4444"),
+  ] %}
+  {% for label, count, color in cards %}
+  <div class="card card-top" style="border-top-color:{{ color }}; text-align:center; min-width:88px; flex:0 0 auto">
+    <div style="font-size:1.7em; font-weight:700; color:{{ color }}; line-height:1">{{ count }}</div>
+    <div class="muted" style="font-size:0.78em; margin-top:4px">{{ label }}</div>
+  </div>
+  {% endfor %}
+  {% for agent_name, count in summary.by_agent.items()|sort %}
+    {% set color = {"Ops":"#3b82f6","Engineering":"#10b981","Chaos":"#f97316"}.get(agent_name,"#6b7280") %}
+    <div class="card card-top" style="border-top-color:{{ color }}; text-align:center; min-width:88px; flex:0 0 auto">
+      <div style="font-size:1.7em; font-weight:700; color:{{ color }}; line-height:1">{{ count }}</div>
+      <div class="muted" style="font-size:0.78em; margin-top:4px">{{ agent_name }}</div>
+    </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted mb-12">No activity recorded yet.</p>
+{% endif %}
+
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Timestamp</th><th>Agent</th><th>Status</th><th>Latency</th>
+        <th>Session</th><th>Message</th><th>Response</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in records %}
+      <tr class="clickable"
+          hx-get="/partials/activity/{{ r.id }}"
+          hx-target="#activity-detail"
+          hx-swap="innerHTML">
+        <td class="mono muted" style="font-size:0.75em; white-space:nowrap">{{ r.timestamp }}</td>
+        <td>{{ r.agent }}</td>
+        <td>{% if r.status == "success" %}✅ success{% else %}❌ failed{% endif %}</td>
+        <td class="mono">{{ "{:,}".format(r.latency_ms) }} ms</td>
+        <td class="mono muted" style="font-size:0.75em">{{ r.session_id[:8] }}</td>
+        <td>{{ truncate(r.message, 80) }}</td>
+        <td class="muted">{{ truncate(r.response, 100) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="muted" style="text-align:center; padding:20px">No activity recorded yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

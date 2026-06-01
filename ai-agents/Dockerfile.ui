@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-LABEL description="Network AI Agents – Gradio Web UI"
+LABEL description="Network AI Agents – FastAPI + Jinja2 + HTMX Web UI"
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
@@ -15,4 +15,4 @@ ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 7860
-CMD ["python", "-m", "ui.app"]
+CMD ["uvicorn", "ui.main:app", "--host", "0.0.0.0", "--port", "7860"]

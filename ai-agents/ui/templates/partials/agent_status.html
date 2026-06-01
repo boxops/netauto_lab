@@ -1,0 +1,57 @@
+<div id="agent-status" class="agent-cards"
+     hx-get="/partials/agent-status"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML">
+
+{% for a in agents %}
+{% set s = a.status %}
+{% set state = s.get("state", "idle") %}
+{% set state_map = {
+  "idle":          ("IDLE",         "#6b7280"),
+  "thinking":      ("THINKING",     "#3b82f6"),
+  "calling_tool":  ("CALLING TOOL", "#f59e0b"),
+  "writing_result":("WRITING",      "#22c55e"),
+  "unreachable":   ("OFFLINE",      "#ef4444"),
+} %}
+{% set state_label = state_map.get(state, (state|upper, "#6b7280"))[0] %}
+{% set state_color = state_map.get(state, (state|upper, "#6b7280"))[1] %}
+{% set tokens_hr   = s.get("tokens_this_hour", 0) %}
+{% set max_tokens  = 50000 %}
+{% set pct         = [100, (tokens_hr / max_tokens * 100)|int]|min %}
+{% set bar_color   = "#ef4444" if pct >= 90 else "#f59e0b" if pct >= 70 else "#22c55e" %}
+{% set today_cost  = a.usage.get("today", {}).get("cost_usd", 0.0) if a.usage else 0.0 %}
+{% set is_active   = state in ("thinking", "calling_tool", "writing_result") %}
+{% set task_id     = s.get("task_id") or "—" %}
+{% set tool        = s.get("current_tool") or "" %}
+{% set tool_input  = s.get("tool_input_preview") or "" %}
+{% set started_at  = s.get("started_at") or "" %}
+
+<div class="agent-card" style="border-top-color:{{ a.color }}">
+  <div class="agent-card-header">
+    <span class="agent-card-title">{{ a.icon }} {{ a.label }}</span>
+    <span class="state-badge {% if is_active %}pulse{% endif %}"
+          style="background:{{ state_color }}22; color:{{ state_color }}; border-color:{{ state_color }}55">
+      {{ state_label }}
+    </span>
+  </div>
+
+  {% if tool %}
+    <div class="agent-tool-line">⚡ {{ tool }}{% if tool_input %} ({{ a.truncate(tool_input, 40) }}){% endif %}</div>
+  {% endif %}
+  {% if task_id != "—" %}
+    <div class="agent-task-line">Task: <code>{{ task_id }}</code> · {{ a.age }}</div>
+  {% endif %}
+
+  <div class="mt-8">
+    <div class="flex justify-between muted mb-4" style="font-size:0.72em">
+      <span>Tokens/hr: {{ "{:,}".format(tokens_hr) }} / 50,000</span>
+      <span>Today: ${{ "%.4f"|format(today_cost) }}</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" style="background:{{ bar_color }}; width:{{ pct }}%"></div>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+</div>

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% set active_tab = agent_name %}
+{% block title %}{{ agent_label }} — Network AI Agents{% endblock %}
+
+{% block content %}
+<div class="section">
+  <div class="section-title" style="color:{{ agent_color }}">{{ agent_label }}</div>
+
+  <div id="chat-history" class="chat-history"></div>
+
+  {# Hidden session id — updated via OOB swap after each reply #}
+  <input type="hidden" id="session-id" value="{{ session_id }}">
+
+  <form id="chat-form"
+        hx-post="/chat/{{ agent_name }}"
+        hx-target="#chat-history"
+        hx-swap="beforeend"
+        hx-on::after-request="this.reset()">
+    <input type="hidden" name="session_id" id="form-session-id" value="{{ session_id }}">
+    <div class="chat-input-row">
+      <input id="msg-input" type="text" name="message" placeholder="Ask {{ agent_label }}…" autocomplete="off" required>
+      <button type="submit" class="btn btn-primary">Send ↵</button>
+    </div>
+  </form>
+
+  <div class="mt-8 mb-8 muted" style="font-size:0.82em; font-weight:600">Quick prompts <em>(click to fill)</em></div>
+  <div class="prompt-list">
+    {% for prompt in quick_prompts %}
+      <button class="prompt-btn"
+              onclick="document.getElementById('msg-input').value=this.textContent.trim(); document.getElementById('msg-input').focus()">
+        {{ prompt }}
+      </button>
+    {% endfor %}
+  </div>
+
+  {% if agent_name == "chaos" %}
+  <hr class="divider">
+  <details>
+    <summary style="cursor:pointer; font-weight:600; font-size:0.9em; margin-bottom:12px">⏰ Schedule Chaos Run</summary>
+    <p class="muted mb-12" style="font-size:0.83em">
+      Schedule a scenario to run automatically at a repeating interval. Runs in <strong>check mode</strong> by default.
+    </p>
+    <form hx-post="/schedules"
+          hx-target="#schedule-table-wrap"
+          hx-swap="innerHTML">
+      <div class="flex gap-8 flex-wrap mb-8">
+        <input type="text" name="scenario"
+               placeholder="e.g. Shut down Ethernet1 on leaf1 (check mode) and report blast radius"
+               style="flex:3; background:var(--bg2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:7px 12px; font-size:0.83em;">
+        <div style="flex:1; min-width:160px">
+          <label class="muted" style="font-size:0.75em">Interval (minutes)</label>
+          <input type="number" name="interval_minutes" value="30" min="5" max="120" step="5"
+                 style="width:100%; background:var(--bg2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:7px 12px; font-size:0.83em;">
+        </div>
+        <div style="align-self:flex-end">
+          <button type="submit" class="btn btn-primary btn-sm">Schedule</button>
+        </div>
+      </div>
+    </form>
+
+    <div class="section-label mb-8">Active schedules</div>
+    <div id="schedule-table-wrap">
+      <div hx-get="/partials/schedules" hx-trigger="load" hx-swap="outerHTML"></div>
+    </div>
+  </details>
+  {% endif %}
+</div>
+
+<script>
+// Keep the hidden session_id in sync after the server sends a new one via OOB swap
+document.getElementById('chat-form').addEventListener('htmx:afterRequest', function(e) {
+  var newSession = e.detail.xhr.getResponseHeader('X-Session-Id');
+  if (newSession) {
+    document.getElementById('session-id').value = newSession;
+    document.getElementById('form-session-id').value = newSession;
+  }
+  // scroll to bottom
+  var h = document.getElementById('chat-history');
+  h.scrollTop = h.scrollHeight;
+});
+</script>
+{% endblock %}

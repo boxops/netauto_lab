@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Network AI Agents{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+
+<div class="page-header">
+  <h1>🌐 Network Automation AI Agents</h1>
+  <p>
+    <strong>Ops</strong> — monitor &amp; investigate incidents &nbsp;·&nbsp;
+    <strong>Engineering</strong> — design &amp; configure your network &nbsp;·&nbsp;
+    <strong>Chaos</strong> — controlled experiments with safety gates
+  </p>
+</div>
+
+<div id="status-bar"
+     hx-get="/partials/status-bar"
+     hx-trigger="load, every 30s"
+     hx-swap="outerHTML">
+  <div class="status-bar"><span class="muted">Checking agent status…</span></div>
+</div>
+
+<nav class="nav-tabs">
+  <a class="nav-tab {% if active_tab == 'pipeline' %}active{% endif %}" href="/">📊 Pipeline</a>
+  <a class="nav-tab {% if active_tab == 'ops' %}active{% endif %}"      href="/chat/ops">🚨 Ops Agent</a>
+  <a class="nav-tab {% if active_tab == 'engineering' %}active{% endif %}" href="/chat/engineering">🔧 Engineering Agent</a>
+  <a class="nav-tab {% if active_tab == 'chaos' %}active{% endif %}"    href="/chat/chaos">🔥 Chaos Agent</a>
+  <a class="nav-tab {% if active_tab == 'activity' %}active{% endif %}" href="/activity">🕒 Activity</a>
+</nav>
+
+<div class="content">
+  {% block content %}{% endblock %}
+</div>
+
+</body>
+</html>

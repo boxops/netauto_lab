@@ -1,0 +1,24 @@
+{% for t in tasks %}
+<tr class="clickable" data-task-id="{{ t.id }}">
+  <td class="mono" style="font-size:0.78em">{{ t.id }}</td>
+  <td>{{ t.type_icon }} {{ t.type }}</td>
+  <td>
+    <span class="pill"
+          style="background:{{ t.status_color }}22; color:{{ t.status_color }}; border-color:{{ t.status_color }}55">
+      {{ t.status }}
+    </span>
+  </td>
+  <td>
+    <span class="pill"
+          style="background:{{ t.priority_color }}22; color:{{ t.priority_color }}; border-color:{{ t.priority_color }}55">
+      {{ t.priority }}
+    </span>
+  </td>
+  <td class="muted">{{ t.assigned_to }}</td>
+  <td class="muted">{{ t.created_by }}</td>
+  <td>{{ t.title }}</td>
+  <td class="muted">{{ t.age }}</td>
+</tr>
+{% else %}
+<tr><td colspan="8" class="muted" style="text-align:center; padding:20px">No tasks found.</td></tr>
+{% endfor %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% set active_tab = "activity" %}
+{% block title %}Agent Activity — Network AI Agents{% endblock %}
+
+{% block content %}
+<div class="section">
+  <div class="section-title">🕒 Agent Activity</div>
+  <p class="muted mb-12" style="font-size:0.83em">
+    Auto-refreshes every 5 s. Click any row to see the full interaction below.
+  </p>
+
+  <div class="filters-row mb-12">
+    <select id="agent-filter"
+            hx-get="/partials/activity"
+            hx-target="#activity-wrap"
+            hx-trigger="change"
+            hx-include="this"
+            hx-swap="innerHTML">
+      {% for a in ["All","Ops","Engineering","Chaos"] %}
+        <option value="{{ a }}" {% if a == "All" %}selected{% endif %}>{{ a }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn-secondary btn-sm"
+            hx-get="/partials/activity"
+            hx-target="#activity-wrap"
+            hx-include="#agent-filter"
+            hx-swap="innerHTML">
+      🔄 Refresh
+    </button>
+  </div>
+
+  <div id="activity-wrap"
+       hx-get="/partials/activity"
+       hx-trigger="every 5s"
+       hx-include="#agent-filter"
+       hx-swap="innerHTML">
+    {% include "partials/activity_table.html" %}
+  </div>
+
+  <div class="section-title mt-12">Interaction Detail</div>
+  <div id="activity-detail" class="detail-panel mt-8">
+    <span class="muted">Click a row above to see the full message, response, and tools used.</span>
+  </div>
+</div>
+{% endblock %}

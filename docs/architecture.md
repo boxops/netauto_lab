@@ -123,7 +123,7 @@ All eBGP. Leaves advertise loopbacks + host routes to both spines.
 - **Purpose**: Reactive NOC assistance — investigate alerts, correlate metrics and logs.
 - **Model**: GPT-4o (falls back to local Ollama `llama3.1`).
 - **Safety**: All Ansible actions default to `check_mode=True`; live execution requires explicit user approval.
-- **API**: FastAPI on port 8000; also accessible via Gradio UI.
+- **API**: FastAPI on port 8000; also accessible via the web UI.
 
 ### Engineering Agent
 
@@ -131,12 +131,19 @@ All eBGP. Leaves advertise loopbacks + host routes to both spines.
 - **Model**: GPT-4o (same fallback).
 - **API**: FastAPI on port 8001.
 
-### Gradio UI
+### Chaos Agent
 
-- Tabbed web interface for both agents.
-- Displays per-session conversation history.
-- Provides example prompts.
-- Service status dashboard embedded.
+- **Purpose**: Controlled chaos engineering — blast-radius analysis, interface/BGP fault injection, safety-gated execution.
+- **Model**: GPT-4o (same fallback).
+- **API**: FastAPI on port 8002.
+
+### Agent UI
+
+- FastAPI application serving the web UI on port 7860.
+- Jinja2 server-side templates with HTMX for live partial updates (no JavaScript framework).
+- Tabs: Pipeline Dashboard · Ops Agent · Engineering Agent · Chaos Agent · Activity.
+- All live widgets (agent status, task queue, pipeline visual, cost KPIs) are HTML fragments polled via `hx-trigger="every Ns"` — no WebSocket connections.
+- Shares the `agent-activity-data` Docker volume with all three agent containers to read `ActivityStore` and `TaskStore` directly.
 
 ## Data Persistence
 

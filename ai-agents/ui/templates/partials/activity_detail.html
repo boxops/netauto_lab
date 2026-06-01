@@ -1,0 +1,38 @@
+{% set icons = {"Ops":"🚨","Engineering":"🔧","Chaos":"🔥"} %}
+<div>
+  <div class="flex items-center gap-8 mb-12" style="flex-wrap:wrap">
+    <span class="bold">{{ icons.get(record.agent,"🤖") }} {{ record.agent }} Agent</span>
+    {% if record.status == "success" %}
+      <span style="color:#22c55e">✅ success</span>
+    {% else %}
+      <span style="color:#ef4444">❌ failed</span>
+    {% endif %}
+    <span class="muted">· {{ "{:,}".format(record.latency_ms) }} ms</span>
+    <span class="muted" style="font-size:0.8em">{{ record.timestamp }}</span>
+  </div>
+
+  <div class="section-label mb-4">💬 User Message</div>
+  <div style="background:var(--bg3); border-radius:6px; padding:10px 12px; font-size:0.85em; margin-bottom:12px; white-space:pre-wrap; word-break:break-word">{{ record.message }}</div>
+
+  <div class="section-label mb-4">🤖 Agent Response</div>
+  <div style="background:var(--bg3); border-radius:6px; padding:10px 12px; font-size:0.85em; margin-bottom:12px; white-space:pre-wrap; word-break:break-word">{{ record.response }}</div>
+
+  {% if calls %}
+    <div class="section-label mb-4">🔧 Tools Used ({{ calls|length }} call{{ "s" if calls|length != 1 else "" }})</div>
+    {% for c in calls %}
+      <div style="margin-bottom:10px">
+        <div class="bold" style="font-size:0.82em; margin-bottom:4px">{{ loop.index }}. <code>{{ c.tool_name }}</code></div>
+        {% if c.input_summary %}
+          <div class="muted" style="font-size:0.78em; margin-bottom:2px">Input:</div>
+          <pre style="font-size:0.78em">{{ c.input_summary }}</pre>
+        {% endif %}
+        {% if c.output_summary %}
+          <div class="muted" style="font-size:0.78em; margin-bottom:2px; margin-top:4px">Output:</div>
+          <pre style="font-size:0.78em">{{ c.output_summary }}</pre>
+        {% endif %}
+      </div>
+    {% endfor %}
+  {% else %}
+    <span class="muted" style="font-size:0.83em">No tool calls recorded for this interaction.</span>
+  {% endif %}
+</div>

@@ -1,0 +1,158 @@
+{% set stages = [
+  ("rca",           "🔍", "RCA",           "ops_agent",   "#3b82f6"),
+  ("fix_proposal",  "🔧", "Fix Proposal",  "eng_agent",   "#10b981"),
+  ("validation",    "✅", "Validation",    "chaos_agent", "#f97316"),
+  ("approval_gate", "🔐", "Approval Gate", "human",       "#a855f7"),
+] %}
+
+{% if not fp %}
+<div id="pipeline-visual"
+     hx-get="/partials/pipeline"
+     hx-vals='js:{"fp": document.getElementById("fp-select")?.value || ""}'
+     hx-trigger="every 3s"
+     hx-swap="outerHTML"
+     style="text-align:center; color:var(--text-sub); padding:36px 0; font-size:0.9em;
+            border:1px dashed var(--border); border-radius:10px; margin:4px 0">
+  Select an alert fingerprint above to visualise its processing pipeline.
+</div>
+{% else %}
+
+{% set rca_task     = pipeline_tasks.get("rca") %}
+{% set ap_task      = pipeline_tasks.get("approval_gate") %}
+{% set any_running  = pipeline_tasks.values()|selectattr("status", "in", ["running","claimed"])|list|length > 0 if pipeline_tasks.values()|reject("none")|list else false %}
+{% set all_complete = pipeline_tasks.values()|reject("none")|map(attribute="status")|list|length == 4 and
+                      pipeline_tasks.values()|reject("none")|map(attribute="status")|select("equalto","complete")|list|length == 4 %}
+
+{% if ap_task and ap_task.status == "awaiting_approval" %}
+  {% set overall_color = "#a855f7" %}{% set overall_label = "🔐 Awaiting Approval" %}
+{% elif all_complete %}
+  {% set overall_color = "#22c55e" %}{% set overall_label = "✅ Pipeline Complete" %}
+{% elif any_running %}
+  {% set overall_color = "#3b82f6" %}{% set overall_label = "⟳ In Progress" %}
+{% elif not rca_task %}
+  {% set overall_color = "#6b7280" %}{% set overall_label = "No tasks found" %}
+{% else %}
+  {% set overall_color = "#f59e0b" %}{% set overall_label = "⚠ Stalled" %}
+{% endif %}
+
+{% set header_text = rca_task.title if rca_task and rca_task.title else fp[:16] ~ "…" %}
+
+<div id="pipeline-visual"
+     hx-get="/partials/pipeline"
+     hx-vals='js:{"fp": document.getElementById("fp-select")?.value || ""}'
+     hx-trigger="every 3s"
+     hx-swap="outerHTML">
+
+  <div class="flex items-center gap-8 mb-12">
+    <span class="bold" style="font-size:0.9em">{{ header_text }}</span>
+    <span class="pill"
+          style="background:{{ overall_color }}18; color:{{ overall_color }}; border-color:{{ overall_color }}44">
+      {{ overall_label }}
+    </span>
+  </div>
+
+  <div class="pipeline-row">
+    {% for tp, icon, label, agent, color in stages %}
+      {% set task = pipeline_tasks.get(tp) %}
+      {% set idx = loop.index0 %}
+
+      {% if task is none %}
+        <div class="pipeline-card waiting" style="border-top-color:#4b5563">
+          <div class="pipeline-card-header">
+            <span class="pipeline-card-title">{{ icon }} {{ label }}</span>
+          </div>
+          <div class="pipeline-card-agent">{{ agent }}</div>
+          <div class="pipeline-info-line muted" style="font-style:italic; margin-top:14px">Waiting…</div>
+        </div>
+      {% else %}
+        {% set sc = status_colors.get(task.status, "#6b7280") %}
+        {% set is_active = task.status in ("running", "claimed") %}
+        {% set result = {} %}
+        {% set content = {} %}
+
+        <div class="pipeline-card" style="border-top-color:{{ color }}">
+          <div class="pipeline-card-header">
+            <span class="pipeline-card-title">{{ icon }} {{ label }}</span>
+            <span class="pill {% if is_active %}pulse{% endif %}"
+                  style="background:{{ sc }}22; color:{{ sc }}; border-color:{{ sc }}55; font-size:0.68em">
+              {{ task.status.replace("_"," ")|upper }}
+            </span>
+          </div>
+          <div class="pipeline-card-agent muted">{{ agent }} · <code style="font-size:0.9em">{{ task.id }}</code></div>
+
+          {# Stage-specific info #}
+          {% if task.result %}
+            {% set raw = task.result | tojson %}
+          {% endif %}
+          <div class="pipeline-info-line">
+            {% if tp == "rca" and task.result %}
+              {% set r = task.result | from_json %}
+              {% if r.diagnosis %}<div><b>Diagnosis:</b> {{ truncate(r.diagnosis, 90) }}</div>{% endif %}
+              {% if r.affected or r.affected_device %}<div><b>Affected:</b> {{ r.affected or r.affected_device }}</div>{% endif %}
+              {% if r.action or r.recommended_action %}<div><b>Action:</b> {{ truncate(r.action or r.recommended_action, 70) }}</div>{% endif %}
+              {% if r.confidence %}
+                {% set cc = {"high":"#22c55e","medium":"#f59e0b","low":"#ef4444"}.get(r.confidence|lower,"#6b7280") %}
+                <div><b>Confidence:</b> <span style="color:{{ cc }}">{{ r.confidence }}</span></div>
+              {% endif %}
+            {% elif tp == "fix_proposal" and task.result %}
+              {% set r = task.result | from_json %}
+              {% if r.device %}<div><b>Device:</b> {{ r.device }}</div>{% endif %}
+              {% if r.fix_type %}<div><b>Fix type:</b> {{ r.fix_type }}</div>{% endif %}
+              {% if r.commands and r.commands != "none" %}<div><b>Commands:</b> <code>{{ truncate(r.commands, 70) }}</code></div>{% endif %}
+              {% if r.risk %}
+                {% set rc = {"high":"#ef4444","medium":"#f59e0b","low":"#22c55e"}.get(r.risk|lower,"#6b7280") %}
+                <div><b>Risk:</b> <span style="color:{{ rc }}; font-weight:600">{{ r.risk|upper }}</span></div>
+              {% endif %}
+            {% elif tp == "validation" and task.result %}
+              {% set r = task.result | from_json %}
+              {% if r.verdict %}
+                {% set vc = {"correct":"#22c55e","incorrect":"#ef4444","partial":"#f59e0b","unverifiable":"#6b7280"}.get(r.verdict|lower,"#6b7280") %}
+                <div><b>Verdict:</b> <span style="color:{{ vc }}; font-weight:600">{{ r.verdict|upper }}</span></div>
+              {% endif %}
+              {% if r.risk_confirmed %}
+                {% set rc = {"high":"#ef4444","medium":"#f59e0b","low":"#22c55e"}.get(r.risk_confirmed|lower,"#6b7280") %}
+                <div><b>Risk confirmed:</b> <span style="color:{{ rc }}">{{ r.risk_confirmed|upper }}</span></div>
+              {% endif %}
+              {% if r.notes %}<div><b>Notes:</b> {{ truncate(r.notes, 80) }}</div>{% endif %}
+            {% elif tp == "approval_gate" %}
+              {% if task.content %}
+                {% set c = task.content | from_json %}
+                {% if c.device %}<div><b>Device:</b> {{ c.device }}</div>{% endif %}
+                {% if c.commands and c.commands != "none" %}<div><b>Commands:</b> <code>{{ truncate(c.commands, 70) }}</code></div>{% endif %}
+                {% if c.risk_confirmed %}
+                  {% set rc = {"high":"#ef4444","medium":"#f59e0b","low":"#22c55e"}.get(c.risk_confirmed|lower,"#6b7280") %}
+                  <div><b>Risk:</b> <span style="color:{{ rc }}; font-weight:600">{{ c.risk_confirmed|upper }}</span></div>
+                {% endif %}
+              {% endif %}
+              {% if task.status == "awaiting_approval" %}
+                <div style="margin-top:6px; background:#a855f711; border:1px solid #a855f744; border-radius:6px; padding:5px 8px; font-size:0.8em; color:#a855f7; font-weight:600">
+                  🔐 Awaiting human approval — use Task Queue below
+                </div>
+              {% endif %}
+            {% else %}
+              {% if is_active %}
+                <div style="color:#f59e0b">⟳ Processing…</div>
+              {% else %}
+                <div class="muted" style="font-style:italic">No details yet.</div>
+              {% endif %}
+            {% endif %}
+          </div>
+
+          <div class="pipeline-footer">
+            {% if task.completed_at and task.created_at %}
+              Completed · {{ age(task.created_at) }} ago
+            {% else %}
+              Started {{ age(task.created_at) }} ago
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+
+      {% if not loop.last %}
+        {% set prev_done = pipeline_tasks.get(tp) is not none and pipeline_tasks.get(tp).status == "complete" %}
+        <div class="pipeline-arrow" style="color:{{ '#22c55e' if prev_done else '#4b5563' }}">›</div>
+      {% endif %}
+    {% endfor %}
+  </div>
+</div>
+{% endif %}

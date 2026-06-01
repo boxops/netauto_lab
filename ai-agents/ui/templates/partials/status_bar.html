@@ -1,0 +1,14 @@
+<div id="status-bar" class="status-bar"
+     hx-get="/partials/status-bar"
+     hx-trigger="every 30s"
+     hx-swap="outerHTML">
+  {% for b in badges %}
+    <span class="badge"
+          style="background:{{ b.color }}18; border-color:{{ b.color }}55; color:{{ b.color }}">
+      <span class="dot" style="background:{{ b.color }}"></span>
+      <span class="bold" style="color:var(--text)">{{ b.name }}</span>
+      <span>{{ b.label }}</span>
+    </span>
+  {% endfor %}
+  <span class="refresh-note">Refreshes every 30 s</span>
+</div>

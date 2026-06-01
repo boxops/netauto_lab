@@ -17,7 +17,7 @@ A fully containerised network automation and observability platform built for **
 | Nautobot DCIM/IPAM    | Prometheus + Alertmanager | Ops Agent (incidents & alerts)         |
 | Gitea (config store)  | Grafana (4 dashboards)    | Engineering Agent (configs & planning) |
 | Containerlab cEOS lab | Loki + Promtail (syslog)  | Chaos Agent (controlled experiments)   |
-| Ansible automation    | Telegraf (metrics)        | Gradio Web UI (port 7860)              |
+| Ansible automation    | Telegraf (metrics)        | Web UI — FastAPI + HTMX (port 7860)    |
 
 ---
 
@@ -320,7 +320,7 @@ make test                     # Run all tests
 │   ├── ops_agent/              # Ops agent + alert poller (pipeline stage 1)
 │   ├── engineering_agent/      # Eng agent + fix-proposal runner (pipeline stage 2)
 │   ├── chaos_agent/            # Chaos agent + validation runner + scheduler (pipeline stage 3)
-│   └── ui/                     # Gradio web UI (pipeline dashboard default tab)
+│   └── ui/                     # FastAPI + Jinja2 + HTMX web UI (pipeline dashboard default tab)
 ├── ansible/                    # Playbooks, roles, inventory
 ├── containerlab/               # Spine-leaf topology definition
 ├── docs/                       # Detailed documentation

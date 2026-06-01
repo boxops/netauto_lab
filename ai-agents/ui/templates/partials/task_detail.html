@@ -1,0 +1,90 @@
+{% if not task %}
+  <span class="muted">Task <code>{{ task_id }}</code> not found.</span>
+{% else %}
+{% set sc = status_colors.get(task.status, "#6b7280") %}
+<div>
+  <div class="flex items-center gap-8 mb-12">
+    <span class="bold">{{ type_icons.get(task.type, "📋") }} Task <code>{{ task.id }}</code></span>
+    <span class="pill"
+          style="background:{{ sc }}22; color:{{ sc }}; border-color:{{ sc }}55">
+      {{ task.status|upper }}
+    </span>
+    <span class="muted" style="font-size:0.8em">{{ age }}</span>
+  </div>
+
+  {# Chain #}
+  {% if chain %}
+    <div class="mb-8" style="font-size:0.8em">
+      <span class="muted">Chain: </span>
+      {% for c in chain %}
+        <code>{{ c.id }}</code>{% if c.id == task_id %} <strong>(current)</strong>{% endif %}
+        {% if not loop.last %} → {% endif %}
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {# Meta table #}
+  <table style="font-size:0.8em; margin-bottom:12px; border-collapse:collapse">
+    {% for k, v in [
+      ("Type", task.type),
+      ("Priority", task.priority),
+      ("Created by", task.created_by or "—"),
+      ("Assigned to", task.assigned_to or "—"),
+      ("Created", task.created_at or "—"),
+      ("Claimed", task.claimed_at or "—"),
+      ("Completed", task.completed_at or "—"),
+    ] %}
+    <tr>
+      <td class="muted" style="padding:2px 16px 2px 0; white-space:nowrap">{{ k }}</td>
+      <td>{{ v }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <div class="mb-8">
+    <div class="section-label mb-4">Input</div>
+    <pre>{{ content_str }}</pre>
+  </div>
+
+  {% if result_str %}
+  <div class="mb-8">
+    <div class="section-label mb-4">Result</div>
+    <pre>{{ result_str }}</pre>
+  </div>
+  {% endif %}
+
+  {# Timeline #}
+  <div class="mb-8">
+    <div class="section-label mb-4">Timeline</div>
+    {% if events %}
+      {% for e in events %}
+        <div style="font-size:0.78em; margin-bottom:3px">
+          <code class="muted">{{ e.ts }}</code>
+          <strong>{{ e.type }}</strong>
+          <span class="muted">({{ e.agent }})</span>
+          {% if e.detail %}<span class="muted">{{ e.detail }}</span>{% endif %}
+        </div>
+      {% endfor %}
+    {% else %}
+      <span class="muted">No events yet.</span>
+    {% endif %}
+  </div>
+
+  {# Feedback #}
+  <div>
+    <div class="section-label mb-4">Feedback</div>
+    {% if feedback %}
+      {% for f in feedback %}
+        <div style="font-size:0.8em; margin-bottom:4px">
+          <strong>{{ f.from_agent }}</strong> →
+          <code>{{ f.verdict }}</code>
+          {% if f.confidence %}<span class="muted">confidence={{ f.confidence }}</span>{% endif %}
+          {% if f.notes %}<div class="muted" style="margin-left:16px">{{ f.notes }}</div>{% endif %}
+        </div>
+      {% endfor %}
+    {% else %}
+      <span class="muted">No feedback yet.</span>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
