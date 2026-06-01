@@ -381,6 +381,50 @@ a { color: inherit; text-decoration: none; }
 .section-title { font-size: 1em; font-weight: 700; margin-bottom: 10px; }
 hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
 
+/* ── Metric card with sparkline background ───────────── */
+.metric-spark {
+  position: relative;
+  overflow: hidden;
+  padding-bottom: 62px;
+}
+
+.spark-canvas {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 56px;
+  pointer-events: none;
+  opacity: 0.45;
+  line-height: 0;
+}
+
+/* ── 24-hour trend charts ─────────────────────────────── */
+.chart-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.chart-card {
+  flex: 1;
+  min-width: 280px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px 8px;
+}
+
+.chart-card-title {
+  font-size: 0.72em;
+  font-weight: 600;
+  color: var(--text-sub);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
 /* ── Animations ──────────────────────────────────────── */
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.55} }
 .pulse { animation: pulse 1.5s infinite; }

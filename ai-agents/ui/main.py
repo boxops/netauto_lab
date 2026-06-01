@@ -7,7 +7,8 @@ import json
 import os
 import sys
 import uuid
-from datetime import datetime, timezone
+import sqlite3
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import FastAPI, Form, Request
@@ -87,6 +88,216 @@ AGENT_QUICK_PROMPTS = {
         "What monitoring gaps might chaos tests expose in the current alerting setup?",
     ],
 }
+
+_ACTIVITY_DB = os.environ.get("ACTIVITY_DB_PATH", "./activity.db")
+
+
+def _get_hourly_series(hours: int = 24) -> dict:
+    """Hourly aggregated cost & token series from token_usage table."""
+    now     = datetime.now(timezone.utc)
+    buckets = [(now - timedelta(hours=hours - 1 - i)).strftime("%Y-%m-%d %H") for i in range(hours)]
+    labels  = [(now - timedelta(hours=hours - 1 - i)).strftime("%H") for i in range(hours)]
+    result: dict = {
+        "buckets":         buckets,
+        "labels":          labels,
+        "total_cost":      [0.0] * hours,
+        "total_tokens":    [0]   * hours,
+        "by_agent_cost":   {},
+        "by_agent_tokens": {},
+    }
+    try:
+        with sqlite3.connect(_ACTIVITY_DB, timeout=5) as conn:
+            conn.row_factory = sqlite3.Row
+            cutoff = buckets[0] + ":00:00 UTC"
+            rows = conn.execute(
+                "SELECT substr(timestamp,1,13) hk, agent, "
+                "SUM(estimated_cost_usd) cost, "
+                "SUM(prompt_tokens+completion_tokens) tokens "
+                "FROM token_usage WHERE timestamp>=? GROUP BY hk,agent",
+                (cutoff,),
+            ).fetchall()
+        idx = {b: i for i, b in enumerate(buckets)}
+        for r in rows:
+            i = idx.get(r["hk"])
+            if i is None:
+                continue
+            ag = r["agent"]
+            result["total_cost"][i]   += r["cost"]
+            result["total_tokens"][i] += r["tokens"]
+            if ag not in result["by_agent_cost"]:
+                result["by_agent_cost"][ag]   = [0.0] * hours
+                result["by_agent_tokens"][ag] = [0]   * hours
+            result["by_agent_cost"][ag][i]   = r["cost"]
+            result["by_agent_tokens"][ag][i] = r["tokens"]
+    except Exception:
+        pass
+    return result
+
+
+def _sparkline_svg(points: list[float], color: str = "#6366f1") -> str:
+    """Inline SVG sparkline (area + line + dashed trendline) for card backgrounds."""
+    if not points or len(points) < 2:
+        return ""
+    W, H, pad = 200, 52, 4
+    eh = H - pad * 2
+    n  = len(points)
+    lo, hi = min(points), max(points)
+    span   = (hi - lo) or (hi or 1.0)
+    lo_adj = lo if (hi - lo) > 0 else 0.0
+
+    def _x(i: int) -> float: return (i / (n - 1)) * W
+    def _y(v: float) -> float: return pad + eh - ((v - lo_adj) / span) * eh
+
+    pts    = [(_x(i), _y(v)) for i, v in enumerate(points)]
+    line_d = "M " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+    area_d = line_d + f" L {pts[-1][0]:.1f},{H} L {pts[0][0]:.1f},{H} Z"
+
+    xm  = (n - 1) / 2.0
+    ym  = sum(points) / n
+    num = sum((i - xm) * (points[i] - ym) for i in range(n))
+    den = sum((i - xm) ** 2 for i in range(n))
+    sl  = num / den if den else 0.0
+    ic  = ym - sl * xm
+    ty1 = max(0.0, min(float(H), _y(ic)))
+    ty2 = max(0.0, min(float(H), _y(sl * (n - 1) + ic)))
+
+    uid = abs(hash(str(points))) % 100000
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
+        f'width="100%" height="100%" preserveAspectRatio="none">'
+        f'<defs><linearGradient id="sg{uid}" x1="0" y1="0" x2="0" y2="1">'
+        f'<stop offset="0%" stop-color="{color}" stop-opacity="0.3"/>'
+        f'<stop offset="100%" stop-color="{color}" stop-opacity="0.03"/>'
+        f'</linearGradient></defs>'
+        f'<path d="{area_d}" fill="url(#sg{uid})"/>'
+        f'<path d="{line_d}" fill="none" stroke="{color}" stroke-width="1.5" '
+        f'stroke-linejoin="round" stroke-linecap="round"/>'
+        f'<line x1="{_x(0):.1f}" y1="{ty1:.1f}" x2="{_x(n-1):.1f}" y2="{ty2:.1f}" '
+        f'stroke="{color}" stroke-width="1" stroke-dasharray="4,3" opacity="0.7"/>'
+        f'</svg>'
+    )
+
+
+def _chart_svg(
+    series: list[tuple[str, str, list[float]]],
+    labels: list[str],
+    fmt_y=None,
+    vw: int = 560,
+    vh: int = 110,
+) -> str:
+    """Multi-line area chart SVG with gridlines, x-labels, legend, and trendline."""
+    if fmt_y is None:
+        fmt_y = lambda v: f"{v:.2f}"
+    lm, rm, tm, bm = 40, 8, 14, 18
+    cw = vw - lm - rm
+    ch = vh - tm - bm
+
+    all_vals = [v for _, _, vals in series for v in vals]
+    raw_max  = max(all_vals, default=0.0)
+    max_v    = (raw_max * 1.15) or 1.0
+    n        = len(labels)
+    if n < 2:
+        return ""
+
+    def _x(i: int) -> float:   return lm + (i / (n - 1)) * cw
+    def _y(v: float) -> float:  return tm + ch * (1.0 - min(1.0, max(0.0, v / max_v)))
+
+    parts: list[str] = []
+
+    # Background
+    parts.append(f'<rect x="{lm}" y="{tm}" width="{cw}" height="{ch}" fill="#0a111e" rx="3"/>')
+
+    # Horizontal gridlines + y-axis labels
+    for step in range(1, 5):
+        gv = max_v * step / 4
+        gy = _y(gv)
+        parts.append(
+            f'<line x1="{lm}" y1="{gy:.1f}" x2="{lm+cw}" y2="{gy:.1f}" '
+            f'stroke="#1e2d45" stroke-width="0.6"/>'
+        )
+        parts.append(
+            f'<text x="{lm-3}" y="{gy+2:.1f}" font-size="6.5" fill="#64748b" '
+            f'text-anchor="end" font-family="system-ui,sans-serif">{fmt_y(gv)}</text>'
+        )
+
+    # Vertical ticks + x-axis labels every 4 hours
+    for i, lbl in enumerate(labels):
+        if i % 4 == 0 or i == n - 1:
+            vx = _x(i)
+            parts.append(
+                f'<line x1="{vx:.1f}" y1="{tm}" x2="{vx:.1f}" y2="{tm+ch+3}" '
+                f'stroke="#1e2d45" stroke-width="0.4"/>'
+            )
+            parts.append(
+                f'<text x="{vx:.1f}" y="{tm+ch+12}" font-size="6.5" fill="#64748b" '
+                f'text-anchor="middle" font-family="system-ui,sans-serif">{lbl}h</text>'
+            )
+
+    # Area fills (rendered first)
+    uid_base = abs(hash(str(all_vals))) % 100000
+    for si, (name, color, vals) in enumerate(series):
+        if len(vals) != n:
+            continue
+        uid = uid_base + si
+        pts = [(_x(i), _y(v)) for i, v in enumerate(vals)]
+        ld  = "M " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+        ad  = ld + f" L {_x(n-1):.1f},{_y(0):.1f} L {_x(0):.1f},{_y(0):.1f} Z"
+        parts.append(
+            f'<defs><linearGradient id="cg{uid}" x1="0" y1="0" x2="0" y2="1">'
+            f'<stop offset="0%" stop-color="{color}" stop-opacity="0.25"/>'
+            f'<stop offset="100%" stop-color="{color}" stop-opacity="0.01"/>'
+            f'</linearGradient></defs>'
+        )
+        parts.append(f'<path d="{ad}" fill="url(#cg{uid})"/>')
+
+    # Lines on top
+    for si, (name, color, vals) in enumerate(series):
+        if len(vals) != n:
+            continue
+        pts = [(_x(i), _y(v)) for i, v in enumerate(vals)]
+        ld  = "M " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+        sw  = 1.8 if si == 0 else 1.2
+        op  = 0.95 if si == 0 else 0.75
+        parts.append(
+            f'<path d="{ld}" fill="none" stroke="{color}" stroke-width="{sw}" '
+            f'stroke-linejoin="round" stroke-linecap="round" opacity="{op}"/>'
+        )
+
+    # Trendline for the total series (first in list)
+    if series:
+        _, tc, tv = series[0]
+        tn  = len(tv)
+        xm2 = (tn - 1) / 2.0
+        ym2 = sum(tv) / tn
+        n2  = sum((i - xm2) * (tv[i] - ym2) for i in range(tn))
+        d2  = sum((i - xm2) ** 2 for i in range(tn))
+        sl2 = n2 / d2 if d2 else 0.0
+        ic2 = ym2 - sl2 * xm2
+        clamp = lambda y: max(float(tm), min(float(tm + ch), y))
+        ty1   = clamp(_y(ic2))
+        ty2   = clamp(_y(sl2 * (tn - 1) + ic2))
+        parts.append(
+            f'<line x1="{_x(0):.1f}" y1="{ty1:.1f}" x2="{_x(tn-1):.1f}" y2="{ty2:.1f}" '
+            f'stroke="{tc}" stroke-width="1.2" stroke-dasharray="5,3" opacity="0.9"/>'
+        )
+
+    # Legend (top-right, built right-to-left)
+    lx = vw - rm
+    for name, color, _ in reversed(series):
+        tw  = len(name) * 4.0 + 14
+        lx -= tw
+        parts.append(f'<rect x="{lx:.1f}" y="3" width="6" height="4" fill="{color}" rx="1"/>')
+        parts.append(
+            f'<text x="{lx+8:.1f}" y="8" font-size="6.5" fill="{color}" '
+            f'font-family="system-ui,sans-serif" font-weight="600">{name}</text>'
+        )
+
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {vw} {vh}" width="100%">'
+        + "".join(parts)
+        + "</svg>"
+    )
+
 
 STATUS_COLORS = {
     "pending":           "#f59e0b",
@@ -429,17 +640,70 @@ async def partial_cost_kpis(request: Request):
     remaining   = max(0.0, daily_lim - today_cost)
     pct_used    = min(100.0, today_cost / daily_lim * 100) if daily_lim else 0
     bar_color   = "#ef4444" if pct_used >= 90 else "#f59e0b" if pct_used >= 70 else "#22c55e"
+
+    # Build 24-hour hourly time-series
+    ts = _get_hourly_series(24)
+
+    # Cumulative series for stat-card sparklines
+    cum_cost: list[float] = []
+    cum_tok:  list[float] = []
+    rc = rt = 0.0
+    for c, t in zip(ts["total_cost"], ts["total_tokens"]):
+        rc += c;  cum_cost.append(rc)
+        rt += t;  cum_tok.append(rt)
+    budget_series = [max(0.0, daily_lim - c) for c in cum_cost]
+
+    cost_sparkline   = _sparkline_svg(cum_cost,                              bar_color)
+    tokens_sparkline = _sparkline_svg(cum_tok,                               "#6366f1")
+    hour_sparkline   = _sparkline_svg([float(v) for v in ts["total_tokens"][-8:]], "#8b5cf6")
+    budget_sparkline = _sparkline_svg(budget_series,                         "#22c55e")
+
+    # Per-agent series for 24h charts
+    _AGENT_DISPLAY = {
+        "ops_agent":   ("Ops",   "#3b82f6"),
+        "eng_agent":   ("Eng",   "#10b981"),
+        "chaos_agent": ("Chaos", "#f97316"),
+    }
+    cost_series: list[tuple[str, str, list[float]]] = [
+        ("Total", "#e2e8f0", ts["total_cost"])
+    ]
+    tok_series: list[tuple[str, str, list[float]]] = [
+        ("Total", "#e2e8f0", [float(v) for v in ts["total_tokens"]])
+    ]
+    for ag, (lbl, clr) in _AGENT_DISPLAY.items():
+        if ag in ts["by_agent_cost"]:
+            cost_series.append((lbl, clr, ts["by_agent_cost"][ag]))
+        if ag in ts["by_agent_tokens"]:
+            tok_series.append((lbl, clr, [float(v) for v in ts["by_agent_tokens"][ag]]))
+
+    def _fmt_cost(v: float) -> str:
+        if v < 0.001: return f"${v:.5f}"
+        if v < 0.01:  return f"${v:.4f}"
+        return f"${v:.3f}"
+
+    def _fmt_tok(v: float) -> str:
+        return f"{v/1000:.1f}k" if v >= 1000 else str(int(v))
+
+    cost_chart   = _chart_svg(cost_series, ts["labels"], fmt_y=_fmt_cost)
+    tokens_chart = _chart_svg(tok_series,  ts["labels"], fmt_y=_fmt_tok)
+
     return templates.TemplateResponse(request, "partials/cost_kpis.html", {
-        "request":    request,
-        "today_cost": today_cost,
-        "today_tok":  today_tok,
-        "hour_tok":   hour_tok,
-        "daily_lim":  daily_lim,
-        "remaining":  remaining,
-        "pct_used":   pct_used,
-        "bar_color":  bar_color,
-        "usages":     usages,
-        "kpis":       kpis,
+        "request":          request,
+        "today_cost":       today_cost,
+        "today_tok":        today_tok,
+        "hour_tok":         hour_tok,
+        "daily_lim":        daily_lim,
+        "remaining":        remaining,
+        "pct_used":         pct_used,
+        "bar_color":        bar_color,
+        "usages":           usages,
+        "kpis":             kpis,
+        "cost_sparkline":   cost_sparkline,
+        "tokens_sparkline": tokens_sparkline,
+        "hour_sparkline":   hour_sparkline,
+        "budget_sparkline": budget_sparkline,
+        "cost_chart":       cost_chart,
+        "tokens_chart":     tokens_chart,
     })
 
 

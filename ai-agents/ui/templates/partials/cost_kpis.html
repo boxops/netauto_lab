@@ -6,7 +6,8 @@
   <div class="section-label mb-8">💰 Cost Monitor</div>
   <div class="cards-row mb-12">
 
-    <div class="metric-card" style="border-top-color:{{ bar_color }}">
+    <div class="metric-card metric-spark" style="border-top-color:{{ bar_color }}">
+      {% if cost_sparkline %}<div class="spark-canvas">{{ cost_sparkline|safe }}</div>{% endif %}
       <div class="metric-title">Today's Spend</div>
       <div class="metric-value" style="color:{{ bar_color }}">${{ "%.4f"|format(today_cost) }}</div>
       <div class="metric-sub">{{ "%.1f"|format(pct_used) }}% of ${{ "%.2f"|format(daily_lim) }} budget</div>
@@ -15,13 +16,15 @@
       </div>
     </div>
 
-    <div class="metric-card" style="border-top-color:#6366f1">
+    <div class="metric-card metric-spark" style="border-top-color:#6366f1">
+      {% if tokens_sparkline %}<div class="spark-canvas">{{ tokens_sparkline|safe }}</div>{% endif %}
       <div class="metric-title">Today's Tokens</div>
       <div class="metric-value" style="color:#6366f1">{{ "{:,}".format(today_tok) }}</div>
       <div class="metric-sub">all agents combined</div>
     </div>
 
-    <div class="metric-card" style="border-top-color:#8b5cf6">
+    <div class="metric-card metric-spark" style="border-top-color:#8b5cf6">
+      {% if hour_sparkline %}<div class="spark-canvas">{{ hour_sparkline|safe }}</div>{% endif %}
       <div class="metric-title">This Hour Tokens</div>
       <div class="metric-value" style="color:#8b5cf6">{{ "{:,}".format(hour_tok) }}</div>
       <div class="metric-sub">
@@ -31,7 +34,8 @@
       </div>
     </div>
 
-    <div class="metric-card" style="border-top-color:#22c55e">
+    <div class="metric-card metric-spark" style="border-top-color:#22c55e">
+      {% if budget_sparkline %}<div class="spark-canvas">{{ budget_sparkline|safe }}</div>{% endif %}
       <div class="metric-title">Budget Remaining</div>
       <div class="metric-value" style="color:#22c55e">${{ "%.4f"|format(remaining) }}</div>
       <div class="metric-sub">${{ "%.2f"|format(daily_lim) }} daily limit</div>
@@ -43,7 +47,7 @@
   {% set rates   = kpis.rates %}
 
   <div class="section-label mb-8">📈 KPIs (Today)</div>
-  <div class="cards-row">
+  <div class="cards-row mb-16">
 
     <div class="metric-card" style="border-top-color:#6366f1">
       <div class="metric-title">Tasks Today</div>
@@ -70,4 +74,17 @@
     </div>
 
   </div>
+
+  <div class="section-label mb-8">📉 24-Hour Trends</div>
+  <div class="chart-row">
+    <div class="chart-card">
+      <div class="chart-card-title">Hourly Cost (USD) — dashed line = trend</div>
+      {{ cost_chart|safe }}
+    </div>
+    <div class="chart-card">
+      <div class="chart-card-title">Hourly Tokens — dashed line = trend</div>
+      {{ tokens_chart|safe }}
+    </div>
+  </div>
+
 </div>
