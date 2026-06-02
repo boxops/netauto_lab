@@ -4,7 +4,7 @@
 
 {% block content %}
 <p class="muted mb-16" style="font-size:0.83em">
-  Live agent states refresh every 2 s · Task queue refreshes every 3 s · Alert pipeline refreshes every 3 s
+  Live agent states refresh every 2 s · Task queue and alert pipeline update instantly via live stream
 </p>
 
 {# ── Live Agent Status ─────────────────────────────────────────────────────── #}
@@ -52,7 +52,7 @@
   <div id="pipeline-visual"
        hx-get="/partials/pipeline"
        hx-vals='js:{"fp": document.getElementById("fp-select")?.value || ""}'
-       hx-trigger="load, every 3s"
+       hx-trigger="load, sse-refresh"
        hx-swap="outerHTML">
     <span class="muted" style="font-size:0.83em">Loading pipeline…</span>
   </div>
@@ -112,7 +112,7 @@
       <tbody id="task-queue-body"
              hx-get="/partials/task-queue"
              hx-include="#status-filter, #type-filter"
-             hx-trigger="every 3s"
+             hx-trigger="sse-refresh"
              hx-swap="innerHTML">
         {% include "partials/task_queue.html" %}
       </tbody>
@@ -132,7 +132,7 @@
   <div class="flex gap-8 items-center flex-wrap">
     <button class="btn btn-secondary btn-sm"
             hx-post="/tasks/clear"
-            hx-vals='{"confirmed":"no"}'
+            hx-vals='{"confirmed":"yes"}'
             hx-target="#clear-status"
             hx-swap="innerHTML"
             hx-confirm="Delete ALL tasks and reset the alert poller? This cannot be undone.">

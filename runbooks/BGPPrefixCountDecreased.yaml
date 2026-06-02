@@ -1,0 +1,14 @@
+alertname: BGPPrefixCountDecreased
+description: BGP prefix count dropped significantly — possible route withdrawal or peering issue
+steps:
+  - check: "show bgp summary"
+    expected: peer state Established and stable prefix count
+  - check: "show ip route bgp | count"
+    expected: route count near expected baseline
+  - check: "show bgp neighbors {peer_ip} received-routes"
+    expected: expected prefixes present
+  - escalate: if prefix count still low after 5 minutes escalate to NOC
+expected_outcome: BGP prefixes restored or root cause identified
+rollback: none — no config changes applied
+risk: low
+automation_confidence: medium

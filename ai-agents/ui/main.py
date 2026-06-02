@@ -3,18 +3,25 @@ Network AI Agents – FastAPI + Jinja2 + HTMX Web UI
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import hmac
 import json
+import logging
 import os
 import sys
 import uuid
 import sqlite3
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.activity_store import ActivityStore
@@ -89,7 +96,10 @@ AGENT_QUICK_PROMPTS = {
     ],
 }
 
-_ACTIVITY_DB = os.environ.get("ACTIVITY_DB_PATH", "./activity.db")
+_ACTIVITY_DB         = os.environ.get("ACTIVITY_DB_PATH", "./activity.db")
+APPROVAL_WEBHOOK_URL = os.getenv("APPROVAL_WEBHOOK_URL", "")
+APPROVAL_WEBHOOK_SECRET = os.getenv("APPROVAL_WEBHOOK_SECRET", "")
+AGENT_UI_URL         = os.getenv("AGENT_UI_URL", "http://localhost:7860")
 
 
 def _get_hourly_series(hours: int = 24) -> dict:
@@ -323,13 +333,101 @@ TYPE_ICONS = {
     "approval_gate": "🔐",
 }
 
+# ── Approval webhook ──────────────────────────────────────────────────────────
+
+async def _fire_approval_webhook(task: dict) -> None:
+    """POST task details to APPROVAL_WEBHOOK_URL when a gate enters awaiting_approval."""
+    if not APPROVAL_WEBHOOK_URL:
+        return
+
+    content: dict = {}
+    try:
+        content = json.loads(task.get("content") or "{}")
+    except Exception:
+        pass
+
+    fix_proposal = content.get("fix_proposal", {})
+    device   = fix_proposal.get("device") or content.get("device", "unknown")
+    commands = fix_proposal.get("commands") or content.get("commands", "none")
+    fix_type = fix_proposal.get("fix_type", "config_change")
+    risk     = fix_proposal.get("risk") or content.get("risk_confirmed", "unknown")
+    task_id  = task["id"]
+
+    payload = {
+        "task_id":   task_id,
+        "title":     task.get("title", ""),
+        "device":    device,
+        "commands":  commands,
+        "fix_type":  fix_type,
+        "risk":      risk,
+        "priority":  task.get("priority", "normal"),
+        "created_at": task.get("created_at", ""),
+        "approve_url": f"{AGENT_UI_URL}/tasks/{task_id}/approve",
+        "reject_url":  f"{AGENT_UI_URL}/tasks/{task_id}/reject",
+        "detail_url":  f"{AGENT_UI_URL}/#task-{task_id}",
+    }
+
+    body = json.dumps(payload).encode()
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if APPROVAL_WEBHOOK_SECRET:
+        sig = hmac.new(APPROVAL_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+        headers["X-Hub-Signature-256"] = f"sha256={sig}"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(APPROVAL_WEBHOOK_URL, content=body, headers=headers, timeout=5)
+            logger.info("Approval webhook fired for task=%s status=%s", task_id, r.status_code)
+    except Exception as exc:
+        logger.warning("Approval webhook failed for task=%s: %s", task_id, exc)
+
+
+# Task IDs already notified — persists for the process lifetime so restarts
+# don't re-fire webhooks for gates that are still awaiting_approval.
+_webhook_notified: set[str] = set()
+
+
+async def _webhook_poller() -> None:
+    """
+    Background task: poll every 10 s for new awaiting_approval gates and fire
+    the approval webhook exactly once per task.  Pre-seeds from existing tasks
+    on startup so a container restart does not re-notify for open gates.
+    """
+    if not APPROVAL_WEBHOOK_URL:
+        return
+
+    # Seed from tasks already in the store so we don't re-fire on restart
+    try:
+        for t in task_store.list_tasks(status="awaiting_approval", limit=500):
+            _webhook_notified.add(t["id"])
+    except Exception:
+        pass
+
+    while True:
+        await asyncio.sleep(10)
+        try:
+            pending = task_store.list_tasks(status="awaiting_approval", limit=100)
+            for t in pending:
+                if t["id"] not in _webhook_notified:
+                    _webhook_notified.add(t["id"])
+                    await _fire_approval_webhook(t)
+        except Exception as exc:
+            logger.warning("Webhook poller error: %s", exc)
+
+
 # ── App setup ─────────────────────────────────────────────────────────────────
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 TMPL_DIR   = os.path.join(BASE_DIR, "templates")
 
-app = FastAPI(title="Network AI Agents", description="Network Automation AI Agents UI", version="2.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asyncio.create_task(_webhook_poller())
+    yield
+
+
+app = FastAPI(title="Network AI Agents", description="Network Automation AI Agents UI", version="2.0.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=TMPL_DIR)
 templates.env.filters["from_json"] = lambda s: json.loads(s) if s else {}
@@ -401,6 +499,33 @@ def _get_pipeline_tasks(fp: str) -> dict[str, list[dict]]:
         if tp in by_type:
             by_type[tp].append(t)
     return by_type
+
+
+def _incident_list_context(open_only: bool = True) -> dict:
+    incidents = task_store.list_incidents(open_only=open_only, limit=100)
+    rows = []
+    for inc in incidents:
+        try:
+            content = json.loads(inc.get("content") or "{}")
+        except Exception:
+            content = {}
+        severity  = content.get("severity", "P3")
+        impact    = content.get("impact", "")
+        devices   = content.get("affected_devices", [])
+        rows.append({
+            "id":          inc["id"],
+            "severity":    severity,
+            "impact":      impact,
+            "status":      inc["status"],
+            "status_color": STATUS_COLORS.get(inc["status"], "#6b7280"),
+            "priority":    inc["priority"],
+            "priority_color": PRIORITY_COLORS.get(inc["priority"], "#6b7280"),
+            "devices":     devices,
+            "device_count": len(devices),
+            "age":         _age(inc.get("created_at")),
+            "created_at":  inc.get("created_at", ""),
+        })
+    return {"incidents": rows, "open_only": open_only}
 
 
 def _pipeline_fingerprints() -> list[tuple[str, str]]:
@@ -481,6 +606,25 @@ def _task_detail_context(task_id: str) -> dict:
                     detail_str = f'· {d.get("error", d.get("reason", ""))}'
                 elif e["event_type"] == "feedback_added":
                     detail_str = f'· verdict={d.get("verdict")} confidence={d.get("confidence")}'
+                elif e["event_type"] == "execution_complete":
+                    parts = [f'status={d.get("status","?")}']
+                    ca = d.get("config_applied")
+                    if ca is True:
+                        parts.append("config ✅")
+                    elif ca is False:
+                        missing = d.get("missing_lines", [])
+                        parts.append(f'config ❌ missing: {", ".join(missing[:2])}{"…" if len(missing) > 2 else ""}')
+                    elif ca is None and "error" not in d:
+                        parts.append("config ?")
+                    detail_str = " · ".join(parts)
+                elif e["event_type"] == "execution_verified":
+                    ar = d.get("alert_resolved")
+                    ttr = d.get("ttr_seconds", 0)
+                    status = "alert ✅ resolved" if ar else ("alert ❌ still firing" if ar is False else "alert ?")
+                    detail_str = f'· {status}'
+                    if ttr:
+                        mins, secs = divmod(ttr, 60)
+                        detail_str += f' · TTR {mins}m {secs}s'
             except Exception:
                 pass
         ts_short = e["timestamp"].split(" ")[1] if " " in e["timestamp"] else e["timestamp"]
@@ -497,17 +641,65 @@ def _task_detail_context(task_id: str) -> dict:
             "notes":      f.get("notes", ""),
         })
 
+    # For approval_gate tasks, extract diff, resolution history, and
+    # post-execution verification summary (config check + alert check).
+    resolution_history: list[dict] = []
+    config_diff: str = ""
+    verification: dict = {}   # populated from execution_complete + execution_verified events
+    if task.get("type") == "approval_gate":
+        try:
+            content_obj = json.loads(task.get("content") or "{}")
+            device = (content_obj.get("device")
+                      or content_obj.get("fix_proposal", {}).get("device", ""))
+            alertname = (content_obj.get("alertname")
+                         or content_obj.get("rca", {}).get("alertname", ""))
+            config_diff = (
+                content_obj.get("config_diff")
+                or content_obj.get("fix_proposal", {}).get("config_diff", "")
+            )
+            if device:
+                resolution_history = task_store.get_resolution_history(
+                    alertname=alertname, device=device, limit=5
+                )
+        except Exception:
+            pass
+
+        # Build verification summary from events on this gate task
+        for e in task.get("events", []):
+            et = e.get("event_type", "")
+            if et not in ("execution_complete", "execution_verified"):
+                continue
+            try:
+                d = json.loads(e.get("detail") or "{}")
+            except Exception:
+                continue
+            if et == "execution_complete":
+                verification["exec_status"]     = d.get("status")
+                verification["config_applied"]   = d.get("config_applied")
+                verification["found_lines"]       = d.get("found_lines", [])
+                verification["missing_lines"]     = d.get("missing_lines", [])
+                verification["changes_applied"]   = d.get("changes_applied", "")
+            elif et == "execution_verified":
+                verification["alert_resolved"]    = d.get("alert_resolved")
+                verification["ttr_seconds"]       = d.get("ttr_seconds", 0)
+                verification["alertname"]         = d.get("alertname", "")
+                verification["verify_device"]     = d.get("device", "")
+                verification["check_at"]          = d.get("check_at", "")
+
     return {
-        "task":        task,
-        "task_id":     task_id,
-        "chain":       chain,
-        "content_str": content_str,
-        "result_str":  result_str,
-        "events":      processed_events,
-        "feedback":    processed_feedback,
-        "type_icons":  TYPE_ICONS,
-        "status_colors": STATUS_COLORS,
-        "age":         _age(task.get("created_at")),
+        "task":               task,
+        "task_id":            task_id,
+        "chain":              chain,
+        "content_str":        content_str,
+        "result_str":         result_str,
+        "events":             processed_events,
+        "feedback":           processed_feedback,
+        "type_icons":         TYPE_ICONS,
+        "status_colors":      STATUS_COLORS,
+        "age":                _age(task.get("created_at")),
+        "resolution_history": resolution_history,
+        "config_diff":        config_diff,
+        "verification":       verification,
     }
 
 
@@ -560,6 +752,15 @@ async def activity_page(request: Request):
 
 # ── Partial routes ────────────────────────────────────────────────────────────
 
+@app.get("/partials/pending-approvals", response_class=HTMLResponse)
+async def partial_pending_approvals(request: Request):
+    count = len(task_store.list_tasks(status="awaiting_approval", limit=100))
+    return templates.TemplateResponse(request, "partials/pending_approvals.html", {
+        "request": request,
+        "count":   count,
+    })
+
+
 @app.get("/partials/status-bar", response_class=HTMLResponse)
 async def partial_status_bar(request: Request):
     agents = [("🚨 Ops", OPS_AGENT_URL), ("🔧 Engineering", ENG_AGENT_URL), ("🔥 Chaos", CHAOS_AGENT_URL)]
@@ -596,6 +797,62 @@ async def partial_agent_status(request: Request):
 async def partial_fingerprints(request: Request):
     fps = _pipeline_fingerprints()
     return templates.TemplateResponse(request, "partials/fingerprints.html", {"request": request, "fps": fps})
+
+
+@app.get("/incidents", response_class=HTMLResponse)
+async def incidents_page(request: Request, open_only: bool = True):
+    ctx = _incident_list_context(open_only=open_only)
+    return templates.TemplateResponse(request, "incidents.html", {
+        "request":   request,
+        "open_only": open_only,
+        **ctx,
+    })
+
+
+@app.get("/partials/incidents", response_class=HTMLResponse)
+async def partial_incidents(request: Request, open_only: bool = True):
+    ctx = _incident_list_context(open_only=open_only)
+    return templates.TemplateResponse(request, "partials/incident_list.html", {
+        "request": request,
+        **ctx,
+    })
+
+
+@app.get("/partials/incident/{incident_id}", response_class=HTMLResponse)
+async def partial_incident_detail(request: Request, incident_id: str):
+    inc = task_store.get_task(incident_id)
+    if not inc:
+        return HTMLResponse(f"<span class='muted'>Incident {incident_id} not found.</span>")
+    pipelines = task_store.get_incident_pipelines(incident_id)
+    try:
+        content = json.loads(inc.get("content") or "{}")
+    except Exception:
+        content = {}
+    return templates.TemplateResponse(request, "partials/incident_detail.html", {
+        "request":   request,
+        "incident":  inc,
+        "content":   content,
+        "pipelines": pipelines,
+        "age":       _age(inc.get("created_at")),
+        "type_icons":   TYPE_ICONS,
+        "status_colors": STATUS_COLORS,
+        "truncate":  _truncate,
+    })
+
+
+@app.post("/incidents/{incident_id}/close", response_class=HTMLResponse)
+async def incident_close(request: Request, incident_id: str,
+                         resolution: str = Form("")):
+    inc = task_store.get_task(incident_id)
+    if not inc:
+        msg, ok = f"Incident `{incident_id}` not found.", False
+    elif inc["status"] in ("complete", "rejected"):
+        msg, ok = f"Incident `{incident_id}` is already {inc['status']}.", False
+    else:
+        task_store.close_incident(incident_id, resolution)
+        msg, ok = f"✅ Incident `{incident_id}` closed.", True
+    return templates.TemplateResponse(request, "partials/action_status.html",
+                                      {"request": request, "msg": msg, "ok": ok})
 
 
 @app.get("/partials/pipeline", response_class=HTMLResponse)
@@ -733,6 +990,37 @@ async def partial_activity_detail(request: Request, record_id: int):
         "record":  record,
         "calls":   calls,
     })
+
+
+# ── SSE task-change stream ────────────────────────────────────────────────────
+
+@app.get("/stream/tasks")
+async def stream_tasks(request: Request):
+    """
+    Server-Sent Events endpoint that emits a 'tasks-changed' event whenever task
+    state changes.  Clients subscribe once and use the event to trigger targeted
+    HTMX refreshes, replacing the need for periodic polling on the pipeline page.
+    """
+    async def generator():
+        last_hash: int | None = None
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                tasks = task_store.list_tasks(limit=200)
+                state_hash = hash(str([(t["id"], t["status"]) for t in tasks]))
+                if state_hash != last_hash:
+                    last_hash = state_hash
+                    yield "event: tasks-changed\ndata: 1\n\n"
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Chat action ───────────────────────────────────────────────────────────────

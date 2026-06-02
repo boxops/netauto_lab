@@ -53,6 +53,96 @@
   </div>
   {% endif %}
 
+  {# Config diff — only for approval_gate tasks #}
+  {% if task.type == "approval_gate" and config_diff %}
+  <div class="mb-8">
+    <div class="section-label mb-4">📝 Config Diff (proposed change)</div>
+    <pre class="config-diff">{% for line in config_diff.splitlines() %}{% if line.startswith('+') and not line.startswith('+++') %}<span class="diff-add">{{ line }}</span>
+{% elif line.startswith('-') and not line.startswith('---') %}<span class="diff-del">{{ line }}</span>
+{% elif line.startswith('@@') %}<span class="diff-hunk">{{ line }}</span>
+{% else %}{{ line }}
+{% endif %}{% endfor %}</pre>
+  </div>
+  {% endif %}
+
+  {# Post-execution verification — only for approval_gate tasks #}
+  {% if task.type == "approval_gate" and verification is defined and verification %}
+  {% set v = verification %}
+  <div class="mb-8">
+    <div class="section-label mb-4">🔬 Post-execution Verification</div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:0.82em">
+
+      {# Config check card #}
+      {% set ca = v.get("config_applied") %}
+      {% if ca is not none %}
+      {% set cfg_color = "#22c55e" if ca == true else "#ef4444" %}
+      {% set cfg_icon  = "✅" if ca == true else "❌" %}
+      <div style="background:var(--bg3); border-radius:6px; padding:10px 12px;
+                  border-left:3px solid {{ cfg_color }}">
+        <div style="font-weight:700; color:{{ cfg_color }}; margin-bottom:4px">
+          {{ cfg_icon }} Config on device
+        </div>
+        {% if ca == true %}
+          <div class="muted">All {{ v.get("found_lines",[])|length }} change(s) confirmed in running-config.</div>
+          {% for ln in v.get("found_lines",[]) %}
+            <div style="font-family:monospace; font-size:0.88em; color:#4ade80; margin-top:2px">+ {{ ln }}</div>
+          {% endfor %}
+        {% else %}
+          {% if v.get("missing_lines") %}
+            <div class="muted" style="margin-bottom:2px">Not found in running-config:</div>
+            {% for ln in v.get("missing_lines",[]) %}
+              <div style="font-family:monospace; font-size:0.88em; color:#f87171; margin-top:2px">✗ {{ ln }}</div>
+            {% endfor %}
+          {% else %}
+            <div class="muted">No verifiable lines.</div>
+          {% endif %}
+        {% endif %}
+      </div>
+      {% else %}
+      <div style="background:var(--bg3); border-radius:6px; padding:10px 12px;
+                  border-left:3px solid #6b7280">
+        <div style="font-weight:700; color:#9ca3af; margin-bottom:4px">⚠️ Config check unavailable</div>
+        <div class="muted">{{ v.get("error","Device unreachable or no config lines to verify.") }}</div>
+      </div>
+      {% endif %}
+
+      {# Alert-resolution card #}
+      {% set ar = v.get("alert_resolved") %}
+      {% if ar is not none %}
+      {% set alr_color = "#22c55e" if ar == true else "#f59e0b" %}
+      {% set alr_icon  = "✅" if ar == true else "⚠️" %}
+      <div style="background:var(--bg3); border-radius:6px; padding:10px 12px;
+                  border-left:3px solid {{ alr_color }}">
+        <div style="font-weight:700; color:{{ alr_color }}; margin-bottom:4px">
+          {{ alr_icon }} Alert in Prometheus
+        </div>
+        {% if ar == true %}
+          <div class="muted">{{ v.get("alertname","Alert") }} no longer firing.</div>
+        {% else %}
+          <div class="muted">{{ v.get("alertname","Alert") }} still firing on {{ v.get("verify_device","device") }}.</div>
+        {% endif %}
+        {% set ttr = v.get("ttr_seconds",0) %}
+        {% if ttr %}
+          {% set tm = (ttr // 60)|int %}
+          {% set ts_ = (ttr % 60)|int %}
+          <div class="muted" style="margin-top:4px">TTR: {{ tm }}m {{ ts_ }}s</div>
+        {% endif %}
+        {% if v.get("check_at") %}
+          <div class="muted" style="font-size:0.82em; margin-top:2px">Checked at {{ v.check_at }}</div>
+        {% endif %}
+      </div>
+      {% else %}
+      <div style="background:var(--bg3); border-radius:6px; padding:10px 12px;
+                  border-left:3px solid #6b7280">
+        <div style="font-weight:700; color:#9ca3af; margin-bottom:4px">⏳ Alert check pending</div>
+        <div class="muted">Will check Prometheus in ~{{ (300 // 60)|int }} min.</div>
+      </div>
+      {% endif %}
+
+    </div>
+  </div>
+  {% endif %}
+
   {# Timeline #}
   <div class="mb-8">
     <div class="section-label mb-4">Timeline</div>
@@ -86,5 +176,41 @@
       <span class="muted">No feedback yet.</span>
     {% endif %}
   </div>
+
+  {# Resolution history — only shown for approval_gate tasks #}
+  {% if task.type == "approval_gate" and resolution_history is defined %}
+  <div class="mt-8">
+    <div class="section-label mb-4">📋 Recent Resolutions (same device)</div>
+    {% if resolution_history %}
+      {% for r in resolution_history %}
+        {% set resolved = r.alert_resolved %}
+        {% set ttr = r.ttr_seconds %}
+        <div style="font-size:0.78em; margin-bottom:6px; padding:6px 10px;
+                    background:var(--bg3); border-radius:6px">
+          <div class="flex items-center justify-between gap-8">
+            <code class="muted" style="font-size:0.85em">{{ r.id }}</code>
+            <span style="color:{{ '#22c55e' if r.exec_status == 'success' else '#ef4444' }}; font-weight:600">
+              {{ '✅ success' if r.exec_status == 'success' else '❌ ' ~ r.exec_status }}
+            </span>
+            {% if resolved is not none %}
+              <span style="color:{{ '#22c55e' if resolved else '#f59e0b' }}; font-size:0.85em">
+                {{ '🟢 resolved' if resolved else '🟡 still firing' }}
+              </span>
+            {% endif %}
+            {% if ttr %}<span class="muted">{{ (ttr // 60) }}m {{ (ttr % 60) }}s TTR</span>{% endif %}
+          </div>
+          {% if r.changes_applied %}
+            <div class="muted mt-4" style="font-size:0.85em">{{ r.changes_applied }}</div>
+          {% endif %}
+          <div class="muted" style="font-size:0.78em; margin-top:2px">{{ r.created_at }}</div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <span class="muted" style="font-size:0.83em">No previous resolutions for this device.</span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+</div>
 </div>
 {% endif %}

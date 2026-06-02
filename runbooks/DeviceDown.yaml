@@ -1,0 +1,13 @@
+alertname: DeviceDown
+description: Device is unreachable via ICMP
+steps:
+  - check: "ping {device_ip} repeat 10"
+    expected: success rate >= 80 percent
+  - check: "show cdp neighbors"
+    expected: device appears in CDP neighbor table
+  - check: verify upstream link state using get_device_metrics
+  - escalate: if device still unreachable after 5 minutes escalate to on-call
+expected_outcome: Device reachability confirmed or escalated to on-call
+rollback: none — no config changes applied for DeviceDown
+risk: low
+automation_confidence: low

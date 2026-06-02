@@ -1,0 +1,33 @@
+{% if not incidents %}
+  <div class="muted" style="font-size:0.85em; padding:8px 0">No {% if open_only %}open {% endif %}incidents.</div>
+{% else %}
+{% for inc in incidents %}
+{% set sc = inc.status_color %}
+{% set pc = inc.priority_color %}
+<div class="incident-row" style="margin-bottom:8px; padding:10px 14px;
+     background:var(--bg2); border-radius:8px; border:1px solid var(--border);
+     cursor:pointer"
+     hx-get="/partials/incident/{{ inc.id }}"
+     hx-target="#incident-detail"
+     hx-swap="innerHTML">
+  <div class="flex items-center gap-8 flex-wrap">
+    <span style="font-weight:700; color:{{ pc }}; font-size:0.9em; min-width:30px">
+      {{ inc.severity }}
+    </span>
+    <span class="pill" style="background:{{ sc }}22; color:{{ sc }}; border-color:{{ sc }}55; font-size:0.75em">
+      {{ inc.status|upper }}
+    </span>
+    <span style="flex:1; font-size:0.85em">{{ inc.impact }}</span>
+    <span class="muted" style="font-size:0.78em">{{ inc.age }}</span>
+  </div>
+  <div class="muted" style="font-size:0.78em; margin-top:4px">
+    <code>{{ inc.id }}</code>
+    {% if inc.device_count %}
+      · {{ inc.device_count }} device{{ 's' if inc.device_count > 1 else '' }}:
+      {% for d in inc.devices[:5] %}{{ d }}{% if not loop.last %}, {% endif %}{% endfor %}
+      {% if inc.device_count > 5 %}&hellip;{% endif %}
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+{% endif %}

@@ -1,0 +1,18 @@
+alertname: InterfaceAdminDown
+description: Interface was explicitly shut down
+steps:
+  - check: "show interface {interface} status"
+    expected: status is disabled (admin shutdown)
+  - check: verify shutdown was not intentional via change management records
+  - config: |
+      interface {interface}
+        no shutdown
+    description: Re-enable the interface only if shutdown was unintentional
+  - verify: "show interface {interface} status"
+    expected: connected
+expected_outcome: Interface returns to connected state if shutdown was unintentional
+rollback: |
+  interface {interface}
+    shutdown
+risk: medium
+automation_confidence: low

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% set active_tab = "incidents" %}
+{% block title %}Incidents — Network AI Agents{% endblock %}
+
+{% block content %}
+<p class="muted mb-16" style="font-size:0.83em">
+  Incident view groups correlated alerts into a single timeline. Each incident
+  links to the full RCA → fix → validation → approval pipeline for every affected device.
+</p>
+
+<div class="flex gap-8 items-center mb-12">
+  <a href="/incidents?open_only=true"
+     class="btn btn-sm {{ 'btn-primary' if open_only else 'btn-secondary' }}">Open</a>
+  <a href="/incidents?open_only=false"
+     class="btn btn-sm {{ 'btn-primary' if not open_only else 'btn-secondary' }}">All</a>
+</div>
+
+<div class="flex gap-16" style="min-height:400px">
+
+  {# ── Incident List ──────────────────────────────────────────────────── #}
+  <div style="flex:0 0 380px; min-width:280px">
+    <div class="section-title mb-8">Incidents</div>
+    <div id="incident-list"
+         hx-get="/partials/incidents?open_only={{ 'true' if open_only else 'false' }}"
+         hx-trigger="sse-refresh"
+         hx-swap="innerHTML">
+      {% include "partials/incident_list.html" %}
+    </div>
+  </div>
+
+  {# ── Incident Detail ────────────────────────────────────────────────── #}
+  <div style="flex:1; min-width:0">
+    <div class="section-title mb-8">Details</div>
+    <div id="incident-detail" class="detail-panel">
+      <span class="muted">Select an incident to see its full timeline.</span>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

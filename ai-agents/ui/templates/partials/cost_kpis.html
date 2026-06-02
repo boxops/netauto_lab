@@ -73,6 +73,18 @@
       <div class="metric-sub">{{ today_t.awaiting_approval }} awaiting approval</div>
     </div>
 
+    {% set mttr = kpis.mttr %}
+    <div class="metric-card" style="border-top-color:#06b6d4">
+      <div class="metric-title">Avg Resolution Time</div>
+      {% if mttr.resolved_today > 0 %}
+        <div class="metric-value" style="color:#06b6d4">{{ mttr.avg_minutes }}m</div>
+        <div class="metric-sub">p50 {{ mttr.p50_minutes }}m · {{ mttr.resolved_today }} resolved today</div>
+      {% else %}
+        <div class="metric-value" style="color:#6b7280">—</div>
+        <div class="metric-sub">no verified resolutions yet</div>
+      {% endif %}
+    </div>
+
   </div>
 
   <div class="section-label mb-8">📉 24-Hour Trends</div>

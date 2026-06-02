@@ -22,20 +22,41 @@ from shared.rate_limiter import BudgetExceededError
 
 logger = logging.getLogger(__name__)
 
-AGENT_NAME     = "chaos_agent"
-POLL_INTERVAL  = 120    # seconds — runs after eng (90s) so fixes are ready
-MAX_PER_CYCLE  = 1
-INTER_TASK_DELAY = 10
+AGENT_NAME             = "chaos_agent"
+POLL_INTERVAL          = 120   # seconds — full sweep
+CRITICAL_POLL_INTERVAL = 15    # seconds — tight loop for critical/high tasks
+MAX_PER_CYCLE          = 1
+INTER_TASK_DELAY       = 10
+RETRY_BACKOFF          = 120   # seconds before re-queuing a failed task
 
 _VALIDATION_KEYS = {"VERDICT", "CONFIDENCE", "RISK_CONFIRMED", "NOTES"}
 
 
 def _parse_tail(text: str, keys: set) -> dict:
     result = {}
-    for line in text.split("\n"):
-        m = re.match(r"^([A-Z][A-Z_]+):\s*(.+)$", line.strip())
+    lines = text.split("\n")
+    n = len(lines)
+    i = 0
+    while i < n:
+        m = re.match(r"^([A-Z][A-Z_]+):\s*(.*)$", lines[i].strip())
         if m and m.group(1) in keys:
-            result[m.group(1)] = m.group(2).strip()
+            key   = m.group(1)
+            value = m.group(2).strip()
+            if not value:
+                j = i + 1
+                while j < n and not lines[j].strip():
+                    j += 1
+                if j < n and lines[j].strip().startswith("```"):
+                    j += 1
+                    code: list[str] = []
+                    while j < n and not lines[j].strip().startswith("```"):
+                        code.append(lines[j])
+                        j += 1
+                    value = "\n".join(code).strip()
+                    i = j
+            if value:
+                result[key] = value
+        i += 1
     return result
 
 
@@ -56,17 +77,48 @@ class ChaosTaskRunner:
         self._thread.start()
         logger.info("ChaosTaskRunner started (interval=%ds)", POLL_INTERVAL)
 
+        # Consume validation queue immediately when RabbitMQ is configured.
+        # Polling loop stays as fallback.
+        from shared.task_bus import start_consumer
+        start_consumer("validation", self._handle_mq_task)
+
+    def _handle_mq_task(self, task_id: str, _priority: str) -> None:
+        """RabbitMQ consumer callback: process a validation task by ID."""
+        task = self._task_store.get_task(task_id)
+        if task and task.get("status") == "pending":
+            self._process_task(task)
+
     def stop(self) -> None:
         self._stop.set()
 
     # ── loop ──────────────────────────────────────────────────────────────────
 
     def _loop(self) -> None:
-        while not self._stop.wait(POLL_INTERVAL):
+        ticks = 0
+        while not self._stop.wait(CRITICAL_POLL_INTERVAL):
+            ticks += 1
             try:
-                self._poll_once()
+                self._poll_priority()
             except Exception:
-                logger.exception("ChaosTaskRunner: unhandled error in poll cycle")
+                logger.exception("ChaosTaskRunner: error in priority sweep")
+            if ticks % (POLL_INTERVAL // CRITICAL_POLL_INTERVAL) == 0:
+                try:
+                    self._poll_once()
+                except Exception:
+                    logger.exception("ChaosTaskRunner: error in normal sweep")
+
+    def _poll_priority(self) -> None:
+        pending = self._task_store.list_tasks(
+            assigned_to=AGENT_NAME,
+            status="pending",
+            type="validation",
+            limit=MAX_PER_CYCLE,
+            priority_filter={"critical", "high"},
+        )
+        for task in pending:
+            if self._stop.is_set():
+                break
+            self._process_task(task)
 
     def _poll_once(self) -> None:
         pending = self._task_store.list_tasks(
@@ -212,6 +264,17 @@ class ChaosTaskRunner:
         except Exception as exc:
             self._task_store.fail_task(task_id, AGENT_NAME, str(exc)[:500])
             logger.exception("ChaosTaskRunner: task=%s failed", task_id)
+            self._schedule_retry(task_id)
+
+    def _schedule_retry(self, task_id: str) -> None:
+        import threading as _t
+        def _do_retry():
+            self._stop.wait(RETRY_BACKOFF)
+            if not self._stop.is_set():
+                ok = self._task_store.retry_task(task_id, AGENT_NAME)
+                if ok:
+                    logger.info("ChaosTaskRunner: re-queued task=%s for retry", task_id)
+        _t.Thread(target=_do_retry, daemon=True).start()
 
     # ── child task creation ───────────────────────────────────────────────────
 
@@ -228,6 +291,8 @@ class ChaosTaskRunner:
         device = fix_proposal.get("device", "unknown")
         fix_type = fix_proposal.get("fix_type", "config_change")
         commands = fix_proposal.get("commands", "none")
+        # Carry maintenance flag forward from the validation task
+        do_not_auto_execute = bool(validation_task.get("do_not_auto_execute"))
 
         priority_map = {"high": "high", "medium": "normal", "low": "low"}
         priority = priority_map.get(risk_confirmed, "normal")
@@ -242,15 +307,20 @@ class ChaosTaskRunner:
                 parent_id=validation_task["id"],
                 alert_fingerprint=fp,
                 priority=priority,
+                do_not_auto_execute=do_not_auto_execute,
                 content={
-                    "fix_proposal":   fix_proposal,
-                    "rca":            rca,
-                    "validation_verdict": verdict,
-                    "risk_confirmed": risk_confirmed,
-                    "chaos_notes":    notes,
-                    "commands":       commands,
-                    "device":         device,
+                    "fix_proposal":        fix_proposal,
+                    "rca":                 rca,
+                    "validation_verdict":  verdict,
+                    "risk_confirmed":      risk_confirmed,
+                    "chaos_notes":         notes,
+                    "commands":            commands,
+                    "device":              device,
+                    "do_not_auto_execute": do_not_auto_execute,
+                    "config_diff":         fix_proposal.get("config_diff", ""),
                     "reason": (
+                        "Device in maintenance window — auto-execution suppressed."
+                        if do_not_auto_execute else
                         f"Chaos agent validated fix as '{verdict}' (risk={risk_confirmed}). "
                         f"Human approval required to execute with check_mode=False."
                     ),

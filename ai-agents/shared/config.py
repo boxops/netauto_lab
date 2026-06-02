@@ -55,6 +55,31 @@ class Settings(BaseSettings):
     openai_input_cost_per_1k: float = 0.005
     openai_output_cost_per_1k: float = 0.015
 
+    # Lab validation before production execution
+    lab_validation_enabled: bool = False   # set true to apply changes in clab before prod
+    lab_device_prefix: str = "clab-"       # prefix mapping prod device → lab device name
+    lab_verify_delay: int = 30             # seconds to wait after applying lab fix before checking
+
+    # Gitea runbook library
+    gitea_url: str = "http://gitea:3000"
+    gitea_token: str = ""          # Gitea API token with repo read access
+    gitea_runbook_owner: str = "netauto"
+    gitea_runbook_repo: str = "runbooks"
+    gitea_runbook_branch: str = "main"
+
+    # Maintenance window suppression
+    # When enabled, the alert poller checks Nautobot device status and tags
+    # before creating RCA tasks.  Devices in maintenance are deprioritised and
+    # auto-execution is suppressed without preventing human review.
+    maintenance_check_enabled: bool = False
+    maintenance_statuses: str = "planned,staged,decommissioning"  # CSV of Nautobot statuses
+    maintenance_tag: str = "maintenance"  # Nautobot tag that marks devices in maintenance
+
+    # Approval webhook — POST when a task enters awaiting_approval
+    approval_webhook_url: str = ""
+    approval_webhook_secret: str = ""  # HMAC-SHA256 signing secret; empty = unsigned
+    agent_ui_url: str = "http://localhost:7860"  # public URL used in webhook links
+
     @property
     def use_openai(self) -> bool:
         """Return True if OpenAI API key is configured."""

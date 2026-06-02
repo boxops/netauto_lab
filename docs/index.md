@@ -16,15 +16,16 @@ Welcome to the documentation for the **Intermediate Network Automation Stack** â
 
 ## Documentation Sections
 
-| Section                                         | Description                                                              |
-| ----------------------------------------------- | ------------------------------------------------------------------------ |
-| [Installation](installation.md)                 | Prerequisites and step-by-step setup                                     |
-| [Architecture](architecture.md)                 | Service topology and design decisions                                    |
-| [Data Loader](data-loader.md)                   | Declarative Nautobot data reconciliation and CRUD workflow               |
-| [AI Agents](agents.md)                          | Agent capabilities, REST APIs, and example prompts                       |
-| [Closed-Loop Pipeline](closed-loop-pipeline.md) | Autonomous incident-response pipeline: stages, task model, approval gate |
-| [Ansible Playbooks](ansible.md)                 | Automation playbooks reference                                           |
-| [Monitoring](monitoring.md)                     | Dashboards, alerts, and metrics reference                                |
+| Section                                         | Description                                                                                       |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [Installation](installation.md)                 | Prerequisites and step-by-step setup                                                              |
+| [Architecture](architecture.md)                 | Service topology, network layout, storage backends, and design decisions                          |
+| [Data Loader](data-loader.md)                   | Declarative Nautobot data reconciliation and CRUD workflow                                        |
+| [AI Agents](agents.md)                          | Agent capabilities, runbook library, REST APIs, and example prompts                               |
+| [Agent Tools Framework](agent-tools-framework.md) | Tool tier model, adding new tools, docstring conventions                                        |
+| [Closed-Loop Pipeline](closed-loop-pipeline.md) | Autonomous incident-response pipeline: stages, incidents, approval gate, post-execution verification, data model |
+| [Ansible Playbooks](ansible.md)                 | Automation playbooks reference                                                                    |
+| [Monitoring](monitoring.md)                     | Dashboards, alerts, and metrics reference                                                         |
 
 ## Quick Links
 

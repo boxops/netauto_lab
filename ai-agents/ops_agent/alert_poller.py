@@ -33,11 +33,13 @@ logger = logging.getLogger(__name__)
 # Structured-tail keys the ops agent is prompted to emit
 _RCA_KEYS = {"DIAGNOSIS", "AFFECTED", "ACTION", "CONFIDENCE"}
 
-POLL_INTERVAL       = 60    # seconds between poll cycles
-STARTUP_DELAY       = 30    # seconds to wait before the very first poll
-INTER_ALERT_DELAY   = 20    # seconds between consecutive investigations
-MAX_PER_CYCLE       = 2     # max new investigations to start per poll cycle
-RATE_LIMIT_BACKOFF  = 70    # seconds to wait after a 429 before retrying
+POLL_INTERVAL          = 60    # seconds between full poll cycles
+CRITICAL_POLL_INTERVAL = 15    # seconds — tight loop for critical alerts
+STARTUP_DELAY          = 30    # seconds to wait before the very first poll
+INTER_ALERT_DELAY      = 20    # seconds between consecutive investigations
+MAX_PER_CYCLE          = 2     # max new investigations to start per poll cycle
+RATE_LIMIT_BACKOFF     = 70    # seconds to wait after a 429 before retrying
+RETRY_BACKOFF          = 120   # seconds before retrying a failed RCA task
 
 SEVERITIES = {"critical", "warning"}
 
@@ -115,18 +117,22 @@ class AlertPoller:
     # ── main loop ──────────────────────────────────────────────────────────────
 
     def _loop(self) -> None:
-        # Grace period: let any in-flight resolved webhooks arrive before the
-        # first poll so we don't process already-resolved firing events.
         if self._stop.wait(STARTUP_DELAY):
             return
-        while not self._stop.is_set():
+        ticks = 0
+        while not self._stop.wait(CRITICAL_POLL_INTERVAL):
+            ticks += 1
             try:
-                self._poll_once()
+                self._poll_once(critical_only=True)     # critical alerts every 15 s
             except Exception:
-                logger.exception("AlertPoller: unhandled error in poll cycle")
-            self._stop.wait(POLL_INTERVAL)
+                logger.exception("AlertPoller: error in priority sweep")
+            if ticks % (POLL_INTERVAL // CRITICAL_POLL_INTERVAL) == 0:
+                try:
+                    self._poll_once(critical_only=False)  # all alerts every 60 s
+                except Exception:
+                    logger.exception("AlertPoller: error in normal sweep")
 
-    def _poll_once(self) -> None:
+    def _poll_once(self, critical_only: bool = False) -> None:
         raw_events = self._fetch_events()
         if not raw_events:
             return
@@ -155,6 +161,8 @@ class AlertPoller:
 
         new_work: list[dict] = []
         for event in events:
+            if critical_only and str(event.get("severity", "")).lower() != "critical":
+                continue
             work = self._classify_event(event, live_alerts)
             if work is not None:
                 new_work.append(work)
@@ -264,6 +272,59 @@ class AlertPoller:
         )
         return event
 
+    # ── maintenance window check ───────────────────────────────────────────────
+
+    def _check_maintenance_window(self, device: str) -> bool:
+        """
+        Return True if the device appears to be in a maintenance window.
+
+        Checks two signals in Nautobot (requires MAINTENANCE_CHECK_ENABLED=true):
+        1. Device status matches one of the configured maintenance statuses.
+        2. Device carries the configured maintenance tag.
+
+        Falls back to False on any error so a Nautobot outage never suppresses
+        alerts silently.
+        """
+        if not settings.maintenance_check_enabled or not device:
+            return False
+        try:
+            resp = httpx.get(
+                f"{settings.nautobot_url}/api/dcim/devices/",
+                params={"name": device, "limit": 1},
+                headers={"Authorization": f"Token {settings.nautobot_token}"},
+                timeout=5,
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            if not results:
+                return False
+            dev = results[0]
+
+            # Check device status slug
+            status_slug = (dev.get("status") or {}).get("value", "").lower()
+            maint_statuses = {s.strip().lower()
+                              for s in settings.maintenance_statuses.split(",")}
+            if status_slug in maint_statuses:
+                logger.info(
+                    "AlertPoller: device=%s in maintenance status=%s", device, status_slug
+                )
+                return True
+
+            # Check for maintenance tag
+            tags = [t.get("slug", "") for t in dev.get("tags", [])]
+            if settings.maintenance_tag.lower() in tags:
+                logger.info(
+                    "AlertPoller: device=%s has maintenance tag", device
+                )
+                return True
+
+        except Exception as exc:
+            logger.debug(
+                "AlertPoller: maintenance check failed for device=%s: %s — treating as not in maintenance",
+                device, exc,
+            )
+        return False
+
     # ── investigation ──────────────────────────────────────────────────────────
 
     def _investigate(self, event: dict) -> None:
@@ -342,13 +403,75 @@ class AlertPoller:
                 self._seen[fp] = f"{fp}:firing"
                 return
 
+        # Alert correlation: if there is already an active RCA for the same device
+        # within the last 15 minutes, record this alert on it instead of spawning
+        # a parallel pipeline (common during alert storms).
+        if device:
+            correlated = self._task_store.get_active_rca_for_device(device, minutes=15)
+            if correlated:
+                self._task_store.add_event(
+                    correlated["id"], "system", "alert_correlated",
+                    {"alertname": alertname, "fingerprint": fp,
+                     "summary": summary, "severity": severity},
+                )
+                self._seen[fp] = f"{fp}:firing"
+                logger.info(
+                    "AlertPoller: correlated alert %s (fp=%s) onto existing task=%s for device=%s",
+                    alertname, fp[:12], correlated["id"], device,
+                )
+                return
+
+        # Maintenance window: create a deprioritised, no-auto-execute task
+        # rather than skipping the alert entirely — humans can still review it.
+        in_maintenance = self._check_maintenance_window(device)
+        if in_maintenance:
+            logger.info(
+                "AlertPoller: device=%s is in maintenance — creating low-priority task "
+                "with auto-execute suppressed (alert=%s fp=%s)",
+                device, alertname, fp[:12],
+            )
+
+        task_priority = "low" if in_maintenance else (
+            "high" if severity == "critical" else "normal"
+        )
+
+        # Incident grouping: find or create an incident for this alert.
+        # An incident groups all correlated alerts within a 30-minute window.
+        incident_id: str | None = None
+        if device:
+            incident = self._task_store.get_open_incident_for_device(device, minutes=30)
+            if incident:
+                incident_id = incident["id"]
+                self._task_store.add_device_to_incident(incident_id, device)
+                logger.info(
+                    "AlertPoller: linked alert %s (fp=%s) to existing incident=%s",
+                    alertname, fp[:12], incident_id,
+                )
+            else:
+                sev_to_severity = {"critical": "P1", "warning": "P2"}
+                inc = self._task_store.create_incident(
+                    severity=sev_to_severity.get(severity, "P3"),
+                    impact=f"{alertname} on {device or instance}",
+                    alert_fingerprint=fp,
+                    device=device,
+                    alertname=alertname,
+                )
+                incident_id = inc["id"]
+                logger.info(
+                    "AlertPoller: created new incident=%s for alert %s device=%s",
+                    incident_id, alertname, device,
+                )
+
         task = self._task_store.create_task(
             type="rca",
             created_by="system",
             assigned_to="ops_agent",
-            title=f"{alertname}: {device or instance}",
+            title=f"{'[MAINT] ' if in_maintenance else ''}{alertname}: {device or instance}",
             alert_fingerprint=fp,
-            priority="high" if severity == "critical" else "normal",
+            priority=task_priority,
+            maintenance_window=in_maintenance,
+            do_not_auto_execute=in_maintenance,
+            incident_id=incident_id,
             content={
                 "alertname":   alertname,
                 "severity":    severity,
@@ -374,10 +497,29 @@ class AlertPoller:
         """Extract KEY: value pairs from anywhere in an agent response."""
         import re
         result = {}
-        for line in text.split("\n"):
-            m = re.match(r"^([A-Z][A-Z_]+):\s*(.+)$", line.strip())
+        lines = text.split("\n")
+        n = len(lines)
+        i = 0
+        while i < n:
+            m = re.match(r"^([A-Z][A-Z_]+):\s*(.*)$", lines[i].strip())
             if m and m.group(1) in expected_keys:
-                result[m.group(1)] = m.group(2).strip()
+                key   = m.group(1)
+                value = m.group(2).strip()
+                if not value:
+                    j = i + 1
+                    while j < n and not lines[j].strip():
+                        j += 1
+                    if j < n and lines[j].strip().startswith("```"):
+                        j += 1
+                        code: list[str] = []
+                        while j < n and not lines[j].strip().startswith("```"):
+                            code.append(lines[j])
+                            j += 1
+                        value = "\n".join(code).strip()
+                        i = j
+                if value:
+                    result[key] = value
+            i += 1
         return result
 
     # ── investigation + handoff ────────────────────────────────────────────────
@@ -455,6 +597,22 @@ class AlertPoller:
             logger.exception(
                 "AlertPoller: investigation failed task=%s alert=%s", task_id, alertname
             )
+            # Remove from _seen so the poller can reinvestigate on next cycle
+            # if the alert is still firing, then schedule a task-level retry.
+            fp_val = (event or {}).get("fingerprint", "")
+            if fp_val:
+                self._seen.pop(fp_val, None)
+            self._schedule_retry(task_id)
+
+    def _schedule_retry(self, task_id: str) -> None:
+        import threading as _t
+        def _do_retry():
+            self._stop.wait(RETRY_BACKOFF)
+            if not self._stop.is_set():
+                ok = self._task_store.retry_task(task_id, "ops_agent")
+                if ok:
+                    logger.info("AlertPoller: re-queued task=%s for retry", task_id)
+        _t.Thread(target=_do_retry, daemon=True).start()
 
     def _create_fix_proposal(
         self,

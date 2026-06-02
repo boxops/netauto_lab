@@ -1192,6 +1192,189 @@ def run_config_commands(
         return json.dumps({"error": str(e)})
 
 
+# ── Runbook library ──────────────────────────────────────────────────────────
+
+# Built-in runbooks for common alert types.  Each runbook is a YAML string
+# returned verbatim so the agent can parse steps, expected outcomes, and
+# rollback commands without re-deriving them from scratch.
+_BUILTIN_RUNBOOKS: dict[str, str] = {
+    "BGPPeerDown": """
+alertname: BGPPeerDown
+description: BGP session is not Established
+steps:
+  - check: "show bgp neighbors {peer_ip} | include BGP state"
+    expected: "BGP state = Established"
+  - check: "show ip route bgp"
+    expected: routes from BGP peer visible in routing table
+  - config: |
+      neighbor {peer_ip} shutdown
+      no neighbor {peer_ip} shutdown
+    description: Reset BGP session to force re-establishment
+  - verify: "show bgp neighbors {peer_ip} | include BGP state"
+    expected: "BGP state = Established"
+expected_outcome: BGP session returns to Established state within 30 seconds
+rollback: "no neighbor {peer_ip} shutdown"
+risk: low
+automation_confidence: high
+""",
+    "InterfaceDown": """
+alertname: InterfaceDown
+description: Interface is operationally down
+steps:
+  - check: "show interface {interface} status"
+    expected: connected
+  - check: "show interface {interface} counters errors"
+    expected: low or zero error counts
+  - config: |
+      interface {interface}
+        no shutdown
+    description: Re-enable the interface if admin-down
+  - verify: "show interface {interface} status"
+    expected: connected
+expected_outcome: Interface returns to connected state
+rollback: |
+  interface {interface}
+    shutdown
+risk: medium
+automation_confidence: medium
+""",
+    "InterfaceAdminDown": """
+alertname: InterfaceAdminDown
+description: Interface was explicitly shut down
+steps:
+  - check: "show interface {interface} status"
+    expected: status is disabled (admin shutdown)
+  - check: verify shutdown was not intentional via change management records
+  - config: |
+      interface {interface}
+        no shutdown
+    description: Re-enable the interface only if shutdown was unintentional
+  - verify: "show interface {interface} status"
+    expected: connected
+expected_outcome: Interface returns to connected state if shutdown was unintentional
+rollback: |
+  interface {interface}
+    shutdown
+risk: medium
+automation_confidence: low
+""",
+    "DeviceDown": """
+alertname: DeviceDown
+description: Device is unreachable via ICMP
+steps:
+  - check: "ping {device_ip} repeat 10"
+    expected: success rate >= 80 percent
+  - check: "show cdp neighbors"
+    expected: device appears in CDP neighbor table
+  - check: verify upstream link state using get_device_metrics
+  - escalate: if device still unreachable after 5 minutes escalate to on-call
+expected_outcome: Device reachability confirmed or escalated to on-call
+rollback: none — no config changes applied for DeviceDown
+risk: low
+automation_confidence: low
+""",
+    "HighInterfaceUtilization": """
+alertname: HighInterfaceUtilization
+description: Interface utilisation is high (>80%)
+steps:
+  - check: "show interface {interface} counters rates"
+    expected: identify traffic rate and direction
+  - check: "show ip interface brief"
+    expected: confirm no alternate paths available
+  - check: query_prometheus for top-N flows contributing to utilisation
+  - config: consider QoS policy or traffic engineering if congestion is sustained
+expected_outcome: Traffic source identified; escalated to capacity planning if needed
+rollback: remove QoS policy if applied
+risk: low
+automation_confidence: medium
+""",
+    "InterfaceHighErrorRate": """
+alertname: InterfaceHighErrorRate
+description: Interface has elevated CRC or input error rate
+steps:
+  - check: "show interface {interface}"
+    expected: identify error type (CRC / input / output)
+  - check: "show interface {interface} counters"
+    expected: errors increasing over time
+  - config: |
+      interface {interface}
+        shutdown
+        no shutdown
+    description: Bounce the interface to clear transient errors
+  - verify: "show interface {interface} counters errors"
+    expected: error counters stable and low
+expected_outcome: Error rate returns to baseline; hardware issue escalated if errors persist
+rollback: |
+  interface {interface}
+    no shutdown
+risk: medium
+automation_confidence: medium
+""",
+    "BGPPrefixCountDecreased": """
+alertname: BGPPrefixCountDecreased
+description: BGP prefix count dropped significantly — possible route withdrawal or peering issue
+steps:
+  - check: "show bgp summary"
+    expected: peer state Established and stable prefix count
+  - check: "show ip route bgp | count"
+    expected: route count near expected baseline
+  - check: "show bgp neighbors {peer_ip} received-routes"
+    expected: expected prefixes present
+  - escalate: if prefix count still low after 5 minutes escalate to NOC
+expected_outcome: BGP prefixes restored or root cause identified
+rollback: none — no config changes applied
+risk: low
+automation_confidence: medium
+""",
+}
+
+
+@tool
+def get_runbook(alertname: str) -> str:
+    """
+    Fetch the canonical remediation runbook for a known alert type.
+
+    First checks the Gitea runbook repository (if configured), then falls back
+    to the built-in runbook library.  Returns YAML with steps, expected outcomes,
+    rollback commands, and risk level.
+
+    Call this BEFORE reasoning from scratch when investigating or fixing a known
+    alert type.  Executing the runbook steps directly reduces token usage by 60-80%
+    compared to re-deriving the fix from first principles.
+
+    Args:
+        alertname: The Prometheus alert name (e.g. BGPPeerDown, InterfaceDown).
+
+    Returns:
+        YAML runbook string, or a message indicating no runbook is available.
+    """
+    # 1. Try Gitea API
+    if settings.gitea_token:
+        try:
+            path = f"{alertname}.yaml"
+            url = (
+                f"{settings.gitea_url}/api/v1/repos/"
+                f"{settings.gitea_runbook_owner}/{settings.gitea_runbook_repo}"
+                f"/raw/{path}?ref={settings.gitea_runbook_branch}"
+            )
+            headers = {"Authorization": f"token {settings.gitea_token}"}
+            resp = httpx.get(url, headers=headers, timeout=5)
+            if resp.status_code == 200:
+                return resp.text
+        except Exception:
+            pass  # fall through to built-in
+
+    # 2. Built-in runbook
+    rb = _BUILTIN_RUNBOOKS.get(alertname)
+    if rb:
+        return rb.strip()
+
+    return (
+        f"No runbook found for alert '{alertname}'. "
+        "Proceed with standard triage: check metrics → check logs → propose fix."
+    )
+
+
 # ── Tool sets per agent ───────────────────────────────────────────────────────
 
 # All Nautobot discovery tools
@@ -1233,7 +1416,9 @@ _ACTION_TOOLS = [
 
 OPS_TOOLS = _NAUTOBOT_TOOLS + _PROMETHEUS_TOOLS + _LOKI_TOOLS + _ACTION_TOOLS
 
-ENG_TOOLS = _NAUTOBOT_TOOLS + [
+_RUNBOOK_TOOLS = [get_runbook]
+
+ENG_TOOLS = _RUNBOOK_TOOLS + _NAUTOBOT_TOOLS + [
     get_device_metrics,       # useful for validating current state
     get_interface_metrics,    # useful for bandwidth planning
     get_active_alerts,        # useful for checking impact before changes

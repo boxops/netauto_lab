@@ -454,3 +454,18 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; 
 .flex-wrap { flex-wrap: wrap; }
 .items-center { align-items: center; }
 .justify-between { justify-content: space-between; }
+
+/* ── Config diff ─────────────────────────────────────── */
+.config-diff {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 0.78em;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+}
+.diff-add  { color: #4ade80; display: block; }
+.diff-del  { color: #f87171; display: block; }
+.diff-hunk { color: #60a5fa; display: block; }

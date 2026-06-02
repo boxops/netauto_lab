@@ -1,0 +1,17 @@
+alertname: BGPPeerDown
+description: BGP session is not Established
+steps:
+  - check: "show bgp neighbors {peer_ip} | include BGP state"
+    expected: "BGP state = Established"
+  - check: "show ip route bgp"
+    expected: routes from BGP peer visible in routing table
+  - config: |
+      neighbor {peer_ip} shutdown
+      no neighbor {peer_ip} shutdown
+    description: Reset BGP session to force re-establishment
+  - verify: "show bgp neighbors {peer_ip} | include BGP state"
+    expected: "BGP state = Established"
+expected_outcome: BGP session returns to Established state within 30 seconds
+rollback: "no neighbor {peer_ip} shutdown"
+risk: low
+automation_confidence: high

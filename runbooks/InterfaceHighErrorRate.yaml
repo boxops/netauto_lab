@@ -1,0 +1,20 @@
+alertname: InterfaceHighErrorRate
+description: Interface has elevated CRC or input error rate
+steps:
+  - check: "show interface {interface}"
+    expected: identify error type (CRC / input / output)
+  - check: "show interface {interface} counters"
+    expected: errors increasing over time
+  - config: |
+      interface {interface}
+        shutdown
+        no shutdown
+    description: Bounce the interface to clear transient errors
+  - verify: "show interface {interface} counters errors"
+    expected: error counters stable and low
+expected_outcome: Error rate returns to baseline; hardware issue escalated if errors persist
+rollback: |
+  interface {interface}
+    no shutdown
+risk: medium
+automation_confidence: medium

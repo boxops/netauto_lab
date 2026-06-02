@@ -1,0 +1,13 @@
+alertname: HighInterfaceUtilization
+description: Interface utilisation is high (>80%)
+steps:
+  - check: "show interface {interface} counters rates"
+    expected: identify traffic rate and direction
+  - check: "show ip interface brief"
+    expected: confirm no alternate paths available
+  - check: query_prometheus for top-N flows contributing to utilisation
+  - config: consider QoS policy or traffic engineering if congestion is sustained
+expected_outcome: Traffic source identified; escalated to capacity planning if needed
+rollback: remove QoS policy if applied
+risk: low
+automation_confidence: medium

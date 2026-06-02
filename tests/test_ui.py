@@ -62,7 +62,9 @@ def _make_task_store():
             "escalation_rate_pct": 0.0,
         },
         "feedback": {"total": 0, "correct": 0},
+        "mttr": {"avg_minutes": 0.0, "p50_minutes": 0.0, "resolved_today": 0},
     }
+    ts.get_resolution_history.return_value = []
     ts.approve_task.return_value = None
     ts.reject_task.return_value = None
     ts.clear_all_tasks.return_value = 0

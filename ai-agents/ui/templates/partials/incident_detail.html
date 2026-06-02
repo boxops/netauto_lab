@@ -1,0 +1,80 @@
+{% set sc = status_colors.get(incident.status, "#6b7280") %}
+<div>
+  <div class="flex items-center gap-8 mb-12">
+    <span class="bold">🚨 Incident <code>{{ incident.id }}</code></span>
+    <span class="pill" style="background:{{ sc }}22; color:{{ sc }}; border-color:{{ sc }}55">
+      {{ incident.status|upper }}
+    </span>
+    <span class="muted" style="font-size:0.8em">{{ age }}</span>
+  </div>
+
+  <table style="font-size:0.8em; margin-bottom:12px; border-collapse:collapse">
+    {% for k, v in [
+      ("Severity", content.get("severity","—")),
+      ("Impact",   content.get("impact","—")),
+      ("Priority", incident.priority),
+      ("Created",  incident.created_at or "—"),
+    ] %}
+    <tr>
+      <td class="muted" style="padding:2px 16px 2px 0; white-space:nowrap">{{ k }}</td>
+      <td>{{ v }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  {% if content.get("affected_devices") %}
+  <div class="mb-8">
+    <div class="section-label mb-4">Affected Devices</div>
+    <div style="font-size:0.85em">
+      {% for d in content.affected_devices %}
+        <code style="margin-right:8px">{{ d }}</code>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="mb-8">
+    <div class="section-label mb-4">Linked Alert Pipelines</div>
+    {% if pipelines %}
+      {% for rca in pipelines %}
+      <div style="background:var(--bg3); border-radius:6px; padding:8px 12px; margin-bottom:6px; font-size:0.8em">
+        <div class="flex items-center gap-8 flex-wrap">
+          <span class="bold">🔍 {{ rca.title or rca.id }}</span>
+          {% set rs = rca.status %}
+          {% set rsc = status_colors.get(rs, "#6b7280") %}
+          <span class="pill" style="background:{{ rsc }}22; color:{{ rsc }}; border-color:{{ rsc }}55">{{ rs }}</span>
+          <span class="muted">{{ rca.alert_fingerprint[:12] if rca.alert_fingerprint else "—" }}</span>
+        </div>
+        {% if rca.get("pipeline") %}
+        <div class="flex gap-8 mt-4 flex-wrap">
+          {% for stage in rca.pipeline %}
+          {% set stc = status_colors.get(stage.status, "#6b7280") %}
+          <span style="font-size:0.78em; color:{{ stc }}">
+            {{ type_icons.get(stage.type, "📋") }} {{ stage.type }}
+            <span class="pill" style="background:{{ stc }}22; color:{{ stc }}; border-color:{{ stc }}55">{{ stage.status }}</span>
+          </span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <span class="muted" style="font-size:0.83em">No pipelines linked yet.</span>
+    {% endif %}
+  </div>
+
+  {% if incident.status not in ("complete", "rejected") %}
+  <div class="mt-8">
+    <form hx-post="/incidents/{{ incident.id }}/close"
+          hx-target="#incident-action-status"
+          hx-swap="innerHTML"
+          class="flex gap-8 items-center flex-wrap">
+      <input name="resolution" type="text" placeholder="Resolution summary (optional)"
+             style="flex:1; max-width:320px; background:var(--bg2); border:1px solid var(--border);
+                    color:var(--text); border-radius:6px; padding:7px 12px; font-size:0.83em">
+      <button type="submit" class="btn btn-secondary btn-sm">✅ Close Incident</button>
+    </form>
+    <div id="incident-action-status" class="mt-4"></div>
+  </div>
+  {% endif %}
+</div>

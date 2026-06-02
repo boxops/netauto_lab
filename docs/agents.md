@@ -3,7 +3,7 @@
 The stack includes three AI agents built with LangGraph (ReAct loop):
 
 - **Ops Agent** — Incident investigation: correlates alerts, metrics, and syslogs into root-cause summaries
-- **Engineering Agent** — Config design: generates vendor-specific configurations, plans IP space, writes Ansible playbooks
+- **Engineering Agent** — Config design and fix generation: generates vendor-specific configs, uses the runbook library, produces config diffs
 - **Chaos Agent** — Controlled experiments: blast-radius assessment, simulation-first chaos tests, fix validation
 
 All three agents are wired into an **autonomous closed-loop pipeline** that triggers automatically when Prometheus fires an alert. See [`docs/closed-loop-pipeline.md`](closed-loop-pipeline.md) for the full pipeline reference.
@@ -12,7 +12,7 @@ All three agents are wired into an **autonomous closed-loop pipeline** that trig
 
 | Interface | URL |
 |-----------|-----|
-| Web UI (all agents + pipeline dashboard) | http://localhost:7860 |
+| Web UI (all agents + pipeline dashboard + incidents) | http://localhost:7860 |
 | Ops Agent REST API | http://localhost:8000 |
 | Engineering Agent REST API | http://localhost:8001 |
 | Chaos Agent REST API | http://localhost:8002 |
@@ -30,11 +30,16 @@ All three agents are wired into an **autonomous closed-loop pipeline** that trig
 | Device lookup | Queries Nautobot for device info, interfaces, neighbors |
 | Root cause analysis | Synthesises a DIAGNOSIS / AFFECTED / ACTION / CONFIDENCE summary |
 | Playbook execution | Runs Ansible playbooks (check mode by default) |
+| Priority-aware polling | Critical alerts picked up within 15 s; normal within 60 s |
+| Alert correlation | Deduplicates parallel alerts for the same device within 15 minutes |
+| Incident management | Creates or links Incident grouping entities for correlated alerts |
+| Maintenance awareness | Suppresses auto-execution for devices in maintenance (optional) |
 
 ### Safety rules
 
 - All Ansible executions default to `check_mode: true` (dry run).
 - Destructive operations require explicit "yes, execute" confirmation in the prompt.
+- Devices tagged `maintenance` or in a configured Nautobot status receive `do_not_auto_execute=true`.
 
 ### Example prompts
 
@@ -56,13 +61,13 @@ curl -X POST http://localhost:8000/chat \
 # Health check
 curl http://localhost:8000/health
 
-# Live agent status
+# Live agent status (state, current task, tokens/hour)
 curl http://localhost:8000/status
 
 # Token usage and cost
 curl http://localhost:8000/usage
 
-# Reset alert poller deduplication state
+# Reset alert poller deduplication state (after clearing the task queue)
 curl -X POST http://localhost:8000/poller/reset
 ```
 
@@ -74,18 +79,37 @@ curl -X POST http://localhost:8000/poller/reset
 
 | Capability | Description |
 |------------|-------------|
+| Runbook-first fix generation | Calls `get_runbook(alertname)` before re-deriving fixes from scratch |
 | Config generation | Generates EOS/IOS/JunOS/SR-Linux device configs from requirements |
+| Config diff | Produces a unified diff of current vs proposed running-config at fix time |
 | IP planning | Finds available IPs from Nautobot IPAM prefixes |
 | VLAN design | Plans VLAN allocations with full Nautobot context |
 | Playbook authoring | Writes Ansible playbooks from natural-language descriptions |
 | Config review | Reviews configs against best practices |
-| Fix generation | Produces specific remediation commands in check mode (automated pipeline) |
+| Fix execution | Applies approved fixes with `check_mode=False` after human sign-off |
+| Device config verification | Post-execution: non-LLM check that applied lines appear in running-config |
+| Alert resolution check | Post-execution: Prometheus check that the triggering alert cleared |
+| Lab validation | Optional: applies fix to Containerlab device before production execution |
+| Confidence-based auto-approval | Auto-approves low-risk, high-confidence fixes with ≥2 prior successes |
+
+### Tool tiers
+
+The Engineering Agent follows a four-tier tool hierarchy:
+
+| Tier | Tools | Purpose |
+|------|-------|---------|
+| 0 — Runbook | `get_runbook(alertname)` | **Check first** for known alert types before reasoning from scratch |
+| 1 — Discovery | Nautobot tools | Ground answers in actual inventory data |
+| 2 — State | Prometheus / alert tools | Validate current device state before proposing changes |
+| 3 — Actions | `run_show_commands`, `run_config_commands` | Read or apply config (check_mode=True by default) |
 
 ### Safety rules
 
 - `run_config_commands` always defaults to `check_mode=True`.
 - IP or VLAN allocation that modifies Nautobot requires explicit confirmation.
-- In the automated pipeline, the agent is instructed never to set `check_mode=False` — execution requires human approval via the approval gate.
+- In the automated pipeline, the agent never sets `check_mode=False` — execution is gated by human approval.
+- Auto-approval requires `risk=low`, `confidence=high`, and at least 2 prior successful executions of the same fix.
+- Devices with `do_not_auto_execute=true` (maintenance window) always require a human to approve before execution proceeds.
 
 ### Example prompts
 
@@ -126,8 +150,8 @@ curl http://localhost:8001/usage
 ### Safety rules
 
 - `shutdown_interface`, `restore_interface`, `flap_bgp_neighbor` all default to `check_mode=True`.
-- In the automated pipeline, the Chaos Agent only performs read-only validation (no config changes).
-- Live execution of chaos actions requires the user to explicitly set `check_mode=False` in the prompt.
+- In the automated pipeline, the Chaos Agent only performs read-only validation — no config changes.
+- Live execution of chaos actions requires the user to explicitly include "apply", "execute", or "check_mode=False" in the prompt.
 
 ### Example prompts
 
@@ -150,7 +174,7 @@ curl http://localhost:8002/health
 curl http://localhost:8002/status
 curl http://localhost:8002/usage
 
-# Schedule management
+# Scheduled chaos jobs
 curl http://localhost:8002/schedules
 curl -X POST http://localhost:8002/schedule \
   -H "Content-Type: application/json" \
@@ -162,28 +186,32 @@ curl -X DELETE http://localhost:8002/schedule/<job_id>
 
 ## Closed-Loop Automation Pipeline
 
-When Prometheus fires an alert, the three agents automatically coordinate a four-stage response without any human intervention until the approval gate:
+When Prometheus fires an alert, the three agents automatically coordinate a four-stage response without human intervention until the approval gate:
 
 ```
-Alert → Ops Agent (RCA) → Eng Agent (Fix Proposal) → Chaos Agent (Validation) → Human (Approval Gate)
+Alert → Ops (RCA) → Engineering (Fix Proposal + Config Diff) → Chaos (Validation) → Human (Approval Gate)
+                                                                                            │
+                                                                     ┌──────────────────────┘
+                                                                     ▼
+                                                          Optional: Lab validation (clab-device)
+                                                                     │
+                                                                     ▼
+                                                          Execution with check_mode=False
+                                                                     │
+                                                          ┌──────────┴──────────┐
+                                                          ▼                     ▼
+                                                   Config verified        Alert resolved?
+                                                   on device              (Prometheus check
+                                                   (non-LLM)              after ~5 min)
 ```
 
-The full pipeline is described in [`docs/closed-loop-pipeline.md`](closed-loop-pipeline.md), including:
-
-- How the AlertPoller detects and deduplicates alerts
-- The structured output format each agent is expected to produce
-- The routing logic that determines whether a fix goes to validation or straight to a human gate
-- How to approve or reject a fix in the Pipeline Dashboard
-- The task data model and SQLite schema
-- How to extend the pipeline with new stages or task types
-
-The **📊 Pipeline** tab in the web UI is the primary interface for monitoring and acting on the pipeline. It opens by default when you load [http://localhost:7860](http://localhost:7860).
+Full pipeline documentation: [`docs/closed-loop-pipeline.md`](closed-loop-pipeline.md)
 
 ---
 
 ## Configuration
 
-Agent behaviour is controlled via environment variables in `.env`:
+Agent behaviour is controlled via environment variables in `.env`. See [`docs/closed-loop-pipeline.md`](closed-loop-pipeline.md) for the complete reference. Key variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -193,6 +221,13 @@ Agent behaviour is controlled via environment variables in `.env`:
 | `OLLAMA_MODEL` | `llama3` | Ollama model name |
 | `DAILY_BUDGET_USD` | `5.00` | Hard daily spend limit across all agents |
 | `MAX_TOKENS_PER_AGENT_PER_HOUR` | `2,000,000` | Hourly token cap per agent |
+| `TASK_DB_URL` | (empty = SQLite) | PostgreSQL URL for production task store |
+| `RABBITMQ_URL` | (empty = polling) | AMQP URL for near-zero latency task dispatch |
+| `APPROVAL_WEBHOOK_URL` | (none) | Webhook fired when a task enters awaiting_approval |
+| `MAINTENANCE_CHECK_ENABLED` | `false` | Query Nautobot before creating RCA tasks |
+| `LAB_VALIDATION_ENABLED` | `false` | Apply fix to Containerlab device before production |
+| `GITEA_TOKEN` | (none) | API token for the Gitea runbook library |
+| `EXECUTION_VERIFY_DELAY` | `300` | Seconds before the post-execution Prometheus check |
 | `LANGSMITH_API_KEY` | (none) | LangSmith tracing key (optional) |
 | `LANGSMITH_TRACING` | `false` | Enable LangSmith trace export |
 

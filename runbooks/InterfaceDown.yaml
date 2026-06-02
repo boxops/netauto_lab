@@ -1,0 +1,19 @@
+alertname: InterfaceDown
+description: Interface is operationally down
+steps:
+  - check: "show interface {interface} status"
+    expected: connected
+  - check: "show interface {interface} counters errors"
+    expected: low or zero error counts
+  - config: |
+      interface {interface}
+        no shutdown
+    description: Re-enable the interface if admin-down
+  - verify: "show interface {interface} status"
+    expected: connected
+expected_outcome: Interface returns to connected state
+rollback: |
+  interface {interface}
+    shutdown
+risk: medium
+automation_confidence: medium

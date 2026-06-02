@@ -25,17 +25,17 @@ Four isolated Docker networks are created:
           ▼                ▼                  ▼
     :8080 Nautobot   :3000 Grafana    :7860 Agent UI
           │                │                  │
-    ┌─────┴──────┐   ┌─────┴──────┐   ┌──────┴──────┐
-    │ PostgreSQL │   │ Prometheus │   │ Ops Agent   │
-    │ Redis      │   │ Loki       │   │ Eng Agent   │
-    └────────────┘   │ Alertmgr  │   └─────────────┘
-                     └─────┬──────┘
-                           │ scrapes
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-        Telegraf    Node Exporter   Blackbox
-              │
-      ┌───────┴───────┐
+    ┌─────┴──────┐   ┌─────┴──────┐   ┌──────┴──────────┐
+    │ PostgreSQL │   │ Prometheus │   │ Ops Agent       │
+    │ Redis      │   │ Loki       │   │ Eng Agent       │
+    └────────────┘   │ Alertmgr  │   │ Chaos Agent     │
+                     └─────┬──────┘   └────────┬────────┘
+                           │ scrapes            │ shared
+              ┌────────────┼────────────┐  ┌───┴──────────┐
+              ▼            ▼            ▼  │ Agent TaskDB │
+        Telegraf    Node Exporter   Blackbox│ (SQLite or   │
+              │                            │  PostgreSQL) │
+      ┌───────┴───────┐                   └──────────────┘
       │  SNMP polling │
       │  cEOS devices │
       └───────┬───────┘
@@ -49,7 +49,7 @@ Four isolated Docker networks are created:
 ### Nautobot
 
 - **Version**: 3.x (community edition)
-- **Database**: PostgreSQL 15 (persistent volume `nautobot_db`)
+- **Database**: PostgreSQL 15 (persistent volume `nautobot-postgres-data`)
 - **Cache/Queue**: Redis 7 (single instance, two DBs: 0 = cache, 1 = Celery)
 - **Workers**: `nautobot-worker` (Celery) + `nautobot-scheduler` (beat scheduler)
 - **Plugins**: Golden Config, Device Lifecycle, BGP Models, Data Validation Engine
@@ -57,8 +57,9 @@ Four isolated Docker networks are created:
 
 ### Gitea
 
-- Self-hosted Git server for all generated configs, Ansible playbooks, and Golden Config diffs.
+- Self-hosted Git server for generated configs, Ansible playbooks, Golden Config diffs, and agent runbooks.
 - Reachable at port 3001; backed by separate PostgreSQL database.
+- **Runbook library**: The Engineering Agent reads `{AlertName}.yaml` files from the `netauto/runbooks` repository via the Gitea API to accelerate fix generation for known alert types.
 
 ## Monitoring Plane
 
@@ -101,6 +102,13 @@ Four pre-provisioned dashboards:
 - Mounts the `ansible/` directory for live playbook development.
 - Nautobot dynamic inventory via the `nautobot.nautobot.nb_inventory` plugin.
 
+### RabbitMQ
+
+- Defined in `docker-compose.yml`; acts as the optional task dispatch bus for the agent pipeline.
+- When `RABBITMQ_URL` is set in `.env`, newly created tasks are published to type-keyed exchanges (`task.fix_proposal`, `task.validation`, `task.approval_gate`).
+- Agent task runners subscribe as consumers and process tasks immediately on arrival rather than waiting for the next poll tick.
+- When `RABBITMQ_URL` is empty (the default), agents use their polling loops and RabbitMQ is unused.
+
 ### Containerlab Topology
 
 Five-node Arista cEOS spine-leaf fabric:
@@ -114,45 +122,63 @@ Five-node Arista cEOS spine-leaf fabric:
         Client1                             Client2
 ```
 
-All eBGP. Leaves advertise loopbacks + host routes to both spines.
+All eBGP. Leaves advertise loopbacks + host routes to both spines. When `LAB_VALIDATION_ENABLED=true`, the agent pipeline applies proposed fixes to the Containerlab equivalent (prefixed `clab-`) before production execution.
 
 ## AI Assistance Plane
 
 ### Ops Agent
 
-- **Purpose**: Reactive NOC assistance — investigate alerts, correlate metrics and logs.
-- **Model**: GPT-4o (falls back to local Ollama `llama3.1`).
+- **Purpose**: Reactive NOC assistance — investigate alerts, correlate metrics and logs, run the closed-loop pipeline.
+- **Model**: GPT-4o (falls back to local Ollama `llama3`).
 - **Safety**: All Ansible actions default to `check_mode=True`; live execution requires explicit user approval.
-- **API**: FastAPI on port 8000; also accessible via the web UI.
+- **API**: FastAPI on port 8000.
+- **Background threads**: AlertPoller (priority-aware: 15 s for critical, 60 s for normal).
 
 ### Engineering Agent
 
-- **Purpose**: Proactive engineering — generate configs, plan IPs/VLANs, write playbooks.
+- **Purpose**: Fix generation and config design — generates vendor-specific remediations, plans IP space, writes playbooks.
 - **Model**: GPT-4o (same fallback).
 - **API**: FastAPI on port 8001.
+- **Background threads**: EngTaskRunner (15 s priority loop, 90 s normal loop), approved gate executor.
+- **Runbook-first**: Calls `get_runbook(alertname)` before re-deriving fixes from scratch.
 
 ### Chaos Agent
 
-- **Purpose**: Controlled chaos engineering — blast-radius analysis, interface/BGP fault injection, safety-gated execution.
+- **Purpose**: Fix validation, blast-radius assessment, and controlled chaos experiments.
 - **Model**: GPT-4o (same fallback).
 - **API**: FastAPI on port 8002.
+- **Background threads**: ChaosTaskRunner (15 s priority loop, 120 s normal loop), APScheduler for repeating chaos runs.
+
+### Agent TaskStore
+
+Shared SQLite database (or PostgreSQL in production) used by all four agent containers and the UI to store pipeline state.
+
+| Mode        | Backend               | When to use                            |
+| ----------- | --------------------- | -------------------------------------- |
+| Default     | SQLite (`activity.db`)| Lab / development                      |
+| Production  | PostgreSQL 16         | Multi-replica, persistent, LISTEN/NOTIFY ready |
+
+Set `TASK_DB_URL` in `.env` to switch to PostgreSQL. The `agent-postgres` service is pre-defined in `docker-compose.yml`.
 
 ### Agent UI
 
 - FastAPI application serving the web UI on port 7860.
-- Jinja2 server-side templates with HTMX for live partial updates (no JavaScript framework).
-- Tabs: Pipeline Dashboard · Ops Agent · Engineering Agent · Chaos Agent · Activity.
-- All live widgets (agent status, task queue, pipeline visual, cost KPIs) are HTML fragments polled via `hx-trigger="every Ns"` — no WebSocket connections.
-- Shares the `agent-activity-data` Docker volume with all three agent containers to read `ActivityStore` and `TaskStore` directly.
+- Jinja2 server-side templates with HTMX for partial updates.
+- **Real-time updates via SSE**: A single persistent connection to `/stream/tasks` drives all live widgets. When any task state changes, the server pushes a `tasks-changed` event; HTMX triggers targeted refreshes. This replaces polling entirely on the pipeline page.
+- **Tabs**: Pipeline Dashboard · Ops Agent · Engineering Agent · Chaos Agent · 🚨 Incidents · Activity · Cost Monitor.
+- Shares the `agent-activity-data` Docker volume with all three agent containers.
 
 ## Data Persistence
 
-| Volume            | Contents                   |
-| ----------------- | -------------------------- |
-| `nautobot_db`     | Nautobot PostgreSQL data   |
-| `gitea_db`        | Gitea PostgreSQL data      |
-| `nautobot_media`  | Nautobot uploaded files    |
-| `gitea_data`      | Gitea repositories         |
-| `prometheus_data` | Prometheus TSDB            |
-| `grafana_data`    | Grafana dashboards & users |
-| `loki_data`       | Loki log chunks            |
+| Volume                 | Contents                              |
+| ---------------------- | ------------------------------------- |
+| `nautobot-postgres-data` | Nautobot PostgreSQL data            |
+| `gitea-postgres-data`  | Gitea PostgreSQL data                 |
+| `agent-postgres-data`  | Agent task store PostgreSQL data      |
+| `nautobot-media`       | Nautobot uploaded files               |
+| `gitea-data`           | Gitea repositories and runbooks       |
+| `prometheus-data`      | Prometheus TSDB                       |
+| `grafana-data`         | Grafana dashboards and users          |
+| `loki-data`            | Loki log chunks                       |
+| `agent-activity-data`  | Shared SQLite activity.db (default)   |
+| `rabbitmq-data`        | RabbitMQ durable queues               |
