@@ -4,7 +4,7 @@
 
 {% block content %}
 <p class="muted mb-16" style="font-size:0.83em">
-  Live agent states refresh every 2 s · Task queue and alert pipeline update instantly via live stream
+  Live agent states refresh every 2 s · Pipeline and task queue update instantly via live stream
 </p>
 
 {# ── Live Agent Status ─────────────────────────────────────────────────────── #}
@@ -23,18 +23,9 @@
 {# ── Alert Pipeline Visualiser ────────────────────────────────────────────── #}
 <div class="section">
   <div class="section-title">🌐 Alert Processing Pipeline</div>
-  <p class="muted mb-12" style="font-size:0.83em">
-    Select an alert to trace its full journey through the four-stage agent pipeline in real time. Updates every 3 s.
-  </p>
 
-  <div class="fp-row">
-    <select id="fp-select"
-            name="fp"
-            hx-get="/partials/pipeline"
-            hx-target="#pipeline-visual"
-            hx-trigger="change"
-            hx-include="this"
-            hx-swap="outerHTML">
+  <div class="fp-row" style="margin-bottom:10px">
+    <select id="fp-select" name="fp">
       {% for fp, label in fps %}
         <option value="{{ fp }}" {% if fp == sel_fp %}selected{% endif %}>{{ label }}</option>
       {% else %}
@@ -47,14 +38,22 @@
             hx-swap="innerHTML">
       🔄 Refresh Alerts
     </button>
+
+    {# View toggle #}
+    <div class="view-toggle" style="margin-left:auto">
+      <button data-view="visual"    class="active" onclick="switchPipelineView('visual')">📊 Visual</button>
+      <button data-view="chronicle"              onclick="switchPipelineView('chronicle')">📖 Chronicle</button>
+    </div>
   </div>
 
-  <div id="pipeline-visual"
-       hx-get="/partials/pipeline"
-       hx-vals='js:{"fp": document.getElementById("fp-select")?.value || ""}'
-       hx-trigger="load, sse-refresh"
-       hx-swap="outerHTML">
-    <span class="muted" style="font-size:0.83em">Loading pipeline…</span>
+  <div id="pipeline-content">
+    <div id="pipeline-visual"
+         hx-get="/partials/pipeline"
+         hx-vals='js:{"fp": document.getElementById("fp-select")?.value || ""}'
+         hx-trigger="load, sse-refresh"
+         hx-swap="outerHTML">
+      <span class="muted" style="font-size:0.83em">Loading pipeline…</span>
+    </div>
   </div>
 </div>
 
@@ -151,6 +150,32 @@
 </div>
 
 <script>
+// ── View toggle: Visual ↔ Chronicle ─────────────────────────────────────────
+var _currentView = 'visual';
+
+function switchPipelineView(view) {
+  _currentView = view;
+  var fp = document.getElementById('fp-select')?.value || '';
+  var endpoint = view === 'chronicle' ? '/partials/chronicle' : '/partials/pipeline';
+  htmx.ajax('GET', endpoint + '?fp=' + encodeURIComponent(fp), {
+    target: '#pipeline-content',
+    swap:   'innerHTML'
+  });
+  document.querySelectorAll('.view-toggle button').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.view === view);
+  });
+}
+
+// Reload current view when alert fingerprint changes
+document.addEventListener('DOMContentLoaded', function() {
+  var sel = document.getElementById('fp-select');
+  if (sel) {
+    sel.addEventListener('change', function() {
+      switchPipelineView(_currentView);
+    });
+  }
+});
+
 // ── Show pipeline-task-detail panel when a Details button populates it ───────
 document.body.addEventListener('htmx:afterSettle', function(e) {
   if (e.detail.target.id === 'pipeline-task-detail') {

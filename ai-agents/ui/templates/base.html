@@ -51,7 +51,7 @@
 // fetches fresh content immediately instead of waiting for the next poll tick.
 (function () {
   var sse = null;
-  var TARGETS = ['pipeline-visual', 'task-queue-body', 'approval-badge', 'incident-list'];
+  var TARGETS = ['pipeline-visual', 'pipeline-chronicle', 'task-queue-body', 'approval-badge', 'incident-list'];
 
   function connect() {
     sse = new EventSource('/stream/tasks');

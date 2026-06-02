@@ -469,3 +469,197 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; 
 .diff-add  { color: #4ade80; display: block; }
 .diff-del  { color: #f87171; display: block; }
 .diff-hunk { color: #60a5fa; display: block; }
+
+/* ── View toggle (Visual / Chronicle) ───────────────── */
+.view-toggle {
+  display: flex;
+  gap: 3px;
+}
+.view-toggle button {
+  padding: 5px 13px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-sub);
+  cursor: pointer;
+  font-size: 0.78em;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+.view-toggle button.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.view-toggle button:hover:not(.active) {
+  background: var(--bg3);
+  color: var(--text);
+}
+
+/* ── Chronicle container ─────────────────────────────── */
+.chronicle-header {
+  padding: 10px 14px;
+  background: var(--bg2);
+  border-radius: 8px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+}
+.chronicle-sev-badge {
+  font-size: 0.7em;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+}
+.chronicle-sev-badge.crit { background: #ef444433; color: #ef4444; }
+.chronicle-sev-badge.warn { background: #f59e0b33; color: #f59e0b; }
+.chronicle-sev-badge.info { background: #3b82f633; color: #3b82f6; }
+
+.chronicle {
+  position: relative;
+  padding-left: 26px;
+}
+/* Vertical spine */
+.chronicle::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 10px;
+  bottom: 16px;
+  width: 2px;
+  background: linear-gradient(to bottom, var(--accent) 0%, var(--bg3) 100%);
+  border-radius: 1px;
+}
+
+/* ── Chronicle chapter ───────────────────────────────── */
+.chronicle-chapter {
+  position: relative;
+  margin-bottom: 6px;
+  padding: 12px 14px 12px 14px;
+  background: var(--bg2);
+  border-radius: 8px;
+  border-left: 3px solid var(--border);
+  transition: border-left-color 0.2s;
+}
+.chronicle-chapter:last-child { margin-bottom: 0; }
+
+/* Timeline dot */
+.chronicle-dot {
+  position: absolute;
+  left: -22px;
+  top: 14px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+  flex-shrink: 0;
+  z-index: 1;
+}
+
+/* ── Chapter header row ──────────────────────────────── */
+.chapter-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── Chapter body ────────────────────────────────────── */
+.chapter-body {
+  font-size: 0.84em;
+  line-height: 1.55;
+}
+.chronicle-prose {
+  margin: 0 0 8px;
+  color: var(--text);
+}
+
+/* Finding blocks — bordered callouts */
+.chronicle-finding {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 6px 10px;
+  align-items: baseline;
+  border-left: 2px solid #22c55e;
+  padding: 6px 10px;
+  margin: 6px 0;
+  background: var(--bg3);
+  border-radius: 0 6px 6px 0;
+  font-size: 0.9em;
+}
+.finding-label {
+  font-size: 0.78em;
+  font-weight: 700;
+  color: #22c55e;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* Commands block */
+.chronicle-commands {
+  background: #080f1c;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-family: monospace;
+  font-size: 0.82em;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 4px 0 8px;
+  color: #e2e8f0;
+}
+
+/* Collapsible details */
+.chronicle-details {
+  margin-top: 8px;
+}
+.chronicle-details > summary {
+  cursor: pointer;
+  color: var(--text-sub);
+  font-size: 0.78em;
+  user-select: none;
+  list-style: none;
+  outline: none;
+}
+.chronicle-details > summary::-webkit-details-marker { display: none; }
+.chronicle-details > summary:hover { color: var(--text); }
+.chronicle-details[open] > summary { color: var(--text); margin-bottom: 6px; }
+
+.chronicle-pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.78em;
+  line-height: 1.5;
+  color: var(--text-sub);
+  background: var(--bg3);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* ── Gap divider ─────────────────────────────────────── */
+.chronicle-gap {
+  text-align: center;
+  color: var(--text-sub);
+  font-size: 0.7em;
+  opacity: 0.5;
+  margin: 4px 0;
+  letter-spacing: 0.06em;
+}
+
+/* ── Pulse dot for in-progress ───────────────────────── */
+.pulse-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 6px;
+  vertical-align: middle;
+  animation: pulse 1.5s ease-in-out infinite;
+}

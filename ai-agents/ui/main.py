@@ -20,6 +20,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,9 @@ _ACTIVITY_DB         = os.environ.get("ACTIVITY_DB_PATH", "./activity.db")
 APPROVAL_WEBHOOK_URL = os.getenv("APPROVAL_WEBHOOK_URL", "")
 APPROVAL_WEBHOOK_SECRET = os.getenv("APPROVAL_WEBHOOK_SECRET", "")
 AGENT_UI_URL         = os.getenv("AGENT_UI_URL", "http://localhost:7860")
+
+# Shared persistent HTTP client — initialised in lifespan, reused across all requests.
+_http_client: httpx.AsyncClient | None = None
 
 
 def _get_hourly_series(hours: int = 24) -> dict:
@@ -374,9 +378,8 @@ async def _fire_approval_webhook(task: dict) -> None:
         headers["X-Hub-Signature-256"] = f"sha256={sig}"
 
     try:
-        async with httpx.AsyncClient() as client:
-            r = await client.post(APPROVAL_WEBHOOK_URL, content=body, headers=headers, timeout=5)
-            logger.info("Approval webhook fired for task=%s status=%s", task_id, r.status_code)
+        r = await _http_client.post(APPROVAL_WEBHOOK_URL, content=body, headers=headers, timeout=5)
+        logger.info("Approval webhook fired for task=%s status=%s", task_id, r.status_code)
     except Exception as exc:
         logger.warning("Approval webhook failed for task=%s: %s", task_id, exc)
 
@@ -397,7 +400,7 @@ async def _webhook_poller() -> None:
 
     # Seed from tasks already in the store so we don't re-fire on restart
     try:
-        for t in task_store.list_tasks(status="awaiting_approval", limit=500):
+        for t in await run_in_threadpool(task_store.list_tasks, status="awaiting_approval", limit=500):
             _webhook_notified.add(t["id"])
     except Exception:
         pass
@@ -405,7 +408,7 @@ async def _webhook_poller() -> None:
     while True:
         await asyncio.sleep(10)
         try:
-            pending = task_store.list_tasks(status="awaiting_approval", limit=100)
+            pending = await run_in_threadpool(task_store.list_tasks, status="awaiting_approval", limit=100)
             for t in pending:
                 if t["id"] not in _webhook_notified:
                     _webhook_notified.add(t["id"])
@@ -423,8 +426,11 @@ TMPL_DIR   = os.path.join(BASE_DIR, "templates")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _http_client
+    _http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0))
     asyncio.create_task(_webhook_poller())
     yield
+    await _http_client.aclose()
 
 
 app = FastAPI(title="Network AI Agents", description="Network Automation AI Agents UI", version="2.0.0", lifespan=lifespan)
@@ -485,6 +491,285 @@ async def _fetch_agent_usage(client: httpx.AsyncClient, url: str) -> dict:
     except Exception:
         pass
     return {}
+
+
+# ── Pipeline Chronicle helpers ────────────────────────────────────────────────
+
+def _parse_ts(ts_str: str | None) -> datetime | None:
+    if not ts_str:
+        return None
+    try:
+        return datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S UTC").replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _seconds_between(ts1: str | None, ts2: str | None) -> int:
+    t1, t2 = _parse_ts(ts1), _parse_ts(ts2)
+    return max(0, int((t2 - t1).total_seconds())) if t1 and t2 else 0
+
+
+def _fmt_gap(seconds: int) -> str:
+    if seconds <= 0:
+        return ""
+    if seconds < 60:
+        return f"{seconds}s"
+    m, s = divmod(seconds, 60)
+    return f"{m}m {s}s" if s else f"{m}m"
+
+
+def _ts_short(ts_str: str | None) -> str:
+    if not ts_str:
+        return "—"
+    parts = ts_str.split(" ")
+    return parts[1] if len(parts) > 1 else ts_str
+
+
+def _confidence_badge(c: str) -> tuple[str, str, str]:
+    cl = (c or "").lower()
+    if cl == "high":    return "High confidence",   "#22c55e", "✅"
+    if cl == "medium":  return "Medium confidence", "#f59e0b", "🟡"
+    if cl == "low":     return "Low confidence",    "#ef4444", "⚠️"
+    return "", "#6b7280", ""
+
+
+def _risk_badge(r: str) -> tuple[str, str, str]:
+    rl = (r or "").lower()
+    if rl == "low":     return "Low risk",    "#22c55e", "✅"
+    if rl == "medium":  return "Medium risk", "#f59e0b", "🟡"
+    if rl == "high":    return "High risk",   "#ef4444", "🔴"
+    return "", "#6b7280", ""
+
+
+def _verdict_badge(v: str) -> tuple[str, str, str]:
+    vl = (v or "").lower()
+    if vl == "correct":       return "Correct",       "#22c55e", "✅"
+    if vl == "partial":       return "Partial",       "#f59e0b", "🟡"
+    if vl == "incorrect":     return "Incorrect",     "#ef4444", "❌"
+    if vl == "unverifiable":  return "Unverifiable",  "#6b7280", "❓"
+    return "", "#6b7280", ""
+
+
+def _extract_gate_events(task: dict) -> dict:
+    """Scan a gate task's events for execution / verification data."""
+    events = task.get("events") or []
+    if not events:
+        full = task_store.get_task(task["id"])
+        events = (full or {}).get("events", [])
+
+    out: dict = {
+        "approved_by": "", "approval_ts": "",
+        "exec_status": "", "changes_applied": "",
+        "config_applied": None, "found_lines": [], "missing_lines": [],
+        "alert_resolved": None, "ttr_seconds": 0, "check_at": "",
+    }
+    for e in events:
+        et = e.get("event_type", "")
+        try:
+            d = json.loads(e.get("detail") or "{}")
+        except Exception:
+            d = {}
+        if et == "approved":
+            out["approved_by"] = e.get("agent", "human")
+            out["approval_ts"] = _ts_short(e.get("timestamp"))
+        elif et == "auto_approved":
+            out["approved_by"] = "system (auto-approved)"
+            out["approval_ts"] = _ts_short(e.get("timestamp"))
+        elif et == "execution_complete":
+            out["exec_status"]     = d.get("status", "")
+            out["config_applied"]  = d.get("config_applied")
+            out["found_lines"]     = d.get("found_lines", [])
+            out["missing_lines"]   = d.get("missing_lines", [])
+            out["changes_applied"] = d.get("changes_applied", "")
+        elif et == "execution_verified":
+            out["alert_resolved"] = d.get("alert_resolved")
+            out["ttr_seconds"]    = d.get("ttr_seconds", 0)
+            out["check_at"]       = d.get("check_at", "")
+    return out
+
+
+def _build_chapter(task: dict, prev_completed_at: str | None) -> dict:
+    tp      = task.get("type", "")
+    status  = task.get("status", "pending")
+    created = task.get("created_at", "")
+    done    = task.get("completed_at", "")
+
+    try:
+        result = json.loads(task.get("result") or "{}")
+    except Exception:
+        result = {}
+    try:
+        content = json.loads(task.get("content") or "{}")
+    except Exception:
+        content = {}
+
+    gap_seconds = _seconds_between(prev_completed_at, created) if prev_completed_at else 0
+
+    ch: dict = {
+        "type":        tp,
+        "task_id":     task.get("id", ""),
+        "status":      status,
+        "created_at":  created,
+        "completed_at": done,
+        "timestamp":   _ts_short(created),
+        "gap_str":     _fmt_gap(gap_seconds),
+        "gap_seconds": gap_seconds,
+        # badge defaults overridden per stage below
+        "label":       tp.upper(),
+        "badge_text":  "",
+        "badge_color": "#6b7280",
+        "badge_icon":  "",
+    }
+
+    if tp == "rca":
+        conf = result.get("confidence", "")
+        bt, bc, bi = _confidence_badge(conf)
+        ch.update({
+            "label":        "ROOT CAUSE IDENTIFIED" if status == "complete" else
+                            ("INVESTIGATING…" if status in ("running", "claimed") else "INVESTIGATION PENDING"),
+            "badge_text":   bt, "badge_color": bc, "badge_icon": bi,
+            "alertname":    content.get("alertname", ""),
+            "severity":     content.get("severity", ""),
+            "device":       content.get("device") or result.get("affected", ""),
+            "instance":     content.get("instance", ""),
+            "summary":      content.get("summary", ""),
+            "diagnosis":    result.get("diagnosis", ""),
+            "confidence":   conf,
+            "action":       result.get("action", ""),
+            "tool_calls":   result.get("tool_calls", 0),
+            "full_response": _truncate(result.get("full_response", ""), 1800),
+        })
+
+    elif tp == "fix_proposal":
+        risk = result.get("fix_type", "")
+        bt, bc, bi = _risk_badge(result.get("risk", ""))
+        commands = result.get("commands", "")
+        ch.update({
+            "label":      "FIX PROPOSED" if status == "complete" else
+                          ("GENERATING FIX…" if status in ("running", "claimed") else "FIX PENDING"),
+            "badge_text": bt, "badge_color": bc, "badge_icon": bi,
+            "fix_type":   result.get("fix_type", ""),
+            "device":     result.get("device", ""),
+            "commands":   commands if commands not in ("none", "", None) else "",
+            "risk":       result.get("risk", ""),
+            "confidence": result.get("confidence", ""),
+            "reason":     result.get("reason", ""),
+            "config_diff": result.get("config_diff", ""),
+            "tool_calls": result.get("tool_calls", 0),
+            "full_response": _truncate(result.get("full_response", ""), 1800),
+        })
+
+    elif tp == "validation":
+        verdict = result.get("verdict", "")
+        bt, bc, bi = _verdict_badge(verdict)
+        fix = content.get("fix_proposal", {})
+        ch.update({
+            "label":          "VALIDATED" if status == "complete" else
+                              ("VALIDATING…" if status in ("running", "claimed") else "VALIDATION PENDING"),
+            "badge_text":     bt, "badge_color": bc, "badge_icon": bi,
+            "verdict":        verdict,
+            "confidence":     result.get("confidence", ""),
+            "risk_confirmed": result.get("risk_confirmed", ""),
+            "notes":          result.get("notes", ""),
+            "tool_calls":     result.get("tool_calls", 0),
+            "device":         fix.get("device", ""),
+        })
+
+    elif tp == "approval_gate":
+        fix    = content.get("fix_proposal", {})
+        device = fix.get("device") or content.get("device", "")
+        commands = fix.get("commands") or content.get("commands", "")
+        ev = _extract_gate_events(task)
+        ttr_str = _fmt_gap(ev["ttr_seconds"])
+
+        awaiting = (status == "awaiting_approval")
+        es = ev["exec_status"]
+        ar = ev["alert_resolved"]
+
+        if awaiting:
+            label, bt, bc, bi = "AWAITING APPROVAL",  "Requires action", "#a855f7", "🟣"
+        elif status == "rejected":
+            label, bt, bc, bi = "REJECTED",           "Rejected",        "#9ca3af", "✗"
+        elif es == "success" and ar is True:
+            label = "RESOLVED"
+            bt, bc, bi = (f"TTR {ttr_str}" if ttr_str else "Resolved"), "#22c55e", "✅"
+        elif es == "success":
+            label, bt, bc, bi = "EXECUTED",           "Success",         "#22c55e", "✅"
+        elif es == "failed":
+            label, bt, bc, bi = "EXECUTION FAILED",   "Failed",          "#ef4444", "❌"
+        else:
+            label, bt, bc, bi = "APPROVAL GATE",      "Pending",         "#6b7280", "⏳"
+
+        ch.update({
+            "label": label, "badge_text": bt, "badge_color": bc, "badge_icon": bi,
+            "device":             device,
+            "commands":           commands if commands not in ("none", "", None) else "",
+            "fix_type":           fix.get("fix_type", ""),
+            "validation_verdict": content.get("validation_verdict", ""),
+            "risk_confirmed":     content.get("risk_confirmed", ""),
+            "chaos_notes":        content.get("chaos_notes", ""),
+            "awaiting_approval":  awaiting,
+            "do_not_auto_execute": bool(content.get("do_not_auto_execute") or task.get("do_not_auto_execute")),
+            "config_diff":        content.get("config_diff") or fix.get("config_diff", ""),
+            **ev,
+            "ttr_str": ttr_str,
+        })
+
+    return ch
+
+
+def _pipeline_chronicle_context(fp: str) -> dict:
+    if not fp:
+        return {"fp": fp, "chapters": [], "overall": {}}
+
+    all_tasks = task_store.list_tasks(alert_fingerprint=fp, limit=50)
+    by_type: dict[str, list] = {"rca": [], "fix_proposal": [], "validation": [], "approval_gate": []}
+    for t in all_tasks:
+        if t.get("type") in by_type:
+            by_type[t["type"]].append(t)
+    for tp in by_type:
+        by_type[tp].sort(key=lambda t: t.get("created_at", ""))
+
+    chapters: list[dict] = []
+    prev_done: str | None = None
+    for stage in ("rca", "fix_proposal", "validation", "approval_gate"):
+        for task in by_type[stage]:
+            ch = _build_chapter(task, prev_done)
+            chapters.append(ch)
+            if task.get("completed_at"):
+                prev_done = task["completed_at"]
+
+    # Overall pipeline status
+    statuses = {c["type"]: c["status"] for c in chapters}
+    if any(s == "awaiting_approval" for s in statuses.values()):
+        o_status, o_label, o_color = "awaiting_approval", "Awaiting Approval", "#a855f7"
+    elif any(s == "failed" for s in statuses.values()):
+        o_status, o_label, o_color = "failed", "Pipeline Failed", "#ef4444"
+    elif any(s in ("pending", "claimed", "running") for s in statuses.values()):
+        o_status, o_label, o_color = "active", "In Progress", "#3b82f6"
+    elif chapters and all(s == "complete" for s in statuses.values()):
+        o_status, o_label, o_color = "complete", "Complete", "#22c55e"
+    else:
+        o_status, o_label, o_color = "pending", "Starting…", "#6b7280"
+
+    # Pull top-level alert info from the first RCA chapter
+    first = next((c for c in chapters if c["type"] == "rca"), {})
+    gate  = next((c for c in chapters if c["type"] == "approval_gate"), {})
+
+    return {
+        "fp": fp,
+        "chapters": chapters,
+        "overall": {
+            "status":        o_status,
+            "label":         o_label,
+            "color":         o_color,
+            "alertname":     first.get("alertname", ""),
+            "device":        first.get("device", ""),
+            "severity":      first.get("severity", ""),
+            "alert_resolved": gate.get("alert_resolved"),
+            "ttr_str":       gate.get("ttr_str", ""),
+        },
+    }
 
 
 def _get_pipeline_tasks(fp: str) -> dict[str, list[dict]]:
@@ -707,9 +992,11 @@ def _task_detail_context(task_id: str) -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    fps = _pipeline_fingerprints()
+    fps, task_ctx = await asyncio.gather(
+        run_in_threadpool(_pipeline_fingerprints),
+        run_in_threadpool(_task_queue_context),
+    )
     sel_fp = fps[0][0] if fps else ""
-    task_ctx = _task_queue_context()
     return templates.TemplateResponse(request, "pipeline.html", {
         "request":  request,
         "fps":      fps,
@@ -740,8 +1027,10 @@ async def cost_page(request: Request):
 
 @app.get("/activity", response_class=HTMLResponse)
 async def activity_page(request: Request):
-    records = store.get_recent(limit=150)
-    summary = store.summary()
+    records, summary = await asyncio.gather(
+        run_in_threadpool(store.get_recent, limit=150),
+        run_in_threadpool(store.summary),
+    )
     return templates.TemplateResponse(request, "activity.html", {
         "request":  request,
         "records":  records,
@@ -754,7 +1043,7 @@ async def activity_page(request: Request):
 
 @app.get("/partials/pending-approvals", response_class=HTMLResponse)
 async def partial_pending_approvals(request: Request):
-    count = len(task_store.list_tasks(status="awaiting_approval", limit=100))
+    count = len(await run_in_threadpool(task_store.list_tasks, status="awaiting_approval", limit=100))
     return templates.TemplateResponse(request, "partials/pending_approvals.html", {
         "request": request,
         "count":   count,
@@ -764,8 +1053,9 @@ async def partial_pending_approvals(request: Request):
 @app.get("/partials/status-bar", response_class=HTMLResponse)
 async def partial_status_bar(request: Request):
     agents = [("🚨 Ops", OPS_AGENT_URL), ("🔧 Engineering", ENG_AGENT_URL), ("🔥 Chaos", CHAOS_AGENT_URL)]
-    async with httpx.AsyncClient() as client:
-        badges = [await _fetch_agent_health(client, name, url) for name, url in agents]
+    badges = await asyncio.gather(*[
+        _fetch_agent_health(_http_client, name, url) for name, url in agents
+    ])
     return templates.TemplateResponse(request, "partials/status_bar.html", {"request": request, "badges": badges})
 
 
@@ -776,32 +1066,35 @@ async def partial_agent_status(request: Request):
         ("🔧", "Engineering",  ENG_AGENT_URL,   "#10b981"),
         ("🔥", "Chaos Agent",  CHAOS_AGENT_URL, "#f97316"),
     ]
-    async with httpx.AsyncClient() as client:
-        statuses = []
-        for icon, label, url, color in agents_cfg:
-            status  = await _fetch_agent_status(client, url)
-            usage   = await _fetch_agent_usage(client, url)
-            statuses.append({
-                "icon":    icon,
-                "label":   label,
-                "color":   color,
-                "status":  status,
-                "usage":   usage,
-                "age":     _age(status.get("started_at")),
-                "truncate": _truncate,
-            })
+    n = len(agents_cfg)
+    results = await asyncio.gather(
+        *[_fetch_agent_status(_http_client, url) for _, _, url, _ in agents_cfg],
+        *[_fetch_agent_usage(_http_client, url)  for _, _, url, _ in agents_cfg],
+    )
+    statuses = []
+    for i, (icon, label, url, color) in enumerate(agents_cfg):
+        status = results[i]
+        statuses.append({
+            "icon":    icon,
+            "label":   label,
+            "color":   color,
+            "status":  status,
+            "usage":   results[n + i],
+            "age":     _age(status.get("started_at")),
+            "truncate": _truncate,
+        })
     return templates.TemplateResponse(request, "partials/agent_status.html", {"request": request, "agents": statuses})
 
 
 @app.get("/partials/fingerprints", response_class=HTMLResponse)
 async def partial_fingerprints(request: Request):
-    fps = _pipeline_fingerprints()
+    fps = await run_in_threadpool(_pipeline_fingerprints)
     return templates.TemplateResponse(request, "partials/fingerprints.html", {"request": request, "fps": fps})
 
 
 @app.get("/incidents", response_class=HTMLResponse)
 async def incidents_page(request: Request, open_only: bool = True):
-    ctx = _incident_list_context(open_only=open_only)
+    ctx = await run_in_threadpool(_incident_list_context, open_only)
     return templates.TemplateResponse(request, "incidents.html", {
         "request":   request,
         "open_only": open_only,
@@ -811,7 +1104,7 @@ async def incidents_page(request: Request, open_only: bool = True):
 
 @app.get("/partials/incidents", response_class=HTMLResponse)
 async def partial_incidents(request: Request, open_only: bool = True):
-    ctx = _incident_list_context(open_only=open_only)
+    ctx = await run_in_threadpool(_incident_list_context, open_only)
     return templates.TemplateResponse(request, "partials/incident_list.html", {
         "request": request,
         **ctx,
@@ -820,10 +1113,12 @@ async def partial_incidents(request: Request, open_only: bool = True):
 
 @app.get("/partials/incident/{incident_id}", response_class=HTMLResponse)
 async def partial_incident_detail(request: Request, incident_id: str):
-    inc = task_store.get_task(incident_id)
+    inc, pipelines = await asyncio.gather(
+        run_in_threadpool(task_store.get_task, incident_id),
+        run_in_threadpool(task_store.get_incident_pipelines, incident_id),
+    )
     if not inc:
         return HTMLResponse(f"<span class='muted'>Incident {incident_id} not found.</span>")
-    pipelines = task_store.get_incident_pipelines(incident_id)
     try:
         content = json.loads(inc.get("content") or "{}")
     except Exception:
@@ -843,13 +1138,13 @@ async def partial_incident_detail(request: Request, incident_id: str):
 @app.post("/incidents/{incident_id}/close", response_class=HTMLResponse)
 async def incident_close(request: Request, incident_id: str,
                          resolution: str = Form("")):
-    inc = task_store.get_task(incident_id)
+    inc = await run_in_threadpool(task_store.get_task, incident_id)
     if not inc:
         msg, ok = f"Incident `{incident_id}` not found.", False
     elif inc["status"] in ("complete", "rejected"):
         msg, ok = f"Incident `{incident_id}` is already {inc['status']}.", False
     else:
-        task_store.close_incident(incident_id, resolution)
+        await run_in_threadpool(task_store.close_incident, incident_id, resolution)
         msg, ok = f"✅ Incident `{incident_id}` closed.", True
     return templates.TemplateResponse(request, "partials/action_status.html",
                                       {"request": request, "msg": msg, "ok": ok})
@@ -857,7 +1152,7 @@ async def incident_close(request: Request, incident_id: str,
 
 @app.get("/partials/pipeline", response_class=HTMLResponse)
 async def partial_pipeline(request: Request, fp: str = ""):
-    pipeline_tasks = _get_pipeline_tasks(fp)
+    pipeline_tasks = await run_in_threadpool(_get_pipeline_tasks, fp)
     return templates.TemplateResponse(request, "partials/pipeline_visual.html", {
         "request":        request,
         "fp":             fp,
@@ -869,25 +1164,40 @@ async def partial_pipeline(request: Request, fp: str = ""):
     })
 
 
+@app.get("/partials/chronicle", response_class=HTMLResponse)
+async def partial_chronicle(request: Request, fp: str = ""):
+    ctx = await run_in_threadpool(_pipeline_chronicle_context, fp)
+    return templates.TemplateResponse(request, "partials/pipeline_chronicle.html", {
+        "request": request,
+        **ctx,
+    })
+
+
 @app.get("/partials/task-queue", response_class=HTMLResponse)
 async def partial_task_queue(request: Request, status: str = "", type: str = ""):
-    ctx = _task_queue_context(status, type)
+    ctx = await run_in_threadpool(_task_queue_context, status, type)
     return templates.TemplateResponse(request, "partials/task_queue.html", {"request": request, **ctx})
 
 
 @app.get("/partials/task/{task_id}", response_class=HTMLResponse)
 async def partial_task_detail(request: Request, task_id: str):
-    ctx = _task_detail_context(task_id)
+    ctx = await run_in_threadpool(_task_detail_context, task_id)
     return templates.TemplateResponse(request, "partials/task_detail.html", {"request": request, **ctx})
 
 
 @app.get("/partials/cost-kpis", response_class=HTMLResponse)
 async def partial_cost_kpis(request: Request):
-    async with httpx.AsyncClient() as client:
-        usages = {}
-        for name, url in [("ops_agent", OPS_AGENT_URL), ("eng_agent", ENG_AGENT_URL), ("chaos_agent", CHAOS_AGENT_URL)]:
-            usages[name] = await _fetch_agent_usage(client, url)
-    kpis = task_store.get_kpis()
+    _agent_usage_cfg = [
+        ("ops_agent",   OPS_AGENT_URL),
+        ("eng_agent",   ENG_AGENT_URL),
+        ("chaos_agent", CHAOS_AGENT_URL),
+    ]
+    usage_values, kpis, ts = await asyncio.gather(
+        asyncio.gather(*[_fetch_agent_usage(_http_client, url) for _, url in _agent_usage_cfg]),
+        run_in_threadpool(task_store.get_kpis),
+        run_in_threadpool(_get_hourly_series, 24),
+    )
+    usages = {name: u for (name, _), u in zip(_agent_usage_cfg, usage_values)}
     today_cost  = sum(u.get("today", {}).get("cost_usd", 0.0) for u in usages.values())
     today_tok   = sum(u.get("today", {}).get("total_tokens", 0) for u in usages.values())
     hour_tok    = sum(u.get("this_hour", {}).get("total_tokens", 0) for u in usages.values())
@@ -898,8 +1208,7 @@ async def partial_cost_kpis(request: Request):
     pct_used    = min(100.0, today_cost / daily_lim * 100) if daily_lim else 0
     bar_color   = "#ef4444" if pct_used >= 90 else "#f59e0b" if pct_used >= 70 else "#22c55e"
 
-    # Build 24-hour hourly time-series
-    ts = _get_hourly_series(24)
+    # 24-hour hourly time-series already fetched above via run_in_threadpool
 
     # Cumulative series for stat-card sparklines
     cum_cost: list[float] = []
@@ -967,8 +1276,10 @@ async def partial_cost_kpis(request: Request):
 @app.get("/partials/activity", response_class=HTMLResponse)
 async def partial_activity(request: Request, agent: str = "All"):
     f = None if agent == "All" else agent
-    records = store.get_recent(limit=150, agent_filter=f)
-    summary = store.summary()
+    records, summary = await asyncio.gather(
+        run_in_threadpool(store.get_recent, limit=150, agent_filter=f),
+        run_in_threadpool(store.summary),
+    )
     return templates.TemplateResponse(request, "partials/activity_table.html", {
         "request":  request,
         "records":  records,
@@ -980,11 +1291,11 @@ async def partial_activity(request: Request, agent: str = "All"):
 
 @app.get("/partials/activity/{record_id}", response_class=HTMLResponse)
 async def partial_activity_detail(request: Request, record_id: int):
-    records = store.get_recent(limit=500)
+    records = await run_in_threadpool(store.get_recent, limit=500)
     record  = next((r for r in records if r["id"] == record_id), None)
     if not record:
         return HTMLResponse("<p>Record not found.</p>")
-    calls = store.get_tool_calls(record["session_id"])
+    calls = await run_in_threadpool(store.get_tool_calls, record["session_id"])
     return templates.TemplateResponse(request, "partials/activity_detail.html", {
         "request": request,
         "record":  record,
@@ -1007,7 +1318,7 @@ async def stream_tasks(request: Request):
             if await request.is_disconnected():
                 break
             try:
-                tasks = task_store.list_tasks(limit=200)
+                tasks = await run_in_threadpool(task_store.list_tasks, limit=200)
                 state_hash = hash(str([(t["id"], t["status"]) for t in tasks]))
                 if state_hash != last_hash:
                     last_hash = state_hash
@@ -1045,12 +1356,11 @@ async def chat_send(
     label, _ = AGENT_LABELS[agent_name]
 
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{agent_url}/chat",
-                json={"message": message, "session_id": session_id},
-                timeout=120,
-            )
+        resp = await _http_client.post(
+            f"{agent_url}/chat",
+            json={"message": message, "session_id": session_id},
+            timeout=120,
+        )
         if resp.status_code == 429:
             response = f"⚠️ Budget limit reached: {resp.json().get('detail', 'token budget exhausted')}"
             status = "failed"
@@ -1067,7 +1377,8 @@ async def chat_send(
         response = f"⚠️ Error: {e}"
 
     latency_ms = int((time.time() - start) * 1000)
-    store.record(
+    await run_in_threadpool(
+        store.record,
         agent=label.split()[-2] if " " in label else agent_name,
         session_id=session_id,
         message=message,
@@ -1076,7 +1387,8 @@ async def chat_send(
         latency_ms=latency_ms,
     )
     if tool_calls:
-        store.record_tool_calls(
+        await run_in_threadpool(
+            store.record_tool_calls,
             agent=label.split()[-2] if " " in label else agent_name,
             session_id=session_id,
             tool_calls=tool_calls,
@@ -1095,24 +1407,24 @@ async def chat_send(
 
 @app.post("/tasks/{task_id}/approve", response_class=HTMLResponse)
 async def task_approve(request: Request, task_id: str):
-    task = task_store.get_task(task_id)
+    task = await run_in_threadpool(task_store.get_task, task_id)
     if not task:
         msg, ok = f"Task `{task_id}` not found.", False
     elif task["status"] != "awaiting_approval":
         msg, ok = f"Task `{task_id}` is `{task['status']}`, not awaiting approval.", False
     else:
-        task_store.approve_task(task_id, "human")
+        await run_in_threadpool(task_store.approve_task, task_id, "human")
         msg, ok = f"✅ Task `{task_id}` approved.", True
     return templates.TemplateResponse(request, "partials/action_status.html", {"request": request, "msg": msg, "ok": ok})
 
 
 @app.post("/tasks/{task_id}/reject", response_class=HTMLResponse)
 async def task_reject(request: Request, task_id: str):
-    task = task_store.get_task(task_id)
+    task = await run_in_threadpool(task_store.get_task, task_id)
     if not task:
         msg, ok = f"Task `{task_id}` not found.", False
     else:
-        task_store.reject_task(task_id, "human", "Rejected via UI")
+        await run_in_threadpool(task_store.reject_task, task_id, "human", "Rejected via UI")
         msg, ok = f"✅ Task `{task_id}` rejected.", True
     return templates.TemplateResponse(request, "partials/action_status.html", {"request": request, "msg": msg, "ok": ok})
 
@@ -1125,13 +1437,12 @@ async def tasks_clear(request: Request, confirmed: str = Form("no")):
             "msg": "⚠️ Add confirmed=yes to permanently delete all tasks.",
             "ok": False,
         })
-    n = task_store.clear_all_tasks()
+    n = await run_in_threadpool(task_store.clear_all_tasks)
     extra = ""
     try:
-        async with httpx.AsyncClient() as client:
-            r = await client.post(f"{OPS_AGENT_URL}/poller/reset", timeout=5)
-            seeded = r.json().get("seeded_fingerprints", 0) if r.status_code == 200 else "?"
-            extra = f" Poller reset ({seeded} fingerprints re-seeded)."
+        r = await _http_client.post(f"{OPS_AGENT_URL}/poller/reset", timeout=5)
+        seeded = r.json().get("seeded_fingerprints", 0) if r.status_code == 200 else "?"
+        extra = f" Poller reset ({seeded} fingerprints re-seeded)."
     except Exception:
         extra = " (Poller reset failed.)"
     return templates.TemplateResponse(request, "partials/action_status.html", {
@@ -1147,10 +1458,9 @@ async def tasks_clear(request: Request, confirmed: str = Form("no")):
 async def partial_schedules(request: Request):
     rows = []
     try:
-        async with httpx.AsyncClient() as client:
-            r = await client.get(f"{CHAOS_AGENT_URL}/schedules", timeout=5)
-            r.raise_for_status()
-            rows = r.json()
+        r = await _http_client.get(f"{CHAOS_AGENT_URL}/schedules", timeout=5)
+        r.raise_for_status()
+        rows = r.json()
     except Exception:
         pass
     return templates.TemplateResponse(request, "partials/schedule_table.html", {"request": request, "rows": rows, "truncate": _truncate})
@@ -1167,23 +1477,21 @@ async def schedule_create(
         msg, ok = "⚠️ Please enter a scenario.", False
     else:
         try:
-            async with httpx.AsyncClient() as client:
-                r = await client.post(
-                    f"{CHAOS_AGENT_URL}/schedule",
-                    json={"scenario": scenario, "interval_minutes": interval_minutes},
-                    timeout=10,
-                )
-                r.raise_for_status()
-                job = r.json()
-                msg = f"✅ Scheduled job `{job['job_id']}` every {interval_minutes} min."
+            r = await _http_client.post(
+                f"{CHAOS_AGENT_URL}/schedule",
+                json={"scenario": scenario, "interval_minutes": interval_minutes},
+                timeout=10,
+            )
+            r.raise_for_status()
+            job = r.json()
+            msg = f"✅ Scheduled job `{job['job_id']}` every {interval_minutes} min."
         except Exception as e:
             msg, ok = f"❌ Error: {e}", False
 
     rows = []
     try:
-        async with httpx.AsyncClient() as client:
-            r = await client.get(f"{CHAOS_AGENT_URL}/schedules", timeout=5)
-            rows = r.json()
+        r = await _http_client.get(f"{CHAOS_AGENT_URL}/schedules", timeout=5)
+        rows = r.json()
     except Exception:
         pass
     return templates.TemplateResponse(request, "partials/schedule_table.html", {
@@ -1199,21 +1507,19 @@ async def schedule_create(
 async def schedule_cancel(request: Request, job_id: str):
     msg, ok = "", True
     try:
-        async with httpx.AsyncClient() as client:
-            r = await client.delete(f"{CHAOS_AGENT_URL}/schedule/{job_id}", timeout=5)
-            if r.status_code == 404:
-                msg, ok = f"⚠️ Job `{job_id}` not found.", False
-            else:
-                r.raise_for_status()
-                msg = f"✅ Cancelled job `{job_id}`."
+        r = await _http_client.delete(f"{CHAOS_AGENT_URL}/schedule/{job_id}", timeout=5)
+        if r.status_code == 404:
+            msg, ok = f"⚠️ Job `{job_id}` not found.", False
+        else:
+            r.raise_for_status()
+            msg = f"✅ Cancelled job `{job_id}`."
     except Exception as e:
         msg, ok = f"❌ Error: {e}", False
 
     rows = []
     try:
-        async with httpx.AsyncClient() as client:
-            r = await client.get(f"{CHAOS_AGENT_URL}/schedules", timeout=5)
-            rows = r.json()
+        r = await _http_client.get(f"{CHAOS_AGENT_URL}/schedules", timeout=5)
+        rows = r.json()
     except Exception:
         pass
     return templates.TemplateResponse(request, "partials/schedule_table.html", {

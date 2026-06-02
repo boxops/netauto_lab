@@ -166,6 +166,10 @@ Set `TASK_DB_URL` in `.env` to switch to PostgreSQL. The `agent-postgres` servic
 - Jinja2 server-side templates with HTMX for partial updates.
 - **Real-time updates via SSE**: A single persistent connection to `/stream/tasks` drives all live widgets. When any task state changes, the server pushes a `tasks-changed` event; HTMX triggers targeted refreshes. This replaces polling entirely on the pipeline page.
 - **Tabs**: Pipeline Dashboard · Ops Agent · Engineering Agent · Chaos Agent · 🚨 Incidents · Activity · Cost Monitor.
+- **Pipeline views**: The Alert Processing Pipeline panel offers two views toggled by a button group:
+  - **📊 Visual** — card-per-stage layout with status, key fields, and connecting arrows.
+  - **📖 Chronicle** — vertical timeline narrative with stage chapters, gap timings, confidence/risk/verdict badges, collapsible detail panels, and a header summarising alert severity, device, and time-to-resolution.
+- **Performance**: All agent HTTP calls inside async handlers use `asyncio.gather` for concurrency (the three `/partials/agent-status` calls, for example, run in parallel rather than sequentially). A single shared `httpx.AsyncClient` is created at startup and reused across all requests. All synchronous SQLite calls are dispatched to a thread pool via `run_in_threadpool` so the asyncio event loop is never blocked.
 - Shares the `agent-activity-data` Docker volume with all three agent containers.
 
 ## Data Persistence

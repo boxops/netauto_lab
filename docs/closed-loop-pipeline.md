@@ -341,7 +341,11 @@ The **📊 Pipeline** tab is the default landing page of the web UI at [http://l
 
 The dashboard uses **Server-Sent Events** (SSE). A single persistent connection to `/stream/tasks` pushes a notification whenever any task state changes. The pipeline visual, task queue, approval badge, and incident list all update immediately on change — no polling lag.
 
-### Alert Processing Pipeline visualiser
+### Alert Processing Pipeline — Visual and Chronicle views
+
+The **Alert Processing Pipeline** section offers two views, toggled with the **📊 Visual / 📖 Chronicle** buttons in the top-right of the panel. Selecting a different alert fingerprint from the dropdown reloads whichever view is currently active.
+
+#### 📊 Visual view
 
 A card layout shows the four pipeline stages for a selected alert fingerprint:
 
@@ -350,6 +354,27 @@ A card layout shows the four pipeline stages for a selected alert fingerprint:
 ```
 
 Each card shows status, key result fields, and age. Connecting arrows turn green when stages complete.
+
+#### 📖 Chronicle view
+
+The Chronicle is a human-readable **incident narrative** for the selected alert. It renders the same pipeline data as a vertical timeline where each stage is a "chapter" with:
+
+- **Header**: severity badge (P1/P2/P3), alert name, device, overall pipeline status, and time-to-resolution if the alert has been resolved.
+- **Chapter header**: timestamp, stage label (e.g. `ROOT CAUSE IDENTIFIED`), and a coloured confidence/risk/verdict badge.
+- **Chapter body**: prose summary of the stage's findings — diagnosis, fix commands, validation verdict, or approval/execution status. Collapsible detail panels show the full agent response and config diff.
+- **Gap dividers**: time elapsed between consecutive stages (e.g. `┄┄ 3m 12s ┄┄`), making queuing delays immediately visible.
+- **Task ID links**: each chapter's task ID is a click-through to the full Task Detail panel.
+
+The Chronicle auto-refreshes via SSE whenever the pipeline state changes.
+
+**Badge semantics per stage:**
+
+| Stage | Badge field | Values |
+| ----- | ----------- | ------ |
+| RCA | Confidence | High ✅ · Medium 🟡 · Low ⚠️ |
+| Fix Proposal | Risk | Low ✅ · Medium 🟡 · High 🔴 |
+| Validation | Verdict | Correct ✅ · Partial 🟡 · Incorrect ❌ · Unverifiable ❓ |
+| Approval Gate | Execution outcome | Resolved ✅ · Executed ✅ · Failed ❌ · Awaiting 🟣 · Rejected |
 
 ### Incidents tab
 
