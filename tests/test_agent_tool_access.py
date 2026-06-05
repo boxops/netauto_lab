@@ -62,10 +62,10 @@ LOKI_URL = os.getenv("LOKI_URL", "http://localhost:3100")
 KNOWN_DEVICE = "leaf1"
 KNOWN_PREFIX = "10.0.0.0/8"
 
-# The ops-agent container that can reach docker-internal services
-OPS_AGENT_CONTAINER = "netauto-ai-ops-agent-1"
-ENG_AGENT_CONTAINER = "netauto-ai-eng-agent-1"
-CHAOS_AGENT_CONTAINER = "netauto-ai-chaos-agent-1"
+# The unified agent container (replaces ai-ops-agent, ai-eng-agent, ai-chaos-agent)
+OPS_AGENT_CONTAINER = "netauto-ai-agent-1"
+ENG_AGENT_CONTAINER = "netauto-ai-agent-1"
+CHAOS_AGENT_CONTAINER = "netauto-ai-agent-1"
 
 
 # ---------------------------------------------------------------------------

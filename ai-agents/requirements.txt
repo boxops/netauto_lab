@@ -26,3 +26,4 @@ apscheduler>=3.10.0
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
 aio-pika>=9.0.0
+prometheus-client>=0.20.0

@@ -1,43 +1,25 @@
 """
 Token budget enforcement and usage tracking for all AI agents.
 
-Writes to the token_usage table in activity.db (shared SQLite volume).
+Writes to the token_usage table managed by TaskStore (shared SQLite or PostgreSQL).
 Called from StatusCallbackHandler on every LLM response.
 
 Usage:
-    limiter = RateLimiter()
-    limiter.check_budget("ops_agent")          # raises BudgetExceededError if over limit
-    limiter.record_usage("ops_agent", ...)      # called after each LLM completion
-    limiter.get_summary()                       # returns current spend and headroom
+    task_store = TaskStore()
+    limiter = RateLimiter(engine=task_store._engine)
+    limiter.check_budget("ops_agent")      # raises BudgetExceededError if over limit
+    limiter.record_usage("ops_agent", ...) # called after each LLM completion
+    limiter.get_summary()                  # returns current spend and headroom
 """
 from __future__ import annotations
 
-import os
-import sqlite3
 import threading
-from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Generator
+
+from sqlalchemy.engine import Engine
+from sqlalchemy import text
 
 from shared.config import settings
-
-_DEFAULT_DB = os.environ.get("ACTIVITY_DB_PATH", "./activity.db")
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS token_usage (
-    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp             TEXT    NOT NULL,
-    agent                 TEXT    NOT NULL,
-    session_id            TEXT    NOT NULL,
-    task_id               TEXT,
-    prompt_tokens         INTEGER NOT NULL,
-    completion_tokens     INTEGER NOT NULL,
-    model                 TEXT    NOT NULL,
-    estimated_cost_usd    REAL    NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_token_usage_agent_ts
-    ON token_usage (agent, timestamp);
-"""
 
 
 class BudgetExceededError(Exception):
@@ -48,23 +30,21 @@ class BudgetExceededError(Exception):
 
 
 class RateLimiter:
-    """Thread-safe token budget tracker backed by the shared activity.db."""
+    """Thread-safe token budget tracker backed by the shared TaskStore database."""
 
-    def __init__(self, db_path: str = _DEFAULT_DB) -> None:
-        self._db_path = db_path
+    def __init__(self, engine: Engine | None = None) -> None:
+        """
+        Accept a SQLAlchemy Engine from TaskStore so both share the same backend
+        (SQLite in dev, PostgreSQL in production). When engine is None a TaskStore
+        is instantiated internally for backwards-compatibility with tests that
+        construct RateLimiter() directly.
+        """
+        if engine is not None:
+            self._engine = engine
+        else:
+            from shared.task_store import TaskStore as _TS
+            self._engine = _TS()._engine
         self._lock = threading.Lock()
-        with self._connect() as conn:
-            conn.executescript(_SCHEMA)
-
-    @contextmanager
-    def _connect(self) -> Generator[sqlite3.Connection, None, None]:
-        conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-            conn.commit()
-        finally:
-            conn.close()
 
     # ── budget checks ─────────────────────────────────────────────────────────
 
@@ -77,30 +57,24 @@ class RateLimiter:
         hour_start = now.strftime("%Y-%m-%d %H:")
         day_start  = now.strftime("%Y-%m-%d")
 
-        with self._connect() as conn:
-            # Per-agent hourly token limit
-            row = conn.execute(
-                "SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) "
-                "FROM token_usage WHERE agent=? AND timestamp LIKE ?",
-                (agent, f"{hour_start}%"),
-            ).fetchone()
-            tokens_this_hour = row[0]
+        with self._engine.connect() as conn:
+            tokens_this_hour = conn.execute(
+                text("SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) "
+                     "FROM token_usage WHERE agent=:agent AND timestamp LIKE :pat"),
+                {"agent": agent, "pat": f"{hour_start}%"},
+            ).scalar()
 
-            # Per-agent daily token limit
-            row = conn.execute(
-                "SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) "
-                "FROM token_usage WHERE agent=? AND timestamp LIKE ?",
-                (agent, f"{day_start}%"),
-            ).fetchone()
-            tokens_today = row[0]
+            tokens_today = conn.execute(
+                text("SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) "
+                     "FROM token_usage WHERE agent=:agent AND timestamp LIKE :pat"),
+                {"agent": agent, "pat": f"{day_start}%"},
+            ).scalar()
 
-            # Global daily dollar spend
-            row = conn.execute(
-                "SELECT COALESCE(SUM(estimated_cost_usd), 0.0) "
-                "FROM token_usage WHERE timestamp LIKE ?",
-                (f"{day_start}%",),
-            ).fetchone()
-            spend_today = row[0]
+            spend_today = conn.execute(
+                text("SELECT COALESCE(SUM(estimated_cost_usd), 0.0) "
+                     "FROM token_usage WHERE timestamp LIKE :pat"),
+                {"pat": f"{day_start}%"},
+            ).scalar()
 
         remaining_usd = max(0.0, settings.daily_budget_usd - spend_today)
 
@@ -145,14 +119,18 @@ class RateLimiter:
             + completion_tokens / 1000 * settings.openai_output_cost_per_1k
         )
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        with self._lock, self._connect() as conn:
+        with self._lock, self._engine.begin() as conn:
             conn.execute(
-                """INSERT INTO token_usage
-                   (timestamp, agent, session_id, task_id,
-                    prompt_tokens, completion_tokens, model, estimated_cost_usd)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (ts, agent, session_id, task_id,
-                 prompt_tokens, completion_tokens, model, cost),
+                text("""INSERT INTO token_usage
+                        (timestamp, agent, session_id, task_id,
+                         prompt_tokens, completion_tokens, model, estimated_cost_usd)
+                        VALUES (:ts, :agent, :session_id, :task_id,
+                                :prompt_tokens, :completion_tokens, :model, :cost)"""),
+                {
+                    "ts": ts, "agent": agent, "session_id": session_id,
+                    "task_id": task_id, "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens, "model": model, "cost": cost,
+                },
             )
         return cost
 
@@ -167,33 +145,35 @@ class RateLimiter:
         hour_prefix = now.strftime("%Y-%m-%d %H:")
         day_prefix  = now.strftime("%Y-%m-%d")
 
-        agent_filter = "AND agent=?" if agent else ""
-        params_hour = [f"{hour_prefix}%"] + ([agent] if agent else [])
-        params_day  = [f"{day_prefix}%"]  + ([agent] if agent else [])
+        agent_clause = "AND agent=:agent" if agent else ""
+        params_h = {"pat": f"{hour_prefix}%"}
+        params_d = {"pat": f"{day_prefix}%"}
+        if agent:
+            params_h["agent"] = agent
+            params_d["agent"] = agent
 
-        with self._connect() as conn:
-            def _fetch(prefix: str, extra: str, params: list):
-                return conn.execute(
-                    f"SELECT "
-                    f"COALESCE(SUM(prompt_tokens),0), "
-                    f"COALESCE(SUM(completion_tokens),0), "
-                    f"COALESCE(SUM(estimated_cost_usd),0.0), "
-                    f"COUNT(*) "
-                    f"FROM token_usage WHERE timestamp LIKE ? {extra}",
-                    params,
-                ).fetchone()
-
-            h = _fetch(hour_prefix, agent_filter, params_hour)
-            d = _fetch(day_prefix,  agent_filter, params_day)
-
-            # per-agent breakdown for the day
+        with self._engine.connect() as conn:
+            h = conn.execute(
+                text(f"SELECT COALESCE(SUM(prompt_tokens),0), "
+                     f"COALESCE(SUM(completion_tokens),0), "
+                     f"COALESCE(SUM(estimated_cost_usd),0.0), COUNT(*) "
+                     f"FROM token_usage WHERE timestamp LIKE :pat {agent_clause}"),
+                params_h,
+            ).fetchone()
+            d = conn.execute(
+                text(f"SELECT COALESCE(SUM(prompt_tokens),0), "
+                     f"COALESCE(SUM(completion_tokens),0), "
+                     f"COALESCE(SUM(estimated_cost_usd),0.0), COUNT(*) "
+                     f"FROM token_usage WHERE timestamp LIKE :pat {agent_clause}"),
+                params_d,
+            ).fetchone()
             breakdown_rows = conn.execute(
-                "SELECT agent, "
-                "SUM(prompt_tokens+completion_tokens) AS tokens, "
-                "SUM(estimated_cost_usd) AS cost "
-                "FROM token_usage WHERE timestamp LIKE ? "
-                "GROUP BY agent ORDER BY cost DESC",
-                (f"{day_prefix}%",),
+                text("SELECT agent, "
+                     "SUM(prompt_tokens+completion_tokens) AS tokens, "
+                     "SUM(estimated_cost_usd) AS cost "
+                     "FROM token_usage WHERE timestamp LIKE :pat "
+                     "GROUP BY agent ORDER BY cost DESC"),
+                {"pat": f"{day_prefix}%"},
             ).fetchall()
 
         return {
@@ -213,18 +193,14 @@ class RateLimiter:
                 "calls":             d[3],
             },
             "budget": {
-                "daily_limit_usd":          settings.daily_budget_usd,
-                "remaining_usd":            round(max(0.0, settings.daily_budget_usd - d[2]), 6),
-                "pct_used":                 round(min(100.0, d[2] / settings.daily_budget_usd * 100), 1),
-                "hourly_token_limit":       settings.max_tokens_per_agent_per_hour,
-                "daily_token_limit":        settings.max_tokens_per_agent_per_day,
+                "daily_limit_usd":      settings.daily_budget_usd,
+                "remaining_usd":        round(max(0.0, settings.daily_budget_usd - d[2]), 6),
+                "pct_used":             round(min(100.0, d[2] / settings.daily_budget_usd * 100), 1),
+                "hourly_token_limit":   settings.max_tokens_per_agent_per_hour,
+                "daily_token_limit":    settings.max_tokens_per_agent_per_day,
             },
             "by_agent": [
-                {
-                    "agent": r["agent"],
-                    "tokens_today": r["tokens"],
-                    "cost_usd":     round(r["cost"], 6),
-                }
+                {"agent": r[0], "tokens_today": r[1], "cost_usd": round(r[2], 6)}
                 for r in breakdown_rows
             ],
         }

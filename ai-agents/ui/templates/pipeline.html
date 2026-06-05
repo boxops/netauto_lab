@@ -1,101 +1,114 @@
-{% extends "base.html" %}
-{% set active_tab = "pipeline" %}
-{% block title %}Pipeline Dashboard — Network AI Agents{% endblock %}
-
-{% block content %}
-<p class="muted mb-16" style="font-size:0.83em">
-  Live agent states refresh every 2 s · Pipeline and task queue update instantly via live stream
+{% extends "base.html" %} {% set active_tab = "pipeline" %} {% block title
+%}Pipeline Dashboard — Network AI Agents{% endblock %} {% block content %}
+<p class="muted mb-16" style="font-size: 0.83em">
+  Live agent states refresh every 2 s · Pipeline and task queue update instantly
+  via live stream
 </p>
 
-{# ── Live Agent Status ─────────────────────────────────────────────────────── #}
+{# ── Live Agent Status ───────────────────────────────────────────────────────
+#}
 <div class="section">
   <div class="section-title">🤖 Live Agent Status</div>
-  <div id="agent-status"
-       hx-get="/partials/agent-status"
-       hx-trigger="every 2s"
-       hx-swap="outerHTML">
+  <div
+    id="agent-status"
+    hx-get="/partials/agent-status"
+    hx-trigger="every 2s"
+    hx-swap="outerHTML"
+  >
     {% include "partials/agent_status.html" %}
   </div>
 </div>
 
-<hr class="divider">
+<hr class="divider" />
 
-{# ── Alert Pipeline Visualiser ────────────────────────────────────────────── #}
+{# ── Alert Pipeline Visualiser ──────────────────────────────────────────────
+#}
 <div class="section">
   <div class="section-title">🌐 Alert Processing Pipeline</div>
 
-  <div class="fp-row" style="margin-bottom:10px">
-    <select id="fp-select" name="fp">
+  <div class="fp-row" style="margin-bottom: 10px">
+    <select id="fp-select" name="fp" onchange="reloadChronicle(this.value)">
       {% for fp, label in fps %}
-        <option value="{{ fp }}" {% if fp == sel_fp %}selected{% endif %}>{{ label }}</option>
+      <option value="{{ fp }}" {% if fp == sel_fp %}selected{% endif %}>
+        {{ label }}
+      </option>
       {% else %}
-        <option value="">No alerts found</option>
+      <option value="">No alerts found</option>
       {% endfor %}
     </select>
-    <button class="btn btn-secondary"
-            hx-get="/partials/fingerprints"
-            hx-target="#fp-select"
-            hx-swap="innerHTML">
+    <button
+      class="btn btn-secondary"
+      hx-get="/partials/fingerprints"
+      hx-target="#fp-select"
+      hx-swap="innerHTML"
+    >
       🔄 Refresh Alerts
     </button>
-
-    {# View toggle #}
-    <div class="view-toggle" style="margin-left:auto">
-      <button data-view="visual"    class="active" onclick="switchPipelineView('visual')">📊 Visual</button>
-      <button data-view="chronicle"              onclick="switchPipelineView('chronicle')">📖 Chronicle</button>
-    </div>
   </div>
 
   <div id="pipeline-content">
-    <div id="pipeline-visual"
-         hx-get="/partials/pipeline"
-         hx-vals='js:{"fp": document.getElementById("fp-select")?.value || ""}'
-         hx-trigger="load, sse-refresh"
-         hx-swap="outerHTML">
-      <span class="muted" style="font-size:0.83em">Loading pipeline…</span>
+    <div
+      id="pipeline-chronicle"
+      hx-get="/partials/chronicle?fp={{ sel_fp | default('') }}"
+      hx-trigger="load, sse-refresh"
+      hx-swap="outerHTML"
+    >
+      <span class="muted" style="font-size: 0.83em">Loading pipeline…</span>
     </div>
   </div>
 </div>
 
-{# ── Task detail panel — outside the polling boundary so it survives refreshes #}
-<div id="pipeline-task-detail" class="detail-panel mb-16"
-     style="display:none">
-</div>
+{# ── Task detail panel — outside the polling boundary so it survives refreshes
+#}
+<div
+  id="pipeline-task-detail"
+  class="detail-panel mb-16"
+  style="display: none"
+></div>
 
-<hr class="divider">
+<hr class="divider" />
 
-{# ── Task Queue ────────────────────────────────────────────────────────────── #}
+{# ── Task Queue ──────────────────────────────────────────────────────────────
+#}
 <div class="section">
   <div class="section-title">📋 Task Queue</div>
 
   <div class="filters-row mb-8">
-    <select id="status-filter"
-            hx-get="/partials/task-queue"
-            hx-target="#task-queue-body"
-            hx-trigger="change"
-            hx-include="#status-filter, #type-filter"
-            hx-swap="innerHTML">
+    <select
+      id="status-filter"
+      hx-get="/partials/task-queue"
+      hx-target="#task-queue-body"
+      hx-trigger="change"
+      hx-include="#status-filter, #type-filter"
+      hx-swap="innerHTML"
+    >
       <option value="">All statuses</option>
-      {% for s in ["pending","claimed","running","awaiting_approval","complete","failed","rejected"] %}
-        <option value="{{ s }}">{{ s }}</option>
+      {% for s in
+      ["pending","claimed","running","awaiting_approval","complete","failed","rejected"]
+      %}
+      <option value="{{ s }}">{{ s }}</option>
       {% endfor %}
     </select>
-    <select id="type-filter"
-            hx-get="/partials/task-queue"
-            hx-target="#task-queue-body"
-            hx-trigger="change"
-            hx-include="#status-filter, #type-filter"
-            hx-swap="innerHTML">
+    <select
+      id="type-filter"
+      hx-get="/partials/task-queue"
+      hx-target="#task-queue-body"
+      hx-trigger="change"
+      hx-include="#status-filter, #type-filter"
+      hx-swap="innerHTML"
+    >
       <option value="">All types</option>
-      {% for t in ["rca","fix_proposal","validation","approval_gate"] %}
-        <option value="{{ t }}">{{ t }}</option>
+      {% for t in ["rca"] %}
+      <option value="{{ t }}">{{ t }}</option>
       {% endfor %}
     </select>
-    <button class="btn btn-secondary btn-sm"
-            hx-get="/partials/task-queue"
-            hx-target="#task-queue-body"
-            hx-include="#status-filter, #type-filter"
-            hx-swap="innerHTML">
+    <button
+      class="btn btn-secondary btn-sm"
+      hx-get="/partials/task-queue"
+      hx-target="#task-queue-body"
+      hx-include="#status-filter, #type-filter"
+      hx-swap="innerHTML"
+    >
       🔄 Refresh
     </button>
   </div>
@@ -104,15 +117,23 @@
     <table class="data-table">
       <thead>
         <tr>
-          <th>ID</th><th>Type</th><th>Status</th><th>Priority</th>
-          <th>Assigned To</th><th>Created By</th><th>Title</th><th>Age</th>
+          <th>ID</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Priority</th>
+          <th>Assigned To</th>
+          <th>Created By</th>
+          <th>Title</th>
+          <th>Age</th>
         </tr>
       </thead>
-      <tbody id="task-queue-body"
-             hx-get="/partials/task-queue"
-             hx-include="#status-filter, #type-filter"
-             hx-trigger="sse-refresh"
-             hx-swap="innerHTML">
+      <tbody
+        id="task-queue-body"
+        hx-get="/partials/task-queue"
+        hx-include="#status-filter, #type-filter"
+        hx-trigger="sse-refresh"
+        hx-swap="innerHTML"
+      >
         {% include "partials/task_queue.html" %}
       </tbody>
     </table>
@@ -120,102 +141,146 @@
 
   {# Approval controls #}
   <div class="flex gap-8 items-center flex-wrap mb-8">
-    <input id="approval-task-id" type="text" placeholder="Task ID (e.g. app-1a2b3c4d)"
-           style="flex:1; max-width:320px; background:var(--bg2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:7px 12px; font-size:0.83em;">
+    <input
+      id="approval-task-id"
+      type="text"
+      placeholder="Task ID (e.g. rca-1a2b3c4d)"
+      style="
+        flex: 1;
+        max-width: 320px;
+        background: var(--bg2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 6px;
+        padding: 7px 12px;
+        font-size: 0.83em;
+      "
+    />
     <button class="btn btn-primary btn-sm" id="approve-btn">✅ Approve</button>
-    <button class="btn btn-danger btn-sm"  id="reject-btn">❌ Reject</button>
+    <button class="btn btn-danger btn-sm" id="reject-btn">❌ Reject</button>
+  </div>
+  <div class="mb-8" style="font-size:0.82em">
+    <label style="color:var(--text-muted); display:block; margin-bottom:4px">
+      Override / operator commands
+      <span style="font-weight:400; color:var(--text-muted)">— leave blank to use agent-proposed commands, or enter config lines here for escalate_human tasks</span>
+    </label>
+    <textarea
+      id="operator-commands"
+      rows="3"
+      placeholder="interface Ethernet1&#10; no shutdown"
+      style="
+        width: 100%;
+        max-width: 600px;
+        background: var(--bg2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 6px;
+        padding: 7px 12px;
+        font-size: 0.9em;
+        font-family: monospace;
+        resize: vertical;
+      "
+    ></textarea>
   </div>
   <div id="approval-status"></div>
 
-  <hr class="divider">
+  <hr class="divider" />
   <div class="flex gap-8 items-center flex-wrap">
-    <button class="btn btn-secondary btn-sm"
-            hx-post="/tasks/clear"
-            hx-vals='{"confirmed":"yes"}'
-            hx-target="#clear-status"
-            hx-swap="innerHTML"
-            hx-confirm="Delete ALL tasks and reset the alert poller? This cannot be undone.">
+    <button
+      class="btn btn-secondary btn-sm"
+      hx-post="/tasks/clear"
+      hx-vals='{"confirmed":"yes"}'
+      hx-target="#clear-status"
+      hx-swap="innerHTML"
+      hx-confirm="Delete ALL tasks and reset the alert poller? This cannot be undone."
+    >
       🗑️ Clear All Tasks
     </button>
-    <span id="clear-status" class="muted" style="font-size:0.82em"></span>
+    <span id="clear-status" class="muted" style="font-size: 0.82em"></span>
   </div>
 </div>
 
-{# ── Task Detail ────────────────────────────────────────────────────────────── #}
+{# ── Task Detail ──────────────────────────────────────────────────────────────
+#}
 <div class="section">
   <div class="section-title">🔍 Task Detail</div>
   <div id="task-detail" class="detail-panel">
-    <span class="muted">Click a task row above to see its full timeline and context.</span>
+    <span class="muted"
+      >Click a task row above to see its full timeline and context.</span
+    >
   </div>
 </div>
 
 <script>
-// ── View toggle: Visual ↔ Chronicle ─────────────────────────────────────────
-var _currentView = 'visual';
-
-function switchPipelineView(view) {
-  _currentView = view;
-  var fp = document.getElementById('fp-select')?.value || '';
-  var endpoint = view === 'chronicle' ? '/partials/chronicle' : '/partials/pipeline';
-  htmx.ajax('GET', endpoint + '?fp=' + encodeURIComponent(fp), {
-    target: '#pipeline-content',
-    swap:   'innerHTML'
-  });
-  document.querySelectorAll('.view-toggle button').forEach(function(btn) {
-    btn.classList.toggle('active', btn.dataset.view === view);
-  });
-}
-
-// Reload current view when alert fingerprint changes
-document.addEventListener('DOMContentLoaded', function() {
-  var sel = document.getElementById('fp-select');
-  if (sel) {
-    sel.addEventListener('change', function() {
-      switchPipelineView(_currentView);
+  // Reload Chronicle when alert fingerprint changes
+  function reloadChronicle(fp) {
+    htmx.ajax("GET", "/partials/chronicle?fp=" + encodeURIComponent(fp || ""), {
+      target: "#pipeline-content",
+      swap: "innerHTML",
     });
   }
-});
 
-// ── Show pipeline-task-detail panel when a Details button populates it ───────
-document.body.addEventListener('htmx:afterSettle', function(e) {
-  if (e.detail.target.id === 'pipeline-task-detail') {
-    var panel = document.getElementById('pipeline-task-detail');
-    panel.style.display = 'block';
-    panel.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  // ── Show pipeline-task-detail panel when a Details button populates it ───────
+  document.body.addEventListener("htmx:afterSettle", function (e) {
+    if (e.detail.target.id === "pipeline-task-detail") {
+      var panel = document.getElementById("pipeline-task-detail");
+      panel.style.display = "block";
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  });
+
+  // ── Task row click → fill approval input + load detail panel ─────────────────
+  document.addEventListener("htmx:afterSwap", function (e) {
+    if (e.detail.target.id === "task-queue-body") attachRowClicks();
+  });
+  document.addEventListener("DOMContentLoaded", attachRowClicks);
+
+  function attachRowClicks() {
+    document
+      .querySelectorAll("#task-queue-body tr[data-task-id]")
+      .forEach(function (row) {
+        row.addEventListener("click", function () {
+          var id = this.dataset.taskId;
+          document.getElementById("approval-task-id").value = id;
+          htmx.ajax("GET", "/partials/task/" + id, {
+            target: "#task-detail",
+            swap: "innerHTML",
+          });
+        });
+      });
   }
-});
 
-// ── Task row click → fill approval input + load detail panel ─────────────────
-document.addEventListener('htmx:afterSwap', function(e) {
-  if (e.detail.target.id === 'task-queue-body') attachRowClicks();
-});
-document.addEventListener('DOMContentLoaded', attachRowClicks);
+  // ── Approve / Reject buttons ──────────────────────────────────────────────────
+  function getApprovalTaskId() {
+    return document.getElementById("approval-task-id").value.trim();
+  }
 
-function attachRowClicks() {
-  document.querySelectorAll('#task-queue-body tr[data-task-id]').forEach(function(row) {
-    row.addEventListener('click', function() {
-      var id = this.dataset.taskId;
-      document.getElementById('approval-task-id').value = id;
-      htmx.ajax('GET', '/partials/task/' + id, {target: '#task-detail', swap: 'innerHTML'});
+  document.getElementById("approve-btn").addEventListener("click", function () {
+    var id = getApprovalTaskId();
+    if (!id) {
+      document.getElementById("approval-status").innerHTML =
+        '<div class="action-status err">Enter a Task ID first.</div>';
+      return;
+    }
+    var cmds = (document.getElementById("operator-commands").value || "").trim();
+    htmx.ajax("POST", "/tasks/" + id + "/approve", {
+      target: "#approval-status",
+      swap: "innerHTML",
+      values: { operator_commands: cmds },
     });
   });
-}
 
-// ── Approve / Reject buttons ──────────────────────────────────────────────────
-function getApprovalTaskId() {
-  return document.getElementById('approval-task-id').value.trim();
-}
-
-document.getElementById('approve-btn').addEventListener('click', function() {
-  var id = getApprovalTaskId();
-  if (!id) { document.getElementById('approval-status').innerHTML = '<div class="action-status err">Enter a Task ID first.</div>'; return; }
-  htmx.ajax('POST', '/tasks/' + id + '/approve', {target: '#approval-status', swap: 'innerHTML'});
-});
-
-document.getElementById('reject-btn').addEventListener('click', function() {
-  var id = getApprovalTaskId();
-  if (!id) { document.getElementById('approval-status').innerHTML = '<div class="action-status err">Enter a Task ID first.</div>'; return; }
-  htmx.ajax('POST', '/tasks/' + id + '/reject', {target: '#approval-status', swap: 'innerHTML'});
-});
+  document.getElementById("reject-btn").addEventListener("click", function () {
+    var id = getApprovalTaskId();
+    if (!id) {
+      document.getElementById("approval-status").innerHTML =
+        '<div class="action-status err">Enter a Task ID first.</div>';
+      return;
+    }
+    htmx.ajax("POST", "/tasks/" + id + "/reject", {
+      target: "#approval-status",
+      swap: "innerHTML",
+    });
+  });
 </script>
 {% endblock %}

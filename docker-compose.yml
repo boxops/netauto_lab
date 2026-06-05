@@ -161,10 +161,10 @@ services:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/"]
-      interval: 30s
+      interval: 15s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 45s
 
   # ── Nautobot – Celery worker ─────────────────────────────────
   nautobot-worker:
@@ -175,10 +175,10 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "nautobot-server", "celery", "inspect", "ping"]
-      interval: 30s
+      interval: 15s
       timeout: 30s
       retries: 3
-      start_period: 60s
+      start_period: 45s
 
   # ── Nautobot – Celery beat scheduler ────────────────────────
   nautobot-scheduler:
@@ -545,104 +545,43 @@ services:
     restart: "no"
     command: sleep infinity
 
-  # ── AI Ops Agent ─────────────────────────────────────────────
-  ai-ops-agent:
+  # ── Unified AI Agent ─────────────────────────────────────────
+  # Replaces ai-ops-agent, ai-eng-agent, ai-chaos-agent
+  ai-agent:
     build:
       context: ./ai-agents
       dockerfile: Dockerfile
     env_file: .env
     environment:
-      AGENT_TYPE: ops
+      AGENT_API_KEY: "${AGENT_API_KEY:-}"
+      WORKFLOW_ENABLED: "${WORKFLOW_ENABLED:-true}"
+      # Destructive chaos tools (shutdown_interface, flap_bgp_neighbor).
+      # Set true ONLY in lab environments.
+      CHAOS_TOOLS_ENABLED: "${CHAOS_TOOLS_ENABLED:-false}"
       NAUTOBOT_URL: "http://nautobot:8080"
       NAUTOBOT_TOKEN: "${NAUTOBOT_SUPERUSER_API_TOKEN}"
       PROMETHEUS_URL: "http://prometheus:9090"
       LOKI_URL: "http://loki:3100"
       ALERT_EVENT_RECEIVER_URL: "http://alert-event-receiver:8770"
       ACTIVITY_DB_PATH: "/app/data/activity.db"
-      TASK_DB_URL: "${TASK_DB_URL:-}"
-      RABBITMQ_URL: "${RABBITMQ_URL:-}"
+      TASK_DB_URL: "${TASK_DB_URL:-postgresql+psycopg2://agent:${AGENT_DB_PASSWORD:-netauto_agent_default}@agent-postgres:5432/agent_tasks}"
+      RABBITMQ_URL: "${RABBITMQ_URL:-amqp://netauto:${REDIS_PASSWORD:-changeme}@rabbitmq:5672/}"
     volumes:
       - agent-activity-data:/app/data
+    ports:
+      - "8000:8000"
     networks:
       - mgmt-network
       - monitoring-network
       - syslog-network
+      - clab
     depends_on:
       nautobot:
         condition: service_healthy
       prometheus:
         condition: service_healthy
       agent-postgres:
-        condition: service_started
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # ── AI Network Engineering Agent ─────────────────────────────
-  ai-eng-agent:
-    build:
-      context: ./ai-agents
-      dockerfile: Dockerfile
-    env_file: .env
-    environment:
-      AGENT_TYPE: engineering
-      NAUTOBOT_URL: "http://nautobot:8080"
-      NAUTOBOT_TOKEN: "${NAUTOBOT_SUPERUSER_API_TOKEN}"
-      PROMETHEUS_URL: "http://prometheus:9090"
-      ACTIVITY_DB_PATH: "/app/data/activity.db"
-      TASK_DB_URL: "${TASK_DB_URL:-}"
-      RABBITMQ_URL: "${RABBITMQ_URL:-}"
-    volumes:
-      - agent-activity-data:/app/data
-    networks:
-      - mgmt-network
-      - monitoring-network
-    depends_on:
-      nautobot:
         condition: service_healthy
-      prometheus:
-        condition: service_healthy
-      agent-postgres:
-        condition: service_started
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # ── AI Chaos Monkey Agent ────────────────────────────────────
-  ai-chaos-agent:
-    build:
-      context: ./ai-agents
-      dockerfile: Dockerfile
-    env_file: .env
-    environment:
-      AGENT_TYPE: chaos
-      NAUTOBOT_URL: "http://nautobot:8080"
-      NAUTOBOT_TOKEN: "${NAUTOBOT_SUPERUSER_API_TOKEN}"
-      PROMETHEUS_URL: "http://prometheus:9090"
-      LOKI_URL: "http://loki:3100"
-      ALERT_EVENT_RECEIVER_URL: "http://alert-event-receiver:8770"
-      ACTIVITY_DB_PATH: "/app/data/activity.db"
-      TASK_DB_URL: "${TASK_DB_URL:-}"
-      RABBITMQ_URL: "${RABBITMQ_URL:-}"
-    volumes:
-      - agent-activity-data:/app/data
-    networks:
-      - mgmt-network
-      - monitoring-network
-      - syslog-network
-    depends_on:
-      nautobot:
-        condition: service_healthy
-      prometheus:
-        condition: service_healthy
-      agent-postgres:
-        condition: service_started
     restart: unless-stopped
     logging:
       driver: json-file
@@ -657,13 +596,15 @@ services:
       dockerfile: Dockerfile.ui
     env_file: .env
     environment:
-      OPS_AGENT_URL: "http://ai-ops-agent:8000"
-      ENG_AGENT_URL: "http://ai-eng-agent:8001"
-      CHAOS_AGENT_URL: "http://ai-chaos-agent:8002"
+      # All three URLs point to the unified agent service
+      OPS_AGENT_URL: "http://ai-agent:8000"
+      ENG_AGENT_URL: "http://ai-agent:8000"
+      CHAOS_AGENT_URL: "http://ai-agent:8000"
       ACTIVITY_DB_PATH: "/app/data/activity.db"
-      TASK_DB_URL: "${TASK_DB_URL:-}"
-      RABBITMQ_URL: "${RABBITMQ_URL:-}"
+      TASK_DB_URL: "${TASK_DB_URL:-postgresql+psycopg2://agent:${AGENT_DB_PASSWORD:-netauto_agent_default}@agent-postgres:5432/agent_tasks}"
+      RABBITMQ_URL: "${RABBITMQ_URL:-amqp://netauto:${REDIS_PASSWORD:-changeme}@rabbitmq:5672/}"
       AGENT_UI_URL: "${AGENT_UI_URL:-http://localhost:7860}"
+      AGENT_API_KEY: "${AGENT_API_KEY:-}"
     volumes:
       - agent-activity-data:/app/data
     ports:
@@ -671,9 +612,7 @@ services:
     networks:
       - mgmt-network
     depends_on:
-      - ai-ops-agent
-      - ai-eng-agent
-      - ai-chaos-agent
+      - ai-agent
     restart: unless-stopped
     logging:
       driver: json-file

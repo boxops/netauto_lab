@@ -1,9 +1,8 @@
 """
-Dedicated chaos engineering tools for controlled network disruption.
+Chaos engineering tools for controlled network disruption.
 
-Each tool is paired with a restore counterpart and defaults to check_mode=True.
-Configuration changes are submitted via the Nautobot 'Deploy Device Configurations' job.
-Read/verification commands are submitted via the Nautobot 'Commands Runner' job.
+Moved from chaos_agent/chaos_tools.py — now part of the unified Ops Agent.
+Each tool defaults to check_mode=True. Destructive tools require CHAOS_TOOLS_ENABLED=true.
 """
 from __future__ import annotations
 
@@ -42,7 +41,6 @@ def shutdown_interface(
         JSON with simulation notice or job result.
     """
     if check_mode:
-        # Show current interface state so the agent can describe the blast radius.
         current_state = _show_fn(
             device_name=device,
             commands=f"show interfaces {interface} status",
@@ -123,7 +121,7 @@ def flap_bgp_neighbor(
     and describes what would happen, but does NOT clear the session.
 
     check_mode=False: Issues a "clear ip bgp" command via the Nautobot 'Commands Runner'
-    job (with is_config=True). Requires explicit user approval.
+    job. Requires explicit user approval.
 
     Args:
         device:      Device hostname where the BGP session lives (e.g., 'spine1').
@@ -144,7 +142,6 @@ def flap_bgp_neighbor(
     )
 
     if check_mode:
-        # Show current BGP session state before describing the action.
         current_state = _show_fn(
             device_name=device,
             commands=f"show ip bgp neighbors {neighbor_ip} | include BGP state",
@@ -166,8 +163,6 @@ def flap_bgp_neighbor(
         }
         return json.dumps(result, indent=2)
 
-    # BGP clear is a one-shot operational command — use Commands Runner with is_config=True
-    # so it sends as a config-context command (enable → send command).
     from shared.tools import _get_device_id, _resolve_job_id, _submit_job, _poll_job, _fetch_job_logs, _format_job_output, settings
     try:
         device_id = _get_device_id(device)
@@ -225,9 +220,9 @@ def verify_bgp_state(
     return json.dumps(result, indent=2)
 
 
-CHAOS_TOOLS = [
-    shutdown_interface,
-    restore_interface,
-    flap_bgp_neighbor,
-    verify_bgp_state,
-]
+from shared.config import settings as _settings
+
+if _settings.chaos_tools_enabled:
+    CHAOS_TOOLS = [shutdown_interface, restore_interface, flap_bgp_neighbor, verify_bgp_state]
+else:
+    CHAOS_TOOLS = [verify_bgp_state]

@@ -1,0 +1,215 @@
+---
+# ============================================================
+# Production overlay for docker-compose.yml
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# What this file adds / overrides:
+#   - Resource limits (CPU + memory) on every service
+#   - Restart policies enforced to always (not unless-stopped)
+#   - Logging limited to prevent disk exhaustion
+#   - Stricter healthcheck thresholds
+#   - Production environment flags
+#   - Removes dev-only services (not needed in prod)
+# ============================================================
+
+services:
+
+  # ── Core infrastructure ──────────────────────────────────────
+
+  nautobot-postgres:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2g"
+        reservations:
+          memory: "512m"
+
+  redis:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "256m"
+
+  agent-postgres:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1g"
+        reservations:
+          memory: "256m"
+
+  rabbitmq:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512m"
+
+  # ── Observability stack ──────────────────────────────────────
+
+  prometheus:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "2g"
+        reservations:
+          memory: "512m"
+
+  alertmanager:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "128m"
+
+  grafana:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512m"
+
+  loki:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512m"
+
+  promtail:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "128m"
+
+  telegraf:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "256m"
+
+  # ── Nautobot application ─────────────────────────────────────
+
+  nautobot:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2g"
+        reservations:
+          memory: "512m"
+
+  nautobot-worker:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2g"
+
+  nautobot-scheduler:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "256m"
+
+  # ── Unified AI Agent ─────────────────────────────────────────
+
+  ai-agent:
+    restart: always
+    environment:
+      UVICORN_WORKERS: "2"
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: "4g"
+        reservations:
+          memory: "1g"
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  agent-ui:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512m"
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ── Supporting services ──────────────────────────────────────
+
+  gitea:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512m"
+
+  gitea-postgres:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512m"
+
+  alert-event-receiver:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "128m"
+
+  topology-api:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "128m"

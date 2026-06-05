@@ -26,25 +26,58 @@ from shared.config import settings
 # ── Nautobot helpers ──────────────────────────────────────────────────────────
 
 def _nautobot_get(path: str, params: dict | None = None) -> dict:
-    resp = httpx.get(
-        f"{settings.nautobot_url}/api/{path.lstrip('/')}",
-        headers={"Authorization": f"Token {settings.nautobot_token}"},
-        params=params or {},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    url = f"{settings.nautobot_url}/api/{path.lstrip('/')}"
+    try:
+        resp = httpx.get(
+            url,
+            headers={"Authorization": f"Token {settings.nautobot_token}"},
+            params=params or {},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.ConnectError as exc:
+        raise RuntimeError(f"Cannot reach Nautobot at {settings.nautobot_url}. "
+                           "Check that the service is running.") from exc
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"Nautobot request timed out: GET {url}") from exc
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (401, 403):
+            raise RuntimeError(
+                f"Nautobot auth failed (HTTP {exc.response.status_code}). "
+                "Check NAUTOBOT_TOKEN in .env."
+            ) from exc
+        raise RuntimeError(
+            f"Nautobot returned HTTP {exc.response.status_code} for GET {url}: "
+            f"{exc.response.text[:200]}"
+        ) from exc
 
 
 def _nautobot_post(path: str, data: dict) -> dict:
-    resp = httpx.post(
-        f"{settings.nautobot_url}/api/{path.lstrip('/')}",
-        headers={"Authorization": f"Token {settings.nautobot_token}"},
-        json=data,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    url = f"{settings.nautobot_url}/api/{path.lstrip('/')}"
+    try:
+        resp = httpx.post(
+            url,
+            headers={"Authorization": f"Token {settings.nautobot_token}"},
+            json=data,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.ConnectError as exc:
+        raise RuntimeError(f"Cannot reach Nautobot at {settings.nautobot_url}.") from exc
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"Nautobot request timed out: POST {url}") from exc
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (401, 403):
+            raise RuntimeError(
+                f"Nautobot auth failed (HTTP {exc.response.status_code}). "
+                "Check NAUTOBOT_TOKEN in .env."
+            ) from exc
+        raise RuntimeError(
+            f"Nautobot returned HTTP {exc.response.status_code} for POST {url}: "
+            f"{exc.response.text[:200]}"
+        ) from exc
 
 
 # ── Nautobot Job helpers ───────────────────────────────────────────────────────
@@ -216,8 +249,8 @@ def get_all_devices() -> str:
             "returned": len(devices),
             "devices": devices,
         }, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -257,8 +290,8 @@ def get_device_info(device_name: str) -> str:
             "interface_count": iface_count.get("count", 0),
             "nautobot_url": f"{settings.nautobot_url}/dcim/devices/{device['id']}/",
         }, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -338,8 +371,8 @@ def get_device_interfaces(device_name: str) -> str:
             "interface_count": result["count"],
             "interfaces": interfaces,
         }, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -369,8 +402,8 @@ def get_topology() -> str:
             "cable_count": cables.get("count", 0),
             "connections": connections,
         }, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -408,8 +441,8 @@ def get_connected_devices(device_name: str) -> str:
             "neighbor_count": len(neighbors),
             "neighbors": neighbors,
         }, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -430,8 +463,8 @@ def get_vlans() -> str:
             "total_count": result["count"],
             "vlans": vlans,
         }, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -452,8 +485,8 @@ def get_prefixes() -> str:
             "total_count": result["count"],
             "prefixes": prefixes,
         }, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -503,8 +536,8 @@ def get_ip_addresses(device_name: str = "", prefix: str = "") -> str:
             "returned": len(addresses),
             "ip_addresses": addresses,
         }, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -531,8 +564,8 @@ def get_available_ips(prefix: str, count: int = 1) -> str:
             f"ipam/prefixes/{prefix_id}/available-ips/", {"count": count}
         )
         return json.dumps(available, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -618,8 +651,8 @@ def get_devices_by_location(location_name: str) -> str:
             "error": f"Location '{location_name}' not recognised by Nautobot.",
             "available_locations": _available_locations(),
         })
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 # ── Tier 2 – Prometheus Metrics ───────────────────────────────────────────────
@@ -730,8 +763,8 @@ def get_device_metrics(device_name: str) -> str:
             metrics["interface_oper_status"] = "not available (SNMP metrics not collected)"
 
         return json.dumps(metrics, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -811,8 +844,8 @@ def get_interface_metrics(device_name: str, interface_name: str = "") -> str:
             "device": device_name,
             "interfaces": list(by_interface.values()),
         }, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -843,8 +876,8 @@ def get_active_alerts() -> str:
             for a in alerts
         ]
         return json.dumps({"active_alert_count": len(result), "alerts": result}, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -870,8 +903,8 @@ def get_recent_alert_events(limit: int = 20) -> str:
         )
         resp.raise_for_status()
         return json.dumps(resp.json(), indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -925,8 +958,8 @@ def query_prometheus(promql_query: str, time_range_minutes: int = 60) -> str:
                 "results": summary,
             }, indent=2)
         return json.dumps(data, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 # ── Tier 3 – Loki Log Analysis ────────────────────────────────────────────────
@@ -975,8 +1008,8 @@ def query_logs(device: str = "", log_pattern: str = "", time_range_minutes: int 
             logql += f' |= "{log_pattern}"'
         lines = _loki_query(logql, minutes=time_range_minutes, limit=50)
         return json.dumps({"log_count": len(lines), "logs": lines}, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -1009,8 +1042,8 @@ def get_interface_events(device_name: str = "", time_range_minutes: int = 60) ->
             "event_count": len(lines),
             "events": lines,
         }, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -1041,8 +1074,8 @@ def get_bgp_events(device_name: str = "", time_range_minutes: int = 60) -> str:
             "event_count": len(lines),
             "events": lines,
         }, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -1070,8 +1103,8 @@ def get_recent_errors(device_name: str = "", time_range_minutes: int = 60) -> st
             "entry_count": len(lines),
             "entries": lines,
         }, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 # ── Tier 4 – Nautobot Job Actions ─────────────────────────────────────────────
@@ -1119,8 +1152,8 @@ def run_show_commands(
             f"{settings.nautobot_url}/extras/job-results/{result_id}/"
         )
         return json.dumps(output, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 @tool
@@ -1188,8 +1221,8 @@ def run_config_commands(
             f"{settings.nautobot_url}/extras/job-results/{result_id}/"
         )
         return json.dumps(output, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    except Exception:
+        raise
 
 
 # ── Runbook library ──────────────────────────────────────────────────────────
@@ -1414,12 +1447,9 @@ _ACTION_TOOLS = [
     run_config_commands,
 ]
 
-OPS_TOOLS = _NAUTOBOT_TOOLS + _PROMETHEUS_TOOLS + _LOKI_TOOLS + _ACTION_TOOLS
-
 _RUNBOOK_TOOLS = [get_runbook]
 
-ENG_TOOLS = _RUNBOOK_TOOLS + _NAUTOBOT_TOOLS + [
-    get_device_metrics,       # useful for validating current state
-    get_interface_metrics,    # useful for bandwidth planning
-    get_active_alerts,        # useful for checking impact before changes
-] + _ACTION_TOOLS
+OPS_TOOLS = _NAUTOBOT_TOOLS + _PROMETHEUS_TOOLS + _LOKI_TOOLS + _ACTION_TOOLS + _RUNBOOK_TOOLS
+
+# Backward-compat alias — workflow.py imported ENG_TOOLS during the 3-agent era
+ENG_TOOLS = OPS_TOOLS

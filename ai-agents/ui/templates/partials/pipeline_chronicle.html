@@ -1,100 +1,107 @@
-{# ── Pipeline Chronicle ────────────────────────────────────────────────────── #}
-{#
-   Renders the full pipeline as a human-readable incident narrative.
-   Each stage is a "chapter" with prose, structured data, collapsible details,
-   and time gaps showing how long the pipeline spent between stages.
+{# ── Pipeline Chronicle ──────────────────────────────────────────────────────
+#} {# Renders the full pipeline as a human-readable incident narrative. Each
+stage is a "chapter" with prose, structured data, collapsible details, and time
+gaps showing how long the pipeline spent between stages. #} {% set ov = overall
+%} {# ── Overall header ────────────────────────────────────────────────────────
 #}
-
-{% set ov = overall %}
-
-{# ── Overall header ──────────────────────────────────────────────────────── #}
-<div id="pipeline-chronicle"
-     hx-get="/partials/chronicle?fp={{ fp }}"
-     hx-trigger="sse-refresh"
-     hx-swap="outerHTML">
-
-{% if not chapters %}
-  <div class="muted" style="padding:20px 0; font-size:0.87em">
+<div
+  id="pipeline-chronicle"
+  hx-get="/partials/chronicle?fp={{ fp }}"
+  hx-trigger="sse-refresh"
+  hx-swap="outerHTML"
+>
+  {% if not chapters %}
+  <div class="muted" style="padding: 20px 0; font-size: 0.87em">
     No pipeline stages found for this alert.
   </div>
-{% else %}
+  {% else %}
 
-<div class="chronicle-header">
-  <div class="flex items-center gap-8 flex-wrap">
-    {% if ov.severity == "critical" %}
+  <div class="chronicle-header">
+    <div class="flex items-center gap-8 flex-wrap">
+      {% if ov.severity == "critical" %}
       <span class="chronicle-sev-badge crit">P1</span>
-    {% elif ov.severity == "warning" %}
+      {% elif ov.severity == "warning" %}
       <span class="chronicle-sev-badge warn">P2</span>
-    {% else %}
+      {% else %}
       <span class="chronicle-sev-badge info">P3</span>
-    {% endif %}
-
-    <span style="font-weight:700; font-size:0.9em">
-      {{ ov.alertname or "Alert" }}
-    </span>
-    {% if ov.device %}
-      <span style="font-size:0.85em">·</span>
-      <code style="font-size:0.82em; color:var(--text)">{{ ov.device }}</code>
-    {% endif %}
-
-    <span class="pill" style="background:{{ ov.color }}22; color:{{ ov.color }}; border-color:{{ ov.color }}55; font-size:0.75em">
-      {{ ov.label }}
-    </span>
-
-    {% if ov.ttr_str %}
-      <span class="muted" style="font-size:0.78em">· resolved in {{ ov.ttr_str }}</span>
-    {% endif %}
-  </div>
-</div>
-
-{# ── Timeline ──────────────────────────────────────────────────────────────── #}
-<div class="chronicle">
-
-{% for ch in chapters %}
-
-  {# ── Gap divider ── #}
-  {% if ch.gap_str %}
-  <div class="chronicle-gap">┄┄ {{ ch.gap_str }} ┄┄</div>
-  {% endif %}
-
-  {# ── Chapter ── #}
-  {% set spine_color = ch.badge_color if ch.badge_color else "#334155" %}
-  <div class="chronicle-chapter" style="border-left-color:{{ spine_color }}">
-
-    {# Chapter header row #}
-    <div class="chapter-header">
-      <div class="chronicle-dot" style="background:{{ spine_color }}"></div>
-      <code class="muted" style="font-size:0.72em; min-width:56px">{{ ch.timestamp }}</code>
-      <strong style="font-size:0.78em; letter-spacing:0.06em; color:{{ spine_color }}">
-        {{ ch.label }}
-      </strong>
-      {% if ch.badge_text %}
-      <span class="pill" style="background:{{ spine_color }}22; color:{{ spine_color }}; border-color:{{ spine_color }}44; font-size:0.72em">
-        {{ ch.badge_icon }} {{ ch.badge_text }}
-      </span>
       {% endif %}
-      <span class="muted" style="margin-left:auto; font-size:0.72em">
-        <a href="#" onclick="event.preventDefault(); htmx.ajax('GET','/partials/task/{{ ch.task_id }}',{target:'#chronicle-task-detail',swap:'innerHTML'}); document.getElementById('chronicle-task-detail').style.display='block'" style="color:var(--text-sub); text-decoration:none">
-          <code>{{ ch.task_id }}</code>
-        </a>
-      </span>
-    </div>
 
-    {# ── RCA body ── #}
-    {% if ch.type == "rca" %}
-    <div class="chapter-body">
-      {% if ch.status in ("running", "claimed", "pending") %}
+      <span style="font-weight: 700; font-size: 0.9em">
+        {{ ov.alertname or "Alert" }}
+      </span>
+      {% if ov.device %}
+      <span style="font-size: 0.85em">·</span>
+      <code style="font-size: 0.82em; color: var(--text)">{{ ov.device }}</code>
+      {% endif %}
+
+      <span
+        class="pill"
+        style="background:{{ ov.color }}22; color:{{ ov.color }}; border-color:{{ ov.color }}55; font-size:0.75em"
+      >
+        {{ ov.label }}
+      </span>
+
+      {% if ov.ttr_str %}
+      <span class="muted" style="font-size: 0.78em"
+        >· resolved in {{ ov.ttr_str }}</span
+      >
+      {% endif %}
+    </div>
+  </div>
+
+  {# ── Timeline
+  ──────────────────────────────────────────────────────────────── #}
+  <div class="chronicle">
+    {% for ch in chapters %} {# ── Gap divider ── #} {% if ch.gap_str %}
+    <div class="chronicle-gap">┄┄ {{ ch.gap_str }} ┄┄</div>
+    {% endif %} {# ── Chapter ── #} {% set spine_color = ch.badge_color if
+    ch.badge_color else "#334155" %}
+    <div class="chronicle-chapter" style="border-left-color:{{ spine_color }}">
+      {# Chapter header row #}
+      <div class="chapter-header">
+        <div class="chronicle-dot" style="background:{{ spine_color }}"></div>
+        <code class="muted" style="font-size: 0.72em; min-width: 56px"
+          >{{ ch.timestamp }}</code
+        >
+        <strong
+          style="font-size:0.78em; letter-spacing:0.06em; color:{{ spine_color }}"
+        >
+          {{ ch.label }}
+        </strong>
+        {% if ch.badge_text %}
+        <span
+          class="pill"
+          style="background:{{ spine_color }}22; color:{{ spine_color }}; border-color:{{ spine_color }}44; font-size:0.72em"
+        >
+          {{ ch.badge_icon }} {{ ch.badge_text }}
+        </span>
+        {% endif %}
+        <span class="muted" style="margin-left: auto; font-size: 0.72em">
+          <a
+            href="#"
+            onclick="event.preventDefault(); htmx.ajax('GET','/partials/task/{{ ch.task_id }}',{target:'#chronicle-task-detail',swap:'innerHTML'}); document.getElementById('chronicle-task-detail').style.display='block'"
+            style="color: var(--text-sub); text-decoration: none"
+          >
+            <code>{{ ch.task_id }}</code>
+          </a>
+        </span>
+      </div>
+
+      {# ── RCA body ── #} {% if ch.type == "rca" %}
+      <div class="chapter-body">
+        {% if ch.status in ("running", "claimed", "pending") %}
         <p class="muted chronicle-prose">
           <span class="pulse-dot"></span>
           The Ops Agent is investigating
           <strong>{{ ch.device or "the device" }}</strong>…
         </p>
-      {% else %}
+        {% else %}
         <p class="chronicle-prose">
           The Ops Agent investigated
           <strong>{{ ch.device or "the device" }}</strong>
-          {% if ch.tool_calls %}using <strong>{{ ch.tool_calls }}</strong> tool calls{% endif %}
-          {% if ch.alertname %}, examining the <em>{{ ch.alertname }}</em> alert{% endif %}.
+          {% if ch.tool_calls %}using <strong>{{ ch.tool_calls }}</strong> tool
+          calls{% endif %} {% if ch.alertname %}, examining the
+          <em>{{ ch.alertname }}</em> alert{% endif %}.
         </p>
 
         {% if ch.diagnosis %}
@@ -102,97 +109,88 @@
           <span class="finding-label">Diagnosis</span>
           <span>{{ ch.diagnosis }}</span>
         </div>
-        {% endif %}
-
-        {% if ch.action %}
-        <div class="chronicle-finding" style="border-left-color:#60a5fa">
-          <span class="finding-label" style="color:#60a5fa">Recommended action</span>
+        {% endif %} {% if ch.action %}
+        <div class="chronicle-finding" style="border-left-color: #60a5fa">
+          <span class="finding-label" style="color: #60a5fa"
+            >Recommended action</span
+          >
           <span>{{ ch.action }}</span>
         </div>
-        {% endif %}
-
-        {% if ch.full_response %}
+        {% endif %} {% if ch.full_response %}
         <details class="chronicle-details">
           <summary>▶ Full analysis</summary>
           <pre class="chronicle-pre">{{ ch.full_response }}</pre>
         </details>
-        {% endif %}
-      {% endif %}
-    </div>
+        {% endif %} {% endif %}
+      </div>
 
-    {# ── Fix Proposal body ── #}
-    {% elif ch.type == "fix_proposal" %}
-    <div class="chapter-body">
-      {% if ch.status in ("running", "claimed", "pending") %}
+      {# ── Fix Proposal body ── #} {% elif ch.type == "fix_proposal" %}
+      <div class="chapter-body">
+        {% if ch.status in ("running", "claimed", "pending") %}
         <p class="muted chronicle-prose">
           <span class="pulse-dot"></span>
-          The Engineering Agent is generating a fix proposal for
+          The Ops Agent is generating a fix proposal for
           <strong>{{ ch.device or "the device" }}</strong>…
         </p>
-      {% else %}
+        {% else %}
         <p class="chronicle-prose">
-          The Engineering Agent
-          {% if ch.tool_calls %} made {{ ch.tool_calls }} tool calls and{% endif %}
-          proposed a
-          <strong>{{ ch.fix_type | replace("_", " ") if ch.fix_type else "configuration change" }}</strong>
-          on <strong>{{ ch.device or "the device" }}</strong>.
-          {% if ch.risk %}
-            Assessed risk: <em>{{ ch.risk }}</em>.
-          {% endif %}
+          The Ops Agent {% if ch.tool_calls %} made {{ ch.tool_calls }} tool
+          calls and{% endif %} proposed a
+          <strong
+            >{{ ch.fix_type | replace("_", " ") if ch.fix_type else
+            "configuration change" }}</strong
+          >
+          on <strong>{{ ch.device or "the device" }}</strong>. {% if ch.risk %}
+          Assessed risk: <em>{{ ch.risk }}</em>. {% endif %}
         </p>
 
         {% if ch.commands %}
-        <div style="margin:10px 0 6px">
-          <span class="finding-label" style="color:#60a5fa">Commands to apply</span>
+        <div style="margin: 10px 0 6px">
+          <span class="finding-label" style="color: #60a5fa"
+            >Commands to apply</span
+          >
         </div>
         <pre class="chronicle-commands">{{ ch.commands }}</pre>
-        {% endif %}
-
-        {% if ch.reason %}
+        {% endif %} {% if ch.reason %}
         <div class="chronicle-finding">
           <span class="finding-label">Reasoning</span>
           <span>{{ ch.reason }}</span>
         </div>
-        {% endif %}
-
-        {% if ch.config_diff %}
+        {% endif %} {% if ch.config_diff %}
         <details class="chronicle-details">
           <summary>▶ Config diff (before → after)</summary>
-          <pre class="config-diff">{% for line in ch.config_diff.splitlines() %}{% if line.startswith('+') and not line.startswith('+++') %}<span class="diff-add">{{ line }}</span>
+          <pre
+            class="config-diff"
+          >{% for line in ch.config_diff.splitlines() %}{% if line.startswith('+') and not line.startswith('+++') %}<span class="diff-add">{{ line }}</span>
 {% elif line.startswith('-') and not line.startswith('---') %}<span class="diff-del">{{ line }}</span>
 {% elif line.startswith('@@') %}<span class="diff-hunk">{{ line }}</span>
 {% else %}{{ line }}
 {% endif %}{% endfor %}</pre>
         </details>
-        {% endif %}
-
-        {% if ch.full_response %}
+        {% endif %} {% if ch.full_response %}
         <details class="chronicle-details">
           <summary>▶ Full agent response</summary>
           <pre class="chronicle-pre">{{ ch.full_response }}</pre>
         </details>
-        {% endif %}
-      {% endif %}
-    </div>
+        {% endif %} {% endif %}
+      </div>
 
-    {# ── Validation body ── #}
-    {% elif ch.type == "validation" %}
-    <div class="chapter-body">
-      {% if ch.status in ("running", "claimed", "pending") %}
+      {# ── Validation body ── #} {% elif ch.type == "validation" %}
+      <div class="chapter-body">
+        {% if ch.status in ("running", "claimed", "pending") %}
         <p class="muted chronicle-prose">
           <span class="pulse-dot"></span>
-          The Chaos Agent is validating the proposed fix
-          {% if ch.device %}for <strong>{{ ch.device }}</strong>{% endif %}…
+          The Ops Agent is validating the proposed fix {% if ch.device %}for
+          <strong>{{ ch.device }}</strong>{% endif %}…
         </p>
-      {% else %}
+        {% else %}
         <p class="chronicle-prose">
-          The Chaos Agent validated the fix
-          {% if ch.device %}for <strong>{{ ch.device }}</strong>{% endif %}
-          and returned a verdict of
-          <strong style="color:{{ ch.badge_color }}">{{ ch.verdict or "unknown" }}</strong>.
-          {% if ch.risk_confirmed %}
-            Risk confirmed: <em>{{ ch.risk_confirmed }}</em>.
-          {% endif %}
+          The Ops Agent validated the fix {% if ch.device %}for
+          <strong>{{ ch.device }}</strong>{% endif %} and returned a verdict of
+          <strong style="color:{{ ch.badge_color }}"
+            >{{ ch.verdict or "unknown" }}</strong
+          >. {% if ch.risk_confirmed %} Risk confirmed:
+          <em>{{ ch.risk_confirmed }}</em>. {% endif %}
         </p>
 
         {% if ch.notes %}
@@ -200,185 +198,209 @@
           <span class="finding-label">Validation notes</span>
           <span>{{ ch.notes }}</span>
         </div>
-        {% endif %}
-
-        {% if ch.verdict in ("incorrect", "unverifiable") %}
-        <div class="chronicle-finding" style="border-left-color:#ef4444">
-          <span class="finding-label" style="color:#ef4444">Pipeline stopped</span>
-          <span>No approval gate was created — the fix was not validated as safe.</span>
+        {% endif %} {% if ch.verdict in ("incorrect", "unverifiable") %}
+        <div class="chronicle-finding" style="border-left-color: #ef4444">
+          <span class="finding-label" style="color: #ef4444"
+            >Pipeline stopped</span
+          >
+          <span
+            >No approval gate was created — the fix was not validated as
+            safe.</span
+          >
         </div>
-        {% endif %}
-      {% endif %}
-    </div>
+        {% endif %} {% endif %}
+      </div>
 
-    {# ── Approval Gate body ── #}
-    {% elif ch.type == "approval_gate" %}
-    <div class="chapter-body">
-
-      {# --- Awaiting human approval --- #}
-      {% if ch.awaiting_approval %}
+      {# ── Approval Gate body ── #} {% elif ch.type == "approval_gate" %}
+      <div class="chapter-body">
+        {# --- Awaiting human approval --- #} {% if ch.awaiting_approval %}
         <p class="chronicle-prose">
-          A human must review and approve this change before it can be applied to
-          <strong>{{ ch.device or "the device" }}</strong>.
-          {% if ch.do_not_auto_execute %}
-            <span class="pill" style="background:#f59e0b22; color:#f59e0b; border-color:#f59e0b55; font-size:0.72em">⚠️ Maintenance window — auto-execution suppressed</span>
+          A human must review and approve this change before it can be applied
+          to
+          <strong>{{ ch.device or "the device" }}</strong>. {% if
+          ch.do_not_auto_execute %}
+          <span
+            class="pill"
+            style="
+              background: #f59e0b22;
+              color: #f59e0b;
+              border-color: #f59e0b55;
+              font-size: 0.72em;
+            "
+            >⚠️ Maintenance window — auto-execution suppressed</span
+          >
           {% endif %}
         </p>
 
         {% if ch.commands %}
-        <div style="margin:10px 0 4px">
-          <span class="finding-label" style="color:#a855f7">Commands to apply on {{ ch.device }}</span>
+        <div style="margin: 10px 0 4px">
+          <span class="finding-label" style="color: #a855f7"
+            >Commands to apply on {{ ch.device }}</span
+          >
         </div>
-        <pre class="chronicle-commands" style="border-color:#a855f7; box-shadow: 0 0 0 1px #a855f733">{{ ch.commands }}</pre>
-        {% endif %}
-
-        {% if ch.validation_verdict %}
-        <div class="chronicle-finding" style="border-left-color:#a855f7; margin-bottom:8px">
-          <span class="finding-label" style="color:#a855f7">Chaos Agent verdict</span>
-          <span>{{ ch.validation_verdict }} (risk: {{ ch.risk_confirmed or "—" }})
-          {% if ch.chaos_notes %} — {{ ch.chaos_notes }}{% endif %}</span>
+        <pre
+          class="chronicle-commands"
+          style="border-color: #a855f7; box-shadow: 0 0 0 1px #a855f733"
+        >
+{{ ch.commands }}</pre
+        >
+        {% endif %} {% if ch.validation_verdict %}
+        <div
+          class="chronicle-finding"
+          style="border-left-color: #a855f7; margin-bottom: 8px"
+        >
+          <span class="finding-label" style="color: #a855f7"
+            >Ops Agent verdict</span
+          >
+          <span
+            >{{ ch.validation_verdict }} (risk: {{ ch.risk_confirmed or "—" }})
+            {% if ch.chaos_notes %} — {{ ch.chaos_notes }}{% endif %}</span
+          >
         </div>
-        {% endif %}
-
-        {# Inline approve / reject #}
-        <div class="flex gap-8 items-center flex-wrap" style="margin-top:12px">
-          <button class="btn btn-primary btn-sm"
-                  hx-post="/tasks/{{ ch.task_id }}/approve"
-                  hx-target="#chronicle-action-{{ ch.task_id }}"
-                  hx-swap="innerHTML">
+        {% endif %} {# Inline approve / reject #}
+        <div class="flex gap-8 items-center flex-wrap" style="margin-top: 12px">
+          <button
+            class="btn btn-primary btn-sm"
+            hx-post="/tasks/{{ ch.task_id }}/approve"
+            hx-target="#chronicle-action-{{ ch.task_id }}"
+            hx-swap="innerHTML"
+          >
             ✅ Approve
           </button>
-          <button class="btn btn-danger btn-sm"
-                  hx-post="/tasks/{{ ch.task_id }}/reject"
-                  hx-target="#chronicle-action-{{ ch.task_id }}"
-                  hx-swap="innerHTML">
+          <button
+            class="btn btn-danger btn-sm"
+            hx-post="/tasks/{{ ch.task_id }}/reject"
+            hx-target="#chronicle-action-{{ ch.task_id }}"
+            hx-swap="innerHTML"
+          >
             ❌ Reject
           </button>
-          <span id="chronicle-action-{{ ch.task_id }}" class="muted" style="font-size:0.82em"></span>
+          <span
+            id="chronicle-action-{{ ch.task_id }}"
+            class="muted"
+            style="font-size: 0.82em"
+          ></span>
         </div>
 
         {% if ch.config_diff %}
-        <details class="chronicle-details" style="margin-top:12px">
+        <details class="chronicle-details" style="margin-top: 12px">
           <summary>▶ Config diff (what will change)</summary>
-          <pre class="config-diff">{% for line in ch.config_diff.splitlines() %}{% if line.startswith('+') and not line.startswith('+++') %}<span class="diff-add">{{ line }}</span>
+          <pre
+            class="config-diff"
+          >{% for line in ch.config_diff.splitlines() %}{% if line.startswith('+') and not line.startswith('+++') %}<span class="diff-add">{{ line }}</span>
 {% elif line.startswith('-') and not line.startswith('---') %}<span class="diff-del">{{ line }}</span>
 {% elif line.startswith('@@') %}<span class="diff-hunk">{{ line }}</span>
 {% else %}{{ line }}
 {% endif %}{% endfor %}</pre>
         </details>
-        {% endif %}
+        {% endif %} {# --- Rejected --- #} {% elif ch.status == "rejected" %}
+        <p class="chronicle-prose">This change was rejected.</p>
 
-      {# --- Rejected --- #}
-      {% elif ch.status == "rejected" %}
-        <p class="chronicle-prose">
-          This change was rejected.
-        </p>
-
-      {# --- Approved + executed --- #}
-      {% else %}
-
-        {# Approval line #}
-        {% if ch.approved_by %}
+        {# --- Approved + executed --- #} {% else %} {# Approval line #} {% if
+        ch.approved_by %}
         <p class="chronicle-prose">
           Approved by <strong>{{ ch.approved_by }}</strong>
           {% if ch.approval_ts %}at {{ ch.approval_ts }}{% endif %}.
         </p>
-        {% endif %}
-
-        {# Execution result #}
-        {% if ch.exec_status %}
+        {% endif %} {# Execution result #} {% if ch.exec_status %}
         <p class="chronicle-prose">
           Configuration applied to <strong>{{ ch.device or "device" }}</strong>.
-          {% if ch.changes_applied %}
-            {{ ch.changes_applied }}.
-          {% endif %}
+          {% if ch.changes_applied %} {{ ch.changes_applied }}. {% endif %}
         </p>
-        {% endif %}
-
-        {# Config verification #}
-        {% if ch.config_applied is not none %}
-          {% if ch.config_applied == true %}
-          <div class="chronicle-finding" style="border-left-color:#22c55e">
-            <span class="finding-label" style="color:#22c55e">Config verified on device ✅</span>
-            <span>
-              {% for ln in ch.found_lines[:4] %}
-                <code style="color:#4ade80; font-size:0.82em">{{ ln }}</code>{% if not loop.last %},&nbsp;{% endif %}
-              {% endfor %}
-              {% if ch.found_lines | length > 4 %}and {{ ch.found_lines | length - 4 }} more{% endif %}
-              confirmed in running-config.
-            </span>
-          </div>
-          {% else %}
-          <div class="chronicle-finding" style="border-left-color:#ef4444">
-            <span class="finding-label" style="color:#ef4444">Config NOT confirmed on device ❌</span>
-            <span>
-              {% for ln in ch.missing_lines[:3] %}
-                <code style="color:#f87171; font-size:0.82em">{{ ln }}</code>{% if not loop.last %},&nbsp;{% endif %}
-              {% endfor %}
-              not found in running-config.
-            </span>
-          </div>
-          {% endif %}
-        {% endif %}
-
-        {# Alert resolution #}
-        {% if ch.alert_resolved is not none %}
-          {% if ch.alert_resolved == true %}
-          <div class="chronicle-finding" style="border-left-color:#22c55e">
-            <span class="finding-label" style="color:#22c55e">Alert cleared ✅</span>
-            <span>
-              {{ ch.alertname or "Alert" }} is no longer firing in Prometheus.
-              {% if ch.ttr_str %}Time to resolve: <strong>{{ ch.ttr_str }}</strong>.{% endif %}
-            </span>
-          </div>
-          {% else %}
-          <div class="chronicle-finding" style="border-left-color:#f59e0b">
-            <span class="finding-label" style="color:#f59e0b">Alert still firing ⚠️</span>
-            <span>{{ ch.alertname or "Alert" }} is still firing on {{ ch.device }}. Further investigation may be needed.</span>
-          </div>
-          {% endif %}
-        {% elif ch.exec_status == "success" %}
-        <div class="chronicle-finding" style="border-left-color:#6b7280">
-          <span class="finding-label">Alert check pending</span>
-          <span class="muted">Prometheus will be checked in ~{{ (300 // 60)|int }} minutes.</span>
+        {% endif %} {# Config verification #} {% if ch.config_applied is not
+        none %} {% if ch.config_applied == true %}
+        <div class="chronicle-finding" style="border-left-color: #22c55e">
+          <span class="finding-label" style="color: #22c55e"
+            >Config verified on device ✅</span
+          >
+          <span>
+            {% for ln in ch.found_lines[:4] %}
+            <code style="color: #4ade80; font-size: 0.82em">{{ ln }}</code>{% if
+            not loop.last %},&nbsp;{% endif %} {% endfor %} {% if ch.found_lines
+            | length > 4 %}and {{ ch.found_lines | length - 4 }} more{% endif %}
+            confirmed in running-config.
+          </span>
         </div>
-        {% endif %}
-
-        {# Commands block in collapsible #}
-        {% if ch.commands %}
-        <details class="chronicle-details" style="margin-top:8px">
+        {% else %}
+        <div class="chronicle-finding" style="border-left-color: #ef4444">
+          <span class="finding-label" style="color: #ef4444"
+            >Config NOT confirmed on device ❌</span
+          >
+          <span>
+            {% for ln in ch.missing_lines[:3] %}
+            <code style="color: #f87171; font-size: 0.82em">{{ ln }}</code>{% if
+            not loop.last %},&nbsp;{% endif %} {% endfor %} not found in
+            running-config.
+          </span>
+        </div>
+        {% endif %} {% endif %} {# Alert resolution #} {% if ch.alert_resolved
+        is not none %} {% if ch.alert_resolved == true %}
+        <div class="chronicle-finding" style="border-left-color: #22c55e">
+          <span class="finding-label" style="color: #22c55e"
+            >Alert cleared ✅</span
+          >
+          <span>
+            {{ ch.alertname or "Alert" }} is no longer firing in Prometheus. {%
+            if ch.ttr_str %}Time to resolve:
+            <strong>{{ ch.ttr_str }}</strong>.{% endif %}
+          </span>
+        </div>
+        {% else %}
+        <div class="chronicle-finding" style="border-left-color: #f59e0b">
+          <span class="finding-label" style="color: #f59e0b"
+            >Alert still firing ⚠️</span
+          >
+          <span
+            >{{ ch.alertname or "Alert" }} is still firing on {{ ch.device }}.
+            Further investigation may be needed.</span
+          >
+        </div>
+        {% endif %} {% elif ch.exec_status == "success" %}
+        <div class="chronicle-finding" style="border-left-color: #6b7280">
+          <span class="finding-label">Alert check pending</span>
+          <span class="muted"
+            >Prometheus will be checked in ~{{ (300 // 60)|int }} minutes.</span
+          >
+        </div>
+        {% endif %} {# Commands block in collapsible #} {% if ch.commands %}
+        <details class="chronicle-details" style="margin-top: 8px">
           <summary>▶ Commands applied</summary>
           <pre class="chronicle-commands">{{ ch.commands }}</pre>
         </details>
-        {% endif %}
-
-      {% endif %}{# end awaiting/rejected/executed branches #}
-
+        {% endif %} {% endif %}{# end awaiting/rejected/executed branches #}
+      </div>
+      {% endif %}{# end type branches #}
     </div>
-    {% endif %}{# end type branches #}
-
-  </div>{# end chronicle-chapter #}
-
-{% endfor %}{# end chapters loop #}
-
-{# ── In-progress tail ── #}
-{% if ov.status == "active" %}
-<div class="chronicle-gap">┄┄ in progress ┄┄</div>
-<div class="chronicle-chapter" style="border-left-color:#3b82f6; background:transparent">
-  <div class="chapter-header" style="opacity:0.55">
-    <div class="chronicle-dot" style="background:#3b82f6; animation: pulse 1.5s infinite"></div>
-    <span class="muted" style="font-size:0.82em">⟳ Pipeline running…</span>
+    {# end chronicle-chapter #} {% endfor %}{# end chapters loop #} {# ──
+    In-progress tail ── #} {% if ov.status == "active" %}
+    <div class="chronicle-gap">┄┄ in progress ┄┄</div>
+    <div
+      class="chronicle-chapter"
+      style="border-left-color: #3b82f6; background: transparent"
+    >
+      <div class="chapter-header" style="opacity: 0.55">
+        <div
+          class="chronicle-dot"
+          style="background: #3b82f6; animation: pulse 1.5s infinite"
+        ></div>
+        <span class="muted" style="font-size: 0.82em">⟳ Pipeline running…</span>
+      </div>
+    </div>
+    {% endif %}
   </div>
+  {# end chronicle #} {# ── Inline task detail flyout ── #}
+  <div
+    id="chronicle-task-detail"
+    style="
+      display: none;
+      margin-top: 16px;
+      padding: 14px;
+      background: var(--bg2);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    "
+  ></div>
+
+  {% endif %}{# end not chapters #}
 </div>
-{% endif %}
-
-</div>{# end chronicle #}
-
-{# ── Inline task detail flyout ── #}
-<div id="chronicle-task-detail"
-     style="display:none; margin-top:16px; padding:14px; background:var(--bg2);
-            border-radius:8px; border:1px solid var(--border)">
-</div>
-
-{% endif %}{# end not chapters #}
-</div>{# end outermost SSE wrapper #}
+{# end outermost SSE wrapper #}

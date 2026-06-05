@@ -63,13 +63,13 @@ All stages are tracked in the shared **TaskStore** (SQLite by default, PostgreSQ
 
 ### Task types
 
-| Type            | Owner         | Created by                   | Purpose                                                     |
-| --------------- | ------------- | ---------------------------- | ----------------------------------------------------------- |
+| Type            | Owner         | Created by                   | Purpose                                                               |
+| --------------- | ------------- | ---------------------------- | --------------------------------------------------------------------- |
 | `incident`      | `system`      | `system` (AlertPoller)       | Groups correlated alerts from the same device into one P1–P4 incident |
-| `rca`           | `ops_agent`   | `system` (AlertPoller)       | Root cause analysis of a firing alert                       |
-| `fix_proposal`  | `eng_agent`   | `ops_agent`                  | Specific remediation commands in check mode, with config diff |
-| `validation`    | `chaos_agent` | `eng_agent`                  | Blast-radius and correctness check of the fix               |
-| `approval_gate` | `human`       | `eng_agent` or `chaos_agent` | Human sign-off required before live execution               |
+| `rca`           | `ops_agent`   | `system` (AlertPoller)       | Root cause analysis of a firing alert                                 |
+| `fix_proposal`  | `eng_agent`   | `ops_agent`                  | Specific remediation commands in check mode, with config diff         |
+| `validation`    | `chaos_agent` | `eng_agent`                  | Blast-radius and correctness check of the fix                         |
+| `approval_gate` | `human`       | `eng_agent` or `chaos_agent` | Human sign-off required before live execution                         |
 
 ### Status lifecycle
 
@@ -102,12 +102,14 @@ The AlertPoller runs in a background thread inside the ops_agent container. Key 
 ### Priority-aware polling
 
 Two nested poll loops run simultaneously:
+
 - **Tight loop** (every 15 s): picks up `critical` and `high` priority tasks only
 - **Normal loop** (every 60 s, every 4th tick of the tight loop): processes all severities
 
 ### Maintenance window check
 
 If `MAINTENANCE_CHECK_ENABLED=true`, the poller calls Nautobot before creating an RCA task:
+
 1. Checks the device's status field (configurable via `MAINTENANCE_STATUSES`)
 2. Checks for a `maintenance` tag (configurable via `MAINTENANCE_TAG`)
 
@@ -120,6 +122,7 @@ Before creating a new RCA task, the poller checks for an active RCA for the same
 ### Incident grouping
 
 Every new alert creates or links to an **Incident** task:
+
 - If an open Incident for the same device exists within 30 minutes, the new RCA task is linked to it
 - Otherwise a new Incident is created (P1 for critical, P2 for warning, P3 for info)
 
@@ -212,6 +215,7 @@ REASON:     <one sentence explaining the fix>
 ### Confidence-based auto-approval
 
 If all three conditions are met, the approval gate is **auto-approved** without human intervention:
+
 - `RISK = low`
 - `CONFIDENCE = high`
 - The same `(device, fix_type)` combination has been successfully executed at least **2 previous times** without a follow-up alert
@@ -220,12 +224,12 @@ Auto-approved gates show `assigned_to = system` and an `auto_approved` event in 
 
 ### Routing decision
 
-| Condition                                                 | Next step                                            |
-| --------------------------------------------------------- | ---------------------------------------------------- |
-| `FIX_TYPE = no_action`                                    | Pipeline ends                                        |
-| `RISK = high` or `FIX_TYPE = escalate_human`              | Approval gate created immediately (skips validation) |
-| `RISK = low` or `medium` and `FIX_TYPE ≠ escalate_human`  | Validation task created for Chaos Agent              |
-| `do_not_auto_execute = true` (maintenance window)         | Auto-approval blocked; human gate always created     |
+| Condition                                                | Next step                                            |
+| -------------------------------------------------------- | ---------------------------------------------------- |
+| `FIX_TYPE = no_action`                                   | Pipeline ends                                        |
+| `RISK = high` or `FIX_TYPE = escalate_human`             | Approval gate created immediately (skips validation) |
+| `RISK = low` or `medium` and `FIX_TYPE ≠ escalate_human` | Validation task created for Chaos Agent              |
+| `do_not_auto_execute = true` (maintenance window)        | Auto-approval blocked; human gate always created     |
 
 ---
 
@@ -260,10 +264,10 @@ After completing, the Chaos Agent writes structured feedback to the parent `fix_
 
 ### Routing decision
 
-| Verdict                       | Next step                                      |
-| ----------------------------- | ---------------------------------------------- |
-| `correct` or `partial`        | Approval gate created — human review required  |
-| `incorrect` or `unverifiable` | Pipeline ends — no approval gate created       |
+| Verdict                       | Next step                                     |
+| ----------------------------- | --------------------------------------------- |
+| `correct` or `partial`        | Approval gate created — human review required |
+| `incorrect` or `unverifiable` | Pipeline ends — no approval gate created      |
 
 ---
 
@@ -277,16 +281,16 @@ After completing, the Chaos Agent writes structured feedback to the parent `fix_
 
 The approval gate contains everything a human needs to make an informed decision:
 
-| Field                | Description                                            |
-| -------------------- | ------------------------------------------------------ |
-| `device`             | Target device hostname                                 |
-| `commands`           | Exact configuration lines to be applied                |
-| `config_diff`        | Unified diff of current running-config vs proposed     |
-| `fix_type`           | Classification of the change                           |
-| `risk_confirmed`     | Risk level as assessed by the Chaos Agent              |
-| `validation_verdict` | Chaos Agent verdict (`correct` / `partial` / etc.)     |
-| `chaos_notes`        | One-sentence Chaos Agent validation summary            |
-| `rca`                | Full RCA context from the Ops Agent                    |
+| Field                | Description                                        |
+| -------------------- | -------------------------------------------------- |
+| `device`             | Target device hostname                             |
+| `commands`           | Exact configuration lines to be applied            |
+| `config_diff`        | Unified diff of current running-config vs proposed |
+| `fix_type`           | Classification of the change                       |
+| `risk_confirmed`     | Risk level as assessed by the Chaos Agent          |
+| `validation_verdict` | Chaos Agent verdict (`correct` / `partial` / etc.) |
+| `chaos_notes`        | One-sentence Chaos Agent validation summary        |
+| `rca`                | Full RCA context from the Ops Agent                |
 
 ### Approval webhook
 
@@ -310,12 +314,14 @@ If `LAB_VALIDATION_ENABLED=true`, the execution step applies the fix to the Cont
 After executing the approved fix, the runner performs two independent checks and stores their results in the `execution_complete` event:
 
 **Device config verification (immediate, non-LLM):**
+
 - Calls `run_show_commands(device, "show running-config")` directly (bypassing the LLM)
 - Checks whether each applied config line appears in the running-config output
 - Records `config_applied: true/false/null`, `found_lines`, and `missing_lines`
 - Null means the device was unreachable — execution is not retried on this basis
 
 **Alert resolution check (background, after `EXECUTION_VERIFY_DELAY` seconds):**
+
 - Queries Prometheus `/api/v1/alerts` for firing alerts
 - Matches by `(alertname, sysName)` — the labels Prometheus actually carries
 - Records `alert_resolved: true/false`, `ttr_seconds`, and `check_at` in an `execution_verified` event
@@ -369,16 +375,17 @@ The Chronicle auto-refreshes via SSE whenever the pipeline state changes.
 
 **Badge semantics per stage:**
 
-| Stage | Badge field | Values |
-| ----- | ----------- | ------ |
-| RCA | Confidence | High ✅ · Medium 🟡 · Low ⚠️ |
-| Fix Proposal | Risk | Low ✅ · Medium 🟡 · High 🔴 |
-| Validation | Verdict | Correct ✅ · Partial 🟡 · Incorrect ❌ · Unverifiable ❓ |
+| Stage         | Badge field       | Values                                                         |
+| ------------- | ----------------- | -------------------------------------------------------------- |
+| RCA           | Confidence        | High ✅ · Medium 🟡 · Low ⚠️                                   |
+| Fix Proposal  | Risk              | Low ✅ · Medium 🟡 · High 🔴                                   |
+| Validation    | Verdict           | Correct ✅ · Partial 🟡 · Incorrect ❌ · Unverifiable ❓       |
 | Approval Gate | Execution outcome | Resolved ✅ · Executed ✅ · Failed ❌ · Awaiting 🟣 · Rejected |
 
 ### Incidents tab
 
 The **🚨 Incidents** tab groups all pipelines that share the same root incident. Each incident shows:
+
 - Severity (P1–P4) and impact statement
 - All affected devices
 - Links to each individual alert's RCA → fix → gate pipeline
@@ -392,9 +399,9 @@ A filterable table of all tasks. Click any row to expand its full event timeline
 
 For `approval_gate` tasks, the Task Detail panel includes a **Post-execution Verification** section with two side-by-side cards:
 
-| Card | Shows |
-| ---- | ----- |
-| Config on device | ✅ all lines confirmed / ❌ missing lines listed / ⚠️ unavailable |
+| Card                | Shows                                                              |
+| ------------------- | ------------------------------------------------------------------ |
+| Config on device    | ✅ all lines confirmed / ❌ missing lines listed / ⚠️ unavailable  |
 | Alert in Prometheus | ✅ no longer firing / ⚠️ still firing on device / ⏳ check pending |
 
 ---
@@ -415,21 +422,22 @@ All pipeline behaviour is controlled by environment variables in `.env`:
 
 ### Task store backend
 
-| Variable       | Default | Description                                                    |
-| -------------- | ------- | -------------------------------------------------------------- |
-| `TASK_DB_URL`  | (empty) | SQLAlchemy URL. Empty = SQLite (default). Set to a PostgreSQL URL for production use |
-| `AGENT_DB_PASSWORD` | `netauto_agent_default` | Password for the `agent-postgres` container |
+| Variable            | Default                 | Description                                                                          |
+| ------------------- | ----------------------- | ------------------------------------------------------------------------------------ |
+| `TASK_DB_URL`       | (empty)                 | SQLAlchemy URL. Empty = SQLite (default). Set to a PostgreSQL URL for production use |
+| `AGENT_DB_PASSWORD` | `netauto_agent_default` | Password for the `agent-postgres` container                                          |
 
 Example PostgreSQL URL:
+
 ```
 TASK_DB_URL=postgresql+psycopg2://agent:password@agent-postgres:5432/agent_tasks
 ```
 
 ### RabbitMQ task bus (optional)
 
-| Variable        | Default | Description                                          |
-| --------------- | ------- | ---------------------------------------------------- |
-| `RABBITMQ_URL`  | (empty) | AMQP URL. Empty = polling-only mode (default lab)    |
+| Variable       | Default | Description                                       |
+| -------------- | ------- | ------------------------------------------------- |
+| `RABBITMQ_URL` | (empty) | AMQP URL. Empty = polling-only mode (default lab) |
 
 When set, `fix_proposal` and `validation` tasks are dispatched to agent consumers immediately on creation — eliminating polling latency. The polling loops remain as fallback.
 
@@ -439,42 +447,42 @@ RABBITMQ_URL=amqp://netauto:password@rabbitmq:5672/
 
 ### Approval webhook
 
-| Variable                  | Default | Description                                                |
-| ------------------------- | ------- | ---------------------------------------------------------- |
-| `APPROVAL_WEBHOOK_URL`    | (empty) | POST target when a task enters `awaiting_approval`         |
-| `APPROVAL_WEBHOOK_SECRET` | (empty) | HMAC-SHA256 signing secret; empty = unsigned               |
-| `AGENT_UI_URL`            | `http://localhost:7860` | Base URL used to construct approve/reject links |
+| Variable                  | Default                 | Description                                        |
+| ------------------------- | ----------------------- | -------------------------------------------------- |
+| `APPROVAL_WEBHOOK_URL`    | (empty)                 | POST target when a task enters `awaiting_approval` |
+| `APPROVAL_WEBHOOK_SECRET` | (empty)                 | HMAC-SHA256 signing secret; empty = unsigned       |
+| `AGENT_UI_URL`            | `http://localhost:7860` | Base URL used to construct approve/reject links    |
 
 ### Maintenance window
 
-| Variable                 | Default                         | Description                                            |
-| ------------------------ | ------------------------------- | ------------------------------------------------------ |
-| `MAINTENANCE_CHECK_ENABLED` | `false`                      | Query Nautobot before creating RCA tasks               |
-| `MAINTENANCE_STATUSES`   | `planned,staged,decommissioning` | Nautobot device status slugs that suppress auto-exec   |
-| `MAINTENANCE_TAG`        | `maintenance`                   | Nautobot tag that marks a device as in maintenance     |
+| Variable                    | Default                          | Description                                          |
+| --------------------------- | -------------------------------- | ---------------------------------------------------- |
+| `MAINTENANCE_CHECK_ENABLED` | `false`                          | Query Nautobot before creating RCA tasks             |
+| `MAINTENANCE_STATUSES`      | `planned,staged,decommissioning` | Nautobot device status slugs that suppress auto-exec |
+| `MAINTENANCE_TAG`           | `maintenance`                    | Nautobot tag that marks a device as in maintenance   |
 
 ### Lab validation
 
-| Variable                  | Default  | Description                                                        |
-| ------------------------- | -------- | ------------------------------------------------------------------ |
-| `LAB_VALIDATION_ENABLED`  | `false`  | Apply fix to Containerlab device before production execution       |
-| `LAB_DEVICE_PREFIX`       | `clab-`  | Prefix that maps `leaf1` → `clab-leaf1` in the lab topology       |
-| `LAB_VERIFY_DELAY`        | `30`     | Seconds to wait for lab alert to clear after applying the fix      |
+| Variable                 | Default | Description                                                   |
+| ------------------------ | ------- | ------------------------------------------------------------- |
+| `LAB_VALIDATION_ENABLED` | `false` | Apply fix to Containerlab device before production execution  |
+| `LAB_DEVICE_PREFIX`      | `clab-` | Prefix that maps `leaf1` → `clab-leaf1` in the lab topology   |
+| `LAB_VERIFY_DELAY`       | `30`    | Seconds to wait for lab alert to clear after applying the fix |
 
 ### Runbook library
 
-| Variable                  | Default       | Description                                             |
-| ------------------------- | ------------- | ------------------------------------------------------- |
-| `GITEA_TOKEN`             | (empty)       | API token for the Gitea runbooks repo (read access)     |
-| `GITEA_RUNBOOK_OWNER`     | `netauto`     | Gitea organisation or username                          |
-| `GITEA_RUNBOOK_REPO`      | `runbooks`    | Repository containing `{AlertName}.yaml` runbook files  |
-| `GITEA_RUNBOOK_BRANCH`    | `main`        | Branch to read from                                     |
+| Variable               | Default    | Description                                            |
+| ---------------------- | ---------- | ------------------------------------------------------ |
+| `GITEA_TOKEN`          | (empty)    | API token for the Gitea runbooks repo (read access)    |
+| `GITEA_RUNBOOK_OWNER`  | `netauto`  | Gitea organisation or username                         |
+| `GITEA_RUNBOOK_REPO`   | `runbooks` | Repository containing `{AlertName}.yaml` runbook files |
+| `GITEA_RUNBOOK_BRANCH` | `main`     | Branch to read from                                    |
 
 ### Execution verification
 
-| Variable                   | Default | Description                                                     |
-| -------------------------- | ------- | --------------------------------------------------------------- |
-| `EXECUTION_VERIFY_DELAY`   | `300`   | Seconds after execution before Prometheus alert check (5 min)   |
+| Variable                 | Default | Description                                                   |
+| ------------------------ | ------- | ------------------------------------------------------------- |
+| `EXECUTION_VERIFY_DELAY` | `300`   | Seconds after execution before Prometheus alert check (5 min) |
 
 ---
 
@@ -484,50 +492,50 @@ All pipeline state lives in three tables inside the task store (SQLite or Postgr
 
 ### `tasks`
 
-| Column                | Type    | Description                                                                          |
-| --------------------- | ------- | ------------------------------------------------------------------------------------ |
-| `id`                  | TEXT    | Short unique ID with type prefix (e.g. `rca-a1b2c3d4`)                              |
-| `parent_id`           | TEXT    | References the parent task (fix → rca, validation → fix, gate → validation or fix)  |
-| `incident_id`         | TEXT    | References the parent Incident grouping task                                         |
-| `alert_fingerprint`   | TEXT    | Links the entire pipeline chain                                                      |
-| `type`                | TEXT    | `incident` / `rca` / `fix_proposal` / `validation` / `approval_gate`                |
-| `status`              | TEXT    | See lifecycle diagram                                                                |
-| `priority`            | TEXT    | `critical` / `high` / `normal` / `low`                                              |
-| `created_by`          | TEXT    | `system`, `ops_agent`, `eng_agent`, `chaos_agent`                                   |
-| `assigned_to`         | TEXT    | Agent or `human` responsible for processing                                          |
-| `content`             | TEXT    | JSON input context passed to the processing agent                                    |
-| `result`              | TEXT    | JSON structured output after completion                                              |
-| `retry_count`         | INTEGER | Number of automatic retries attempted (max 2)                                        |
-| `maintenance_window`  | INTEGER | 1 if device was in a maintenance window when the task was created                    |
-| `do_not_auto_execute` | INTEGER | 1 to suppress automated execution at the approval gate                               |
+| Column                | Type    | Description                                                                        |
+| --------------------- | ------- | ---------------------------------------------------------------------------------- |
+| `id`                  | TEXT    | Short unique ID with type prefix (e.g. `rca-a1b2c3d4`)                             |
+| `parent_id`           | TEXT    | References the parent task (fix → rca, validation → fix, gate → validation or fix) |
+| `incident_id`         | TEXT    | References the parent Incident grouping task                                       |
+| `alert_fingerprint`   | TEXT    | Links the entire pipeline chain                                                    |
+| `type`                | TEXT    | `incident` / `rca` / `fix_proposal` / `validation` / `approval_gate`               |
+| `status`              | TEXT    | See lifecycle diagram                                                              |
+| `priority`            | TEXT    | `critical` / `high` / `normal` / `low`                                             |
+| `created_by`          | TEXT    | `system`, `ops_agent`, `eng_agent`, `chaos_agent`                                  |
+| `assigned_to`         | TEXT    | Agent or `human` responsible for processing                                        |
+| `content`             | TEXT    | JSON input context passed to the processing agent                                  |
+| `result`              | TEXT    | JSON structured output after completion                                            |
+| `retry_count`         | INTEGER | Number of automatic retries attempted (max 2)                                      |
+| `maintenance_window`  | INTEGER | 1 if device was in a maintenance window when the task was created                  |
+| `do_not_auto_execute` | INTEGER | 1 to suppress automated execution at the approval gate                             |
 
 ### `task_events`
 
 Append-only event log. Key event types:
 
-| Event type             | Stage             | Detail fields                                               |
-| ---------------------- | ----------------- | ----------------------------------------------------------- |
-| `created`              | all               | `assigned_to`, `priority`                                   |
-| `claimed`              | all               | —                                                           |
-| `started`              | all               | —                                                           |
-| `completed`            | all               | —                                                           |
-| `failed`               | all               | `error`                                                     |
-| `retry_scheduled`      | all               | `retry_count`                                               |
-| `alert_correlated`     | rca               | `alertname`, `fingerprint`, `severity`                      |
-| `approval_requested`   | approval_gate     | —                                                           |
-| `approved`             | approval_gate     | —                                                           |
-| `auto_approved`        | approval_gate     | `reason` (risk + confidence + prior executions)             |
-| `execution_started`    | approval_gate     | `device`, `commands`                                        |
-| `execution_suppressed` | approval_gate     | `reason` (maintenance window)                               |
-| `execution_aborted`    | approval_gate     | `reason` (lab validation failed)                            |
-| `lab_fix_applied`      | approval_gate     | `lab_device`, `commands`                                    |
-| `lab_validated`        | approval_gate     | `lab_device`, `alert_cleared`                               |
-| `lab_validation_failed`| approval_gate     | `reason`, `lab_device`                                      |
-| `execution_complete`   | approval_gate     | `status`, `device`, `changes_applied`, `config_applied`, `found_lines`, `missing_lines` |
-| `execution_verified`   | approval_gate     | `alert_resolved`, `ttr_seconds`, `alertname`, `device`, `check_at` |
-| `feedback_added`       | fix_proposal, rca | `verdict`, `confidence`                                     |
-| `task_linked`          | incident          | `linked_task_id`                                            |
-| `incident_resolved`    | incident          | `resolution`                                                |
+| Event type              | Stage             | Detail fields                                                                           |
+| ----------------------- | ----------------- | --------------------------------------------------------------------------------------- |
+| `created`               | all               | `assigned_to`, `priority`                                                               |
+| `claimed`               | all               | —                                                                                       |
+| `started`               | all               | —                                                                                       |
+| `completed`             | all               | —                                                                                       |
+| `failed`                | all               | `error`                                                                                 |
+| `retry_scheduled`       | all               | `retry_count`                                                                           |
+| `alert_correlated`      | rca               | `alertname`, `fingerprint`, `severity`                                                  |
+| `approval_requested`    | approval_gate     | —                                                                                       |
+| `approved`              | approval_gate     | —                                                                                       |
+| `auto_approved`         | approval_gate     | `reason` (risk + confidence + prior executions)                                         |
+| `execution_started`     | approval_gate     | `device`, `commands`                                                                    |
+| `execution_suppressed`  | approval_gate     | `reason` (maintenance window)                                                           |
+| `execution_aborted`     | approval_gate     | `reason` (lab validation failed)                                                        |
+| `lab_fix_applied`       | approval_gate     | `lab_device`, `commands`                                                                |
+| `lab_validated`         | approval_gate     | `lab_device`, `alert_cleared`                                                           |
+| `lab_validation_failed` | approval_gate     | `reason`, `lab_device`                                                                  |
+| `execution_complete`    | approval_gate     | `status`, `device`, `changes_applied`, `config_applied`, `found_lines`, `missing_lines` |
+| `execution_verified`    | approval_gate     | `alert_resolved`, `ttr_seconds`, `alertname`, `device`, `check_at`                      |
+| `feedback_added`        | fix_proposal, rca | `verdict`, `confidence`                                                                 |
+| `task_linked`           | incident          | `linked_task_id`                                                                        |
+| `incident_resolved`     | incident          | `resolution`                                                                            |
 
 ### `task_feedback`
 
@@ -537,16 +545,16 @@ Structured feedback written by the Chaos Agent: `verdict`, `confidence` (0.0–1
 
 ## Deduplication and Resilience
 
-| Mechanism              | Description                                                                   |
-| ---------------------- | ----------------------------------------------------------------------------- |
-| Fingerprint dedup      | `_seen` dict seeded from TaskStore on startup; survives container restarts    |
-| Prometheus validation  | Every candidate alert is checked against live `/api/v1/alerts` before acting |
-| Alert correlation      | Same device + 15-min window → append note rather than spawn parallel pipeline |
-| Maintenance suppression| `do_not_auto_execute` blocks automated gate execution for maintenance devices |
-| Task claim atomicity   | `UPDATE … WHERE status='pending'` rowcount check prevents double-processing   |
-| Pipeline retry         | Failed tasks auto-retry up to 2× after 120 s; failure fingerprints re-enter `_seen` |
-| Rate-limit retry       | HTTP 429 from OpenAI triggers one 70 s wait-and-retry                         |
-| Budget guard           | Token budget checked before claiming any task; task stays `pending` if exceeded |
+| Mechanism               | Description                                                                         |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| Fingerprint dedup       | `_seen` dict seeded from TaskStore on startup; survives container restarts          |
+| Prometheus validation   | Every candidate alert is checked against live `/api/v1/alerts` before acting        |
+| Alert correlation       | Same device + 15-min window → append note rather than spawn parallel pipeline       |
+| Maintenance suppression | `do_not_auto_execute` blocks automated gate execution for maintenance devices       |
+| Task claim atomicity    | `UPDATE … WHERE status='pending'` rowcount check prevents double-processing         |
+| Pipeline retry          | Failed tasks auto-retry up to 2× after 120 s; failure fingerprints re-enter `_seen` |
+| Rate-limit retry        | HTTP 429 from OpenAI triggers one 70 s wait-and-retry                               |
+| Budget guard            | Token budget checked before claiming any task; task stays `pending` if exceeded     |
 
 ---
 

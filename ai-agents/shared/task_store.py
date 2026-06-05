@@ -61,53 +61,73 @@ def _make_engine(url: str) -> Engine:
 
 # ── Schema ─────────────────────────────────────────────────────────────────────
 
-_DDL_COMMON = [
-    """
-    CREATE TABLE IF NOT EXISTS tasks (
-        id                  TEXT PRIMARY KEY,
-        parent_id           TEXT REFERENCES tasks(id),
-        incident_id         TEXT REFERENCES tasks(id),
-        alert_fingerprint   TEXT,
-        type                TEXT NOT NULL,
-        status              TEXT NOT NULL DEFAULT 'pending',
-        priority            TEXT NOT NULL DEFAULT 'normal',
-        created_by          TEXT NOT NULL,
-        assigned_to         TEXT,
-        title               TEXT,
-        content             TEXT NOT NULL,
-        result              TEXT,
-        created_at          TEXT NOT NULL,
-        claimed_at          TEXT,
-        completed_at        TEXT,
-        retry_count         INTEGER NOT NULL DEFAULT 0,
-        maintenance_window  INTEGER NOT NULL DEFAULT 0,
-        do_not_auto_execute INTEGER NOT NULL DEFAULT 0
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS task_events (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id     TEXT NOT NULL REFERENCES tasks(id),
-        timestamp   TEXT NOT NULL,
-        agent       TEXT NOT NULL,
-        event_type  TEXT NOT NULL,
-        detail      TEXT
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS task_feedback (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id     TEXT NOT NULL REFERENCES tasks(id),
-        from_agent  TEXT NOT NULL,
-        verdict     TEXT NOT NULL,
-        confidence  REAL,
-        notes       TEXT,
-        created_at  TEXT NOT NULL
-    )
-    """,
+def _build_ddl(dialect: str) -> list[str]:
+    """Return CREATE TABLE statements appropriate for the given SQL dialect."""
+    # SQLite uses INTEGER PRIMARY KEY AUTOINCREMENT; PostgreSQL uses SERIAL.
+    serial = "SERIAL PRIMARY KEY" if dialect == "postgresql" else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    return [
+        f"""
+        CREATE TABLE IF NOT EXISTS token_usage (
+            id                    {serial},
+            timestamp             TEXT    NOT NULL,
+            agent                 TEXT    NOT NULL,
+            session_id            TEXT    NOT NULL,
+            task_id               TEXT,
+            prompt_tokens         INTEGER NOT NULL,
+            completion_tokens     INTEGER NOT NULL,
+            model                 TEXT    NOT NULL,
+            estimated_cost_usd    REAL    NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_token_usage_agent_ts ON token_usage (agent, timestamp)",
+        """
+        CREATE TABLE IF NOT EXISTS tasks (
+            id                  TEXT PRIMARY KEY,
+            tenant_id           TEXT NOT NULL DEFAULT 'default',
+            parent_id           TEXT REFERENCES tasks(id),
+            incident_id         TEXT REFERENCES tasks(id),
+            alert_fingerprint   TEXT,
+            type                TEXT NOT NULL,
+            status              TEXT NOT NULL DEFAULT 'pending',
+            priority            TEXT NOT NULL DEFAULT 'normal',
+            created_by          TEXT NOT NULL,
+            assigned_to         TEXT,
+            title               TEXT,
+            content             TEXT NOT NULL,
+            result              TEXT,
+            created_at          TEXT NOT NULL,
+            claimed_at          TEXT,
+            completed_at        TEXT,
+            retry_count         INTEGER NOT NULL DEFAULT 0,
+            maintenance_window  INTEGER NOT NULL DEFAULT 0,
+            do_not_auto_execute INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS task_events (
+            id          {serial},
+            task_id     TEXT NOT NULL REFERENCES tasks(id),
+            timestamp   TEXT NOT NULL,
+            agent       TEXT NOT NULL,
+            event_type  TEXT NOT NULL,
+            detail      TEXT
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS task_feedback (
+            id          {serial},
+            task_id     TEXT NOT NULL REFERENCES tasks(id),
+            from_agent  TEXT NOT NULL,
+            verdict     TEXT NOT NULL,
+            confidence  REAL,
+            notes       TEXT,
+            created_at  TEXT NOT NULL
+        )
+        """,
     "CREATE INDEX IF NOT EXISTS idx_tasks_assigned  ON tasks(assigned_to, status)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_type      ON tasks(type, status)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_alert     ON tasks(alert_fingerprint)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_tenant    ON tasks(tenant_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_task_events_tid ON task_events(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_tid    ON task_feedback(task_id)",
 ]
@@ -118,6 +138,7 @@ _MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN maintenance_window INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN do_not_auto_execute INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN incident_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'",
 ]
 
 _VALID_STATUSES = frozenset({
@@ -181,14 +202,20 @@ class TaskStore:
             yield conn
 
     def _init_schema(self) -> None:
+        ddl = _build_ddl(self._dialect)
         with self._connect() as conn:
-            for stmt in _DDL_COMMON:
+            for stmt in ddl:
                 conn.execute(text(stmt))
-            for migration in _MIGRATIONS:
-                try:
+        # Each migration runs in its own transaction.  In PostgreSQL a failed
+        # statement (e.g. "column already exists") aborts the current
+        # transaction, so mixing migrations with the DDL block would cause
+        # PostgreSQL to roll back the freshly created tables on commit.
+        for migration in _MIGRATIONS:
+            try:
+                with self._connect() as conn:
                     conn.execute(text(migration))
-                except Exception:
-                    pass  # column already exists
+            except Exception:
+                pass  # column already exists — idempotent
 
     def _jex(self, column: str, path: str) -> str:
         """Return dialect-specific JSON extraction SQL for a TEXT column."""
@@ -218,6 +245,7 @@ class TaskStore:
         maintenance_window: bool = False,
         do_not_auto_execute: bool = False,
         incident_id: str | None = None,
+        tenant_id: str = "default",
     ) -> dict:
         if type not in _VALID_TYPES:
             raise ValueError(f"Invalid task type {type!r}. Valid: {_VALID_TYPES}")
@@ -230,6 +258,7 @@ class TaskStore:
 
         row = {
             "id":                  task_id,
+            "tenant_id":           tenant_id,
             "parent_id":           parent_id,
             "incident_id":         incident_id,
             "alert_fingerprint":   alert_fingerprint,
@@ -253,12 +282,12 @@ class TaskStore:
             conn.execute(
                 text("""
                     INSERT INTO tasks (
-                        id, parent_id, incident_id, alert_fingerprint, type, status, priority,
+                        id, tenant_id, parent_id, incident_id, alert_fingerprint, type, status, priority,
                         created_by, assigned_to, title, content, result,
                         created_at, claimed_at, completed_at,
                         retry_count, maintenance_window, do_not_auto_execute
                     ) VALUES (
-                        :id, :parent_id, :incident_id, :alert_fingerprint, :type, :status, :priority,
+                        :id, :tenant_id, :parent_id, :incident_id, :alert_fingerprint, :type, :status, :priority,
                         :created_by, :assigned_to, :title, :content, :result,
                         :created_at, :claimed_at, :completed_at,
                         :retry_count, :maintenance_window, :do_not_auto_execute
@@ -352,6 +381,13 @@ class TaskStore:
                 },
             )
 
+    def update_task_content(self, task_id: str, content_dict: dict) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                text("UPDATE tasks SET content=:content WHERE id=:id"),
+                {"content": json.dumps(content_dict), "id": task_id},
+            )
+
     def request_approval(self, task_id: str, agent: str) -> None:
         ts = _now()
         with self._lock, self._connect() as conn:
@@ -364,6 +400,18 @@ class TaskStore:
                      "VALUES (:task_id,:ts,:agent,:event_type,NULL)"),
                 {"task_id": task_id, "ts": ts, "agent": agent,
                  "event_type": "approval_requested"},
+            )
+        # Dispatch notifications outside the lock so a slow webhook never
+        # blocks other writers. Import lazily to avoid circular imports.
+        try:
+            task = self.get_task(task_id)
+            if task:
+                from shared.notifications import notify_approval_required
+                notify_approval_required(task)
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "TaskStore: notification failed for task=%s: %s", task_id, exc
             )
 
     def approve_task(self, task_id: str, approved_by: str) -> None:
@@ -507,10 +555,14 @@ class TaskStore:
         alert_fingerprint: str | None = None,
         limit: int = 100,
         priority_filter: set[str] | None = None,
+        tenant_id: str | None = None,
     ) -> list[dict]:
         clauses: list[str] = []
         params:  dict[str, Any] = {}
 
+        if tenant_id:
+            clauses.append("tenant_id = :tenant_id")
+            params["tenant_id"] = tenant_id
         if assigned_to:
             clauses.append("assigned_to = :assigned_to")
             params["assigned_to"] = assigned_to
@@ -876,6 +928,23 @@ class TaskStore:
                 t["pipeline"] = self.list_tasks(alert_fingerprint=fp, limit=20)
             result.append(t)
         return result
+
+    def get_open_incident_for_fingerprint(self, fingerprint: str) -> dict | None:
+        """Return an open incident task whose primary alert_fingerprint matches."""
+        if not fingerprint:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT * FROM tasks
+                    WHERE type = 'incident'
+                      AND alert_fingerprint = :fp
+                      AND status NOT IN ('complete', 'rejected')
+                    ORDER BY created_at DESC LIMIT 1
+                """),
+                {"fp": fingerprint},
+            ).fetchone()
+        return _row_to_dict(row) if row else None
 
     def close_incident(self, incident_id: str, resolution: str = "") -> None:
         """Mark an incident as resolved."""

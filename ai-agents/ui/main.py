@@ -26,24 +26,19 @@ logger = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.activity_store import ActivityStore
+from shared.config import settings
 from shared.task_store import TaskStore
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-OPS_AGENT_URL   = os.getenv("OPS_AGENT_URL",   "http://ai-ops-agent:8000")
-ENG_AGENT_URL   = os.getenv("ENG_AGENT_URL",   "http://ai-eng-agent:8001")
-CHAOS_AGENT_URL = os.getenv("CHAOS_AGENT_URL", "http://ai-chaos-agent:8002")
+OPS_AGENT_URL = os.getenv("OPS_AGENT_URL", "http://ai-agent:8000")
 
 AGENT_URLS = {
-    "ops":         OPS_AGENT_URL,
-    "engineering": ENG_AGENT_URL,
-    "chaos":       CHAOS_AGENT_URL,
+    "ops": OPS_AGENT_URL,
 }
 
 AGENT_LABELS = {
-    "ops":         ("🚨 Ops Agent",        "#3b82f6"),
-    "engineering": ("🔧 Engineering Agent", "#10b981"),
-    "chaos":       ("🔥 Chaos Agent",       "#f97316"),
+    "ops": ("Ops Agent", "#6366f1"),
 }
 
 AGENT_QUICK_PROMPTS = {
@@ -62,38 +57,17 @@ AGENT_QUICK_PROMPTS = {
         "Check for OSPF adjacency issues across all devices",
         "What is the average latency between spine1 and leaf2?",
         "Summarize all critical and warning events from the last 24 hours",
-    ],
-    "engineering": [
         "Design BGP configuration for a new leaf router with AS 65104",
-        "Show me all devices with their IP addresses",
         "What IP addresses are available in 10.10.0.0/16?",
         "Generate an Ansible playbook to configure VLANs 100-110 on all leaf switches",
-        "Create documentation for the spine-leaf OSPF design",
         "Review this EOS config snippet for security issues",
         "What VLANs are currently configured on leaf1?",
-        "Generate interface description standards for all uplinks in the lab",
-        "Compare spine1's running config to its intended state in Nautobot",
-        "Show all prefixes in the 192.168.0.0/16 supernet and their utilization",
-        "Create a change request template for adding a new leaf router",
         "Validate the IP addressing scheme across all devices for inconsistencies",
-        "Generate a topology description for the current spine-leaf design",
-        "What interfaces on leaf2 are currently unpatched or unused?",
-    ],
-    "chaos": [
         "Propose a safe chaos test for BGP flap detection in this lab",
         "Simulate a leaf uplink failure on leaf1 in check mode",
         "What is the expected blast radius if I bounce Ethernet1 on spine1?",
-        "Create a rollback-first chaos runbook for testing alert correlation",
-        "Design a 15-minute game day with one controlled failure and validation steps",
         "Shut down Ethernet1 on leaf2 in check mode and show me what alerts would fire",
         "Run a connectivity validation test across all leaf-spine links",
-        "What would happen if spine2 went completely offline? Assess redundancy.",
-        "Design a chaos test for validating OSPF reconvergence time after a link failure",
-        "Generate a pre-chaos checklist for a scheduled game day",
-        "Estimate recovery time for a simultaneous dual-uplink failure on leaf3",
-        "Create a post-chaos incident report template for today's test session",
-        "Test BGP route withdrawal and recovery on spine1 in check mode",
-        "What monitoring gaps might chaos tests expose in the current alerting setup?",
     ],
 }
 
@@ -101,6 +75,7 @@ _ACTIVITY_DB         = os.environ.get("ACTIVITY_DB_PATH", "./activity.db")
 APPROVAL_WEBHOOK_URL = os.getenv("APPROVAL_WEBHOOK_URL", "")
 APPROVAL_WEBHOOK_SECRET = os.getenv("APPROVAL_WEBHOOK_SECRET", "")
 AGENT_UI_URL         = os.getenv("AGENT_UI_URL", "http://localhost:7860")
+AGENT_API_KEY        = os.getenv("AGENT_API_KEY", "")
 
 # Shared persistent HTTP client — initialised in lifespan, reused across all requests.
 _http_client: httpx.AsyncClient | None = None
@@ -331,10 +306,7 @@ PRIORITY_COLORS = {
 }
 
 TYPE_ICONS = {
-    "rca":           "🔍",
-    "fix_proposal":  "🔧",
-    "validation":    "✅",
-    "approval_gate": "🔐",
+    "rca": "🔍",
 }
 
 # ── Approval webhook ──────────────────────────────────────────────────────────
@@ -427,7 +399,8 @@ TMPL_DIR   = os.path.join(BASE_DIR, "templates")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _http_client
-    _http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0))
+    headers = {"X-API-Key": AGENT_API_KEY} if AGENT_API_KEY else {}
+    _http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0), headers=headers)
     asyncio.create_task(_webhook_poller())
     yield
     await _http_client.aclose()
@@ -722,37 +695,194 @@ def _pipeline_chronicle_context(fp: str) -> dict:
     if not fp:
         return {"fp": fp, "chapters": [], "overall": {}}
 
-    all_tasks = task_store.list_tasks(alert_fingerprint=fp, limit=50)
-    by_type: dict[str, list] = {"rca": [], "fix_proposal": [], "validation": [], "approval_gate": []}
-    for t in all_tasks:
-        if t.get("type") in by_type:
-            by_type[t["type"]].append(t)
-    for tp in by_type:
-        by_type[tp].sort(key=lambda t: t.get("created_at", ""))
+    tasks = task_store.list_tasks(alert_fingerprint=fp, type="rca", limit=1)
+    if not tasks:
+        return {"fp": fp, "chapters": [], "overall": {}}
+
+    task = task_store.get_task(tasks[0]["id"])
+    if not task:
+        return {"fp": fp, "chapters": [], "overall": {}}
+
+    events = task.get("events") or []
+    try:
+        content = json.loads(task.get("content") or "{}")
+    except Exception:
+        content = {}
+
+    # Index events by type for quick lookup; keep last occurrence of each
+    event_map: dict[str, dict] = {}
+    for e in events:
+        event_map[e.get("event_type", "")] = e
+
+    def _event_detail(et: str) -> dict:
+        e = event_map.get(et, {})
+        try:
+            return json.loads(e.get("detail") or "{}")
+        except Exception:
+            return {}
 
     chapters: list[dict] = []
-    prev_done: str | None = None
-    for stage in ("rca", "fix_proposal", "validation", "approval_gate"):
-        for task in by_type[stage]:
-            ch = _build_chapter(task, prev_done)
-            chapters.append(ch)
-            if task.get("completed_at"):
-                prev_done = task["completed_at"]
+    created_at = task.get("created_at", "")
+    status = task.get("status", "pending")
+
+    # ── RCA chapter ──────────────────────────────────────────────────────────
+    rca_event = event_map.get("rca_complete")
+    rca_d = _event_detail("rca_complete")
+    # Fall back to task result if event not yet written
+    if not rca_d:
+        try:
+            rca_d = json.loads(task.get("result") or "{}")
+        except Exception:
+            rca_d = {}
+
+    if rca_d or status in ("running", "claimed", "pending"):
+        conf = rca_d.get("confidence", "")
+        bt, bc, bi = _confidence_badge(conf)
+        rca_ts = _ts_short(rca_event.get("timestamp") if rca_event else created_at)
+        chapters.append({
+            "type":          "rca",
+            "task_id":       task["id"],
+            "status":        "complete" if rca_d.get("diagnosis") else status,
+            "timestamp":     rca_ts,
+            "gap_str":       "",
+            "gap_seconds":   0,
+            "label":         "ROOT CAUSE IDENTIFIED" if rca_d.get("diagnosis") else
+                             ("INVESTIGATING…" if status in ("running", "claimed") else "INVESTIGATION PENDING"),
+            "badge_text":    bt, "badge_color": bc, "badge_icon": bi,
+            "alertname":     content.get("alertname", ""),
+            "severity":      content.get("severity", ""),
+            "device":        content.get("device") or rca_d.get("affected", ""),
+            "instance":      content.get("instance", ""),
+            "summary":       content.get("summary", ""),
+            "diagnosis":     rca_d.get("diagnosis", ""),
+            "confidence":    conf,
+            "action":        rca_d.get("action", ""),
+            "tool_calls":    rca_d.get("tool_calls", 0),
+            "full_response": _truncate(rca_d.get("response", ""), 1800),
+        })
+
+    # ── Fix Proposal chapter ─────────────────────────────────────────────────
+    fix_event = event_map.get("fix_proposal_complete")
+    fix_d = _event_detail("fix_proposal_complete")
+    if fix_d:
+        commands = fix_d.get("commands", "")
+        bt, bc, bi = _risk_badge(fix_d.get("risk", ""))
+        rca_done = rca_event.get("timestamp") if rca_event else None
+        fix_ts = _ts_short(fix_event.get("timestamp") if fix_event else None)
+        gap_s = _seconds_between(rca_done, fix_event.get("timestamp") if fix_event else None)
+        chapters.append({
+            "type":          "fix_proposal",
+            "task_id":       task["id"],
+            "status":        "complete",
+            "timestamp":     fix_ts,
+            "gap_str":       _fmt_gap(gap_s),
+            "gap_seconds":   gap_s,
+            "label":         "FIX PROPOSED",
+            "badge_text":    bt, "badge_color": bc, "badge_icon": bi,
+            "fix_type":      fix_d.get("fix_type", ""),
+            "device":        fix_d.get("device", ""),
+            "commands":      commands if commands not in ("none", "", None) else "",
+            "risk":          fix_d.get("risk", ""),
+            "confidence":    fix_d.get("confidence", ""),
+            "reason":        fix_d.get("reason", ""),
+            "config_diff":   fix_d.get("config_diff", ""),
+            "tool_calls":    fix_d.get("tool_calls", 0),
+            "full_response": _truncate(fix_d.get("full_response", ""), 1800),
+        })
+
+    # ── Validation chapter ───────────────────────────────────────────────────
+    val_event = event_map.get("validation_complete")
+    val_d = _event_detail("validation_complete")
+    if val_d:
+        verdict = val_d.get("verdict", "")
+        bt, bc, bi = _verdict_badge(verdict)
+        fix_done = fix_event.get("timestamp") if fix_event else None
+        val_ts = _ts_short(val_event.get("timestamp") if val_event else None)
+        gap_s = _seconds_between(fix_done, val_event.get("timestamp") if val_event else None)
+        chapters.append({
+            "type":           "validation",
+            "task_id":        task["id"],
+            "status":         "complete",
+            "timestamp":      val_ts,
+            "gap_str":        _fmt_gap(gap_s),
+            "gap_seconds":    gap_s,
+            "label":          "VALIDATED",
+            "badge_text":     bt, "badge_color": bc, "badge_icon": bi,
+            "verdict":        verdict,
+            "confidence":     val_d.get("confidence", ""),
+            "risk_confirmed": val_d.get("risk_confirmed", ""),
+            "notes":          val_d.get("notes", ""),
+            "tool_calls":     val_d.get("tool_calls", 0),
+            "device":         content.get("fix_proposal", {}).get("device", ""),
+        })
+
+    # ── Approval Gate chapter ────────────────────────────────────────────────
+    if status in ("awaiting_approval", "complete", "rejected") and (
+        content.get("fix_proposal") or content.get("escalation_reason")
+    ):
+        fix = content.get("fix_proposal", {})
+        device = fix.get("device") or content.get("device", "")
+        commands = fix.get("commands") or content.get("commands", "")
+        ev = _extract_gate_events(task)
+        ttr_str = _fmt_gap(ev["ttr_seconds"])
+
+        awaiting = (status == "awaiting_approval")
+        es = ev["exec_status"]
+        ar = ev["alert_resolved"]
+
+        val_done = val_event.get("timestamp") if val_event else (
+            fix_event.get("timestamp") if fix_event else None)
+        gap_s = _seconds_between(val_done, task.get("completed_at") or task.get("created_at"))
+
+        if awaiting:
+            label, bt, bc, bi = "AWAITING APPROVAL",  "Requires action", "#a855f7", "🟣"
+        elif status == "rejected":
+            label, bt, bc, bi = "REJECTED",           "Rejected",        "#9ca3af", "✗"
+        elif es == "success" and ar is True:
+            label = "RESOLVED"
+            bt, bc, bi = (f"TTR {ttr_str}" if ttr_str else "Resolved"), "#22c55e", "✅"
+        elif es == "success":
+            label, bt, bc, bi = "EXECUTED",           "Success",         "#22c55e", "✅"
+        elif es == "failed":
+            label, bt, bc, bi = "EXECUTION FAILED",   "Failed",          "#ef4444", "❌"
+        else:
+            label, bt, bc, bi = "APPROVAL GATE",      "Pending",         "#6b7280", "⏳"
+
+        chapters.append({
+            "type":               "approval_gate",
+            "task_id":            task["id"],
+            "status":             status,
+            "timestamp":          _ts_short(task.get("completed_at") or task.get("created_at")),
+            "gap_str":            _fmt_gap(gap_s),
+            "gap_seconds":        gap_s,
+            "label":              label,
+            "badge_text":         bt, "badge_color": bc, "badge_icon": bi,
+            "device":             device,
+            "commands":           commands if commands not in ("none", "", None) else "",
+            "fix_type":           fix.get("fix_type", ""),
+            "validation_verdict": content.get("validation_verdict", ""),
+            "risk_confirmed":     content.get("risk_confirmed", ""),
+            "chaos_notes":        content.get("chaos_notes", ""),
+            "awaiting_approval":  awaiting,
+            "do_not_auto_execute": bool(content.get("do_not_auto_execute")),
+            "config_diff":        content.get("config_diff") or fix.get("config_diff", ""),
+            **ev,
+            "ttr_str": ttr_str,
+        })
 
     # Overall pipeline status
-    statuses = {c["type"]: c["status"] for c in chapters}
-    if any(s == "awaiting_approval" for s in statuses.values()):
+    statuses = [c["status"] for c in chapters]
+    if status == "awaiting_approval":
         o_status, o_label, o_color = "awaiting_approval", "Awaiting Approval", "#a855f7"
-    elif any(s == "failed" for s in statuses.values()):
+    elif status == "failed" or "failed" in statuses:
         o_status, o_label, o_color = "failed", "Pipeline Failed", "#ef4444"
-    elif any(s in ("pending", "claimed", "running") for s in statuses.values()):
+    elif status in ("running", "claimed", "pending"):
         o_status, o_label, o_color = "active", "In Progress", "#3b82f6"
-    elif chapters and all(s == "complete" for s in statuses.values()):
+    elif status == "complete":
         o_status, o_label, o_color = "complete", "Complete", "#22c55e"
     else:
         o_status, o_label, o_color = "pending", "Starting…", "#6b7280"
 
-    # Pull top-level alert info from the first RCA chapter
     first = next((c for c in chapters if c["type"] == "rca"), {})
     gate  = next((c for c in chapters if c["type"] == "approval_gate"), {})
 
@@ -760,30 +890,17 @@ def _pipeline_chronicle_context(fp: str) -> dict:
         "fp": fp,
         "chapters": chapters,
         "overall": {
-            "status":        o_status,
-            "label":         o_label,
-            "color":         o_color,
-            "alertname":     first.get("alertname", ""),
-            "device":        first.get("device", ""),
-            "severity":      first.get("severity", ""),
+            "status":         o_status,
+            "label":          o_label,
+            "color":          o_color,
+            "alertname":      first.get("alertname", ""),
+            "device":         first.get("device", ""),
+            "severity":       first.get("severity", ""),
             "alert_resolved": gate.get("alert_resolved"),
-            "ttr_str":       gate.get("ttr_str", ""),
+            "ttr_str":        gate.get("ttr_str", ""),
         },
     }
 
-
-def _get_pipeline_tasks(fp: str) -> dict[str, list[dict]]:
-    """Return ALL tasks for every stage belonging to this alert fingerprint."""
-    stages = ["rca", "fix_proposal", "validation", "approval_gate"]
-    by_type: dict[str, list[dict]] = {s: [] for s in stages}
-    if not fp:
-        return by_type
-    tasks = task_store.list_tasks(alert_fingerprint=fp, limit=200)
-    for t in tasks:
-        tp = t["type"]
-        if tp in by_type:
-            by_type[tp].append(t)
-    return by_type
 
 
 def _incident_list_context(open_only: bool = True) -> dict:
@@ -926,12 +1043,16 @@ def _task_detail_context(task_id: str) -> dict:
             "notes":      f.get("notes", ""),
         })
 
-    # For approval_gate tasks, extract diff, resolution history, and
-    # post-execution verification summary (config check + alert check).
+    # For rca tasks in approval/execution state, extract diff, resolution history,
+    # and post-execution verification summary (config check + alert check).
     resolution_history: list[dict] = []
     config_diff: str = ""
     verification: dict = {}   # populated from execution_complete + execution_verified events
-    if task.get("type") == "approval_gate":
+    _needs_approval_ctx = (
+        task.get("type") == "rca"
+        and task.get("status") in ("awaiting_approval", "complete", "rejected")
+    ) or task.get("type") == "approval_gate"
+    if _needs_approval_ctx:
         try:
             content_obj = json.loads(task.get("content") or "{}")
             device = (content_obj.get("device")
@@ -971,6 +1092,38 @@ def _task_detail_context(task_id: str) -> dict:
                 verification["verify_device"]     = d.get("device", "")
                 verification["check_at"]          = d.get("check_at", "")
 
+    # Build analysis summary for rca tasks in approval/execution state so
+    # the reviewer sees what each stage concluded before deciding to approve.
+    analysis_summary: dict = {}
+    if _needs_approval_ctx:
+        try:
+            c = json.loads(task.get("content") or "{}")
+            rca  = c.get("rca", {})
+            fix  = c.get("fix_proposal", {})
+            analysis_summary = {
+                "alertname":         c.get("alertname", ""),
+                "escalation_reason": c.get("escalation_reason", ""),
+                # RCA
+                "diagnosis":         rca.get("diagnosis", ""),
+                "rca_confidence":    rca.get("confidence", ""),
+                "rca_action":        rca.get("recommended_action", ""),
+                # Fix
+                "fix_type":          fix.get("fix_type", ""),
+                "fix_device":        fix.get("device", c.get("device", "")),
+                "fix_commands":      fix.get("commands", ""),
+                "fix_risk":          fix.get("risk", ""),
+                "fix_confidence":    fix.get("confidence", ""),
+                "fix_reason":        fix.get("reason", ""),
+                # Validation
+                "validation_verdict": c.get("validation_verdict", ""),
+                "risk_confirmed":     c.get("risk_confirmed", ""),
+                "chaos_notes":        c.get("chaos_notes", ""),
+                # Gate metadata
+                "gate_reason":       c.get("reason", ""),
+            }
+        except Exception:
+            pass
+
     return {
         "task":               task,
         "task_id":            task_id,
@@ -985,6 +1138,8 @@ def _task_detail_context(task_id: str) -> dict:
         "resolution_history": resolution_history,
         "config_diff":        config_diff,
         "verification":       verification,
+        "analysis_summary":   analysis_summary,
+        "verify_delay_min":   max(1, settings.execution_verify_delay // 60),
     }
 
 
@@ -1052,7 +1207,7 @@ async def partial_pending_approvals(request: Request):
 
 @app.get("/partials/status-bar", response_class=HTMLResponse)
 async def partial_status_bar(request: Request):
-    agents = [("🚨 Ops", OPS_AGENT_URL), ("🔧 Engineering", ENG_AGENT_URL), ("🔥 Chaos", CHAOS_AGENT_URL)]
+    agents = [("AI Agent", OPS_AGENT_URL)]
     badges = await asyncio.gather(*[
         _fetch_agent_health(_http_client, name, url) for name, url in agents
     ])
@@ -1062,9 +1217,7 @@ async def partial_status_bar(request: Request):
 @app.get("/partials/agent-status", response_class=HTMLResponse)
 async def partial_agent_status(request: Request):
     agents_cfg = [
-        ("🚨", "Ops Agent",    OPS_AGENT_URL,   "#3b82f6"),
-        ("🔧", "Engineering",  ENG_AGENT_URL,   "#10b981"),
-        ("🔥", "Chaos Agent",  CHAOS_AGENT_URL, "#f97316"),
+        ("⚡", "AI Agent", OPS_AGENT_URL, "#6366f1"),
     ]
     n = len(agents_cfg)
     results = await asyncio.gather(
@@ -1150,19 +1303,6 @@ async def incident_close(request: Request, incident_id: str,
                                       {"request": request, "msg": msg, "ok": ok})
 
 
-@app.get("/partials/pipeline", response_class=HTMLResponse)
-async def partial_pipeline(request: Request, fp: str = ""):
-    pipeline_tasks = await run_in_threadpool(_get_pipeline_tasks, fp)
-    return templates.TemplateResponse(request, "partials/pipeline_visual.html", {
-        "request":        request,
-        "fp":             fp,
-        "pipeline_tasks": pipeline_tasks,
-        "type_icons":     TYPE_ICONS,
-        "status_colors":  STATUS_COLORS,
-        "truncate":       _truncate,
-        "age":            _age,
-    })
-
 
 @app.get("/partials/chronicle", response_class=HTMLResponse)
 async def partial_chronicle(request: Request, fp: str = ""):
@@ -1188,9 +1328,7 @@ async def partial_task_detail(request: Request, task_id: str):
 @app.get("/partials/cost-kpis", response_class=HTMLResponse)
 async def partial_cost_kpis(request: Request):
     _agent_usage_cfg = [
-        ("ops_agent",   OPS_AGENT_URL),
-        ("eng_agent",   ENG_AGENT_URL),
-        ("chaos_agent", CHAOS_AGENT_URL),
+        ("ai_agent", OPS_AGENT_URL),
     ]
     usage_values, kpis, ts = await asyncio.gather(
         asyncio.gather(*[_fetch_agent_usage(_http_client, url) for _, url in _agent_usage_cfg]),
@@ -1226,9 +1364,11 @@ async def partial_cost_kpis(request: Request):
 
     # Per-agent series for 24h charts
     _AGENT_DISPLAY = {
-        "ops_agent":   ("Ops",   "#3b82f6"),
-        "eng_agent":   ("Eng",   "#10b981"),
-        "chaos_agent": ("Chaos", "#f97316"),
+        "ai_agent":    ("Agent",  "#6366f1"),
+        # Legacy keys for historical token_usage rows written before the merge
+        "ops_agent":   ("Ops",    "#3b82f6"),
+        "eng_agent":   ("Eng",    "#10b981"),
+        "chaos_agent": ("Chaos",  "#8b5cf6"),
     }
     cost_series: list[tuple[str, str, list[float]]] = [
         ("Total", "#e2e8f0", ts["total_cost"])
@@ -1406,7 +1546,11 @@ async def chat_send(
 # ── Task management actions ────────────────────────────────────────────────────
 
 @app.post("/tasks/{task_id}/approve", response_class=HTMLResponse)
-async def task_approve(request: Request, task_id: str):
+async def task_approve(
+    request: Request,
+    task_id: str,
+    operator_commands: str = Form(""),
+):
     task = await run_in_threadpool(task_store.get_task, task_id)
     if not task:
         msg, ok = f"Task `{task_id}` not found.", False
@@ -1414,7 +1558,17 @@ async def task_approve(request: Request, task_id: str):
         msg, ok = f"Task `{task_id}` is `{task['status']}`, not awaiting approval.", False
     else:
         await run_in_threadpool(task_store.approve_task, task_id, "human")
-        msg, ok = f"✅ Task `{task_id}` approved.", True
+        cmds = operator_commands.strip()
+        try:
+            await _http_client.post(
+                f"{OPS_AGENT_URL}/workflow/resume/{task_id}",
+                json={"operator_commands": cmds},
+                timeout=5.0,
+            )
+        except Exception as exc:
+            logger.warning("UI: workflow resume call failed for task=%s: %s", task_id, exc)
+        extra = " Operator commands queued for execution." if cmds else ""
+        msg, ok = f"✅ Task `{task_id}` approved.{extra}", True
     return templates.TemplateResponse(request, "partials/action_status.html", {"request": request, "msg": msg, "ok": ok})
 
 
@@ -1458,7 +1612,7 @@ async def tasks_clear(request: Request, confirmed: str = Form("no")):
 async def partial_schedules(request: Request):
     rows = []
     try:
-        r = await _http_client.get(f"{CHAOS_AGENT_URL}/schedules", timeout=5)
+        r = await _http_client.get(f"{OPS_AGENT_URL}/schedules", timeout=5)
         r.raise_for_status()
         rows = r.json()
     except Exception:
@@ -1478,7 +1632,7 @@ async def schedule_create(
     else:
         try:
             r = await _http_client.post(
-                f"{CHAOS_AGENT_URL}/schedule",
+                f"{OPS_AGENT_URL}/schedule",
                 json={"scenario": scenario, "interval_minutes": interval_minutes},
                 timeout=10,
             )
@@ -1490,7 +1644,7 @@ async def schedule_create(
 
     rows = []
     try:
-        r = await _http_client.get(f"{CHAOS_AGENT_URL}/schedules", timeout=5)
+        r = await _http_client.get(f"{OPS_AGENT_URL}/schedules", timeout=5)
         rows = r.json()
     except Exception:
         pass
@@ -1507,7 +1661,7 @@ async def schedule_create(
 async def schedule_cancel(request: Request, job_id: str):
     msg, ok = "", True
     try:
-        r = await _http_client.delete(f"{CHAOS_AGENT_URL}/schedule/{job_id}", timeout=5)
+        r = await _http_client.delete(f"{OPS_AGENT_URL}/schedule/{job_id}", timeout=5)
         if r.status_code == 404:
             msg, ok = f"⚠️ Job `{job_id}` not found.", False
         else:
@@ -1518,7 +1672,7 @@ async def schedule_cancel(request: Request, job_id: str):
 
     rows = []
     try:
-        r = await _http_client.get(f"{CHAOS_AGENT_URL}/schedules", timeout=5)
+        r = await _http_client.get(f"{OPS_AGENT_URL}/schedules", timeout=5)
         rows = r.json()
     except Exception:
         pass

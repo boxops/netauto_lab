@@ -41,6 +41,121 @@
     {% endfor %}
   </table>
 
+  {# ── Parse warnings ──────────────────────────────────────────────────────── #}
+  {% set parse_warnings = events | selectattr("type","equalto","parse_warning") | list %}
+  {% if parse_warnings %}
+  <div class="mb-8" style="background:#2d1515; border:1px solid #ef4444; border-radius:6px; padding:10px 14px; font-size:0.82em">
+    <strong style="color:#f87171">⚠️ Structured output parsing failed</strong>
+    {% for pw in parse_warnings %}
+      <div class="muted" style="margin-top:2px">Stage: <strong>{{ pw.detail }}</strong></div>
+    {% endfor %}
+    <div class="muted" style="margin-top:4px">Some analysis fields may be empty. Check the agent response in the Result section.</div>
+  </div>
+  {% endif %}
+
+  {# ── Agent Analysis Summary (awaiting_approval or complete rca tasks) ──────── #}
+  {% if task.status in ("awaiting_approval", "complete") and analysis_summary %}
+  {% set a = analysis_summary %}
+  {% set risk_colors = {"high": "#ef4444", "medium": "#f59e0b", "low": "#22c55e"} %}
+  {% set verdict_colors = {"correct": "#22c55e", "partial": "#f59e0b", "incorrect": "#ef4444", "unverifiable": "#9ca3af"} %}
+
+  {% if a.escalation_reason == "low_confidence_rca" %}
+  <div class="mb-12" style="background:#1e1b4b; border:1px solid #7c3aed; border-radius:8px; padding:14px 16px">
+    <div style="font-weight:700; color:#a78bfa; margin-bottom:6px">⚠️ Low-confidence escalation — automated remediation skipped</div>
+    <div class="muted" style="font-size:0.83em">{{ a.gate_reason }}</div>
+    {% if a.diagnosis %}
+      <div style="margin-top:8px; font-size:0.83em"><strong>Partial diagnosis:</strong> {{ a.diagnosis }}</div>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="mb-12" style="background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:14px 16px">
+    <div class="section-label mb-8" style="font-size:0.75em">AGENT ANALYSIS SUMMARY</div>
+
+    {# Three-column summary grid #}
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; font-size:0.82em">
+
+      {# Ops Agent — RCA #}
+      <div style="background:var(--bg3); border-radius:6px; padding:10px 12px; border-top:2px solid #3b82f6">
+        <div style="font-weight:700; color:#3b82f6; margin-bottom:6px; font-size:0.85em">
+          OPS AGENT · RCA
+          {% if a.rca_confidence %}
+            <span style="margin-left:6px; padding:1px 6px; border-radius:4px; font-size:0.8em;
+                         background:{{ risk_colors.get(a.rca_confidence, '#6b7280') }}22;
+                         color:{{ risk_colors.get(a.rca_confidence, '#9ca3af') }}">
+              {{ a.rca_confidence|upper }}
+            </span>
+          {% endif %}
+        </div>
+        <div class="muted" style="margin-bottom:4px; font-size:0.88em">Diagnosis</div>
+        <div>{{ a.diagnosis or "—" }}</div>
+        {% if a.rca_action %}
+          <div class="muted" style="margin-top:6px; margin-bottom:2px; font-size:0.88em">Recommended</div>
+          <div>{{ a.rca_action }}</div>
+        {% endif %}
+      </div>
+
+      {# Engineering Agent — Fix #}
+      <div style="background:var(--bg3); border-radius:6px; padding:10px 12px; border-top:2px solid #10b981">
+        <div style="font-weight:700; color:#10b981; margin-bottom:6px; font-size:0.85em">
+          OPS AGENT · FIX
+          {% if a.fix_risk %}
+            <span style="margin-left:6px; padding:1px 6px; border-radius:4px; font-size:0.8em;
+                         background:{{ risk_colors.get(a.fix_risk, '#6b7280') }}22;
+                         color:{{ risk_colors.get(a.fix_risk, '#9ca3af') }}">
+              RISK: {{ a.fix_risk|upper }}
+            </span>
+          {% endif %}
+        </div>
+        <div class="muted" style="margin-bottom:4px; font-size:0.88em">Fix type</div>
+        <div>{{ (a.fix_type or "—")|replace("_"," ")|title }}</div>
+        {% if a.fix_reason %}
+          <div class="muted" style="margin-top:6px; margin-bottom:2px; font-size:0.88em">Reasoning</div>
+          <div>{{ a.fix_reason }}</div>
+        {% endif %}
+        {% if a.fix_commands and a.fix_commands != "none" %}
+          <div class="muted" style="margin-top:6px; margin-bottom:2px; font-size:0.88em">Commands</div>
+          <pre style="font-size:0.85em; margin:0; white-space:pre-wrap">{{ a.fix_commands }}</pre>
+        {% endif %}
+      </div>
+
+      {# Validation Agent — Verdict #}
+      <div style="background:var(--bg3); border-radius:6px; padding:10px 12px; border-top:2px solid #8b5cf6">
+        <div style="font-weight:700; color:#8b5cf6; margin-bottom:6px; font-size:0.85em">
+          OPS AGENT · VALIDATION
+          {% if a.validation_verdict %}
+            <span style="margin-left:6px; padding:1px 6px; border-radius:4px; font-size:0.8em;
+                         background:{{ verdict_colors.get(a.validation_verdict, '#6b7280') }}22;
+                         color:{{ verdict_colors.get(a.validation_verdict, '#9ca3af') }}">
+              {{ a.validation_verdict|upper }}
+            </span>
+          {% endif %}
+        </div>
+        {% if a.risk_confirmed %}
+          <div class="muted" style="margin-bottom:4px; font-size:0.88em">Risk confirmed</div>
+          <div style="color:{{ risk_colors.get(a.risk_confirmed, '#9ca3af') }}; font-weight:600">
+            {{ a.risk_confirmed|upper }}
+          </div>
+        {% endif %}
+        {% if a.chaos_notes %}
+          <div class="muted" style="margin-top:6px; margin-bottom:2px; font-size:0.88em">Notes</div>
+          <div>{{ a.chaos_notes }}</div>
+        {% endif %}
+        {% if not a.validation_verdict %}
+          <div class="muted">No validation data (high-risk direct escalation).</div>
+        {% endif %}
+      </div>
+
+    </div>{# end grid #}
+
+    {% if a.gate_reason %}
+      <div class="muted" style="font-size:0.78em; margin-top:10px; border-top:1px solid var(--border); padding-top:6px">
+        {{ a.gate_reason }}
+      </div>
+    {% endif %}
+  </div>
+  {% endif %}{# end non-low-confidence #}
+  {% endif %}{# end approval_gate check #}
+
   <div class="mb-8">
     <div class="section-label mb-4">Input</div>
     <pre>{{ content_str }}</pre>
@@ -53,8 +168,8 @@
   </div>
   {% endif %}
 
-  {# Config diff — only for approval_gate tasks #}
-  {% if task.type == "approval_gate" and config_diff %}
+  {# Config diff — shown when task has approval/execution context #}
+  {% if task.status in ("awaiting_approval", "complete", "rejected") and config_diff %}
   <div class="mb-8">
     <div class="section-label mb-4">📝 Config Diff (proposed change)</div>
     <pre class="config-diff">{% for line in config_diff.splitlines() %}{% if line.startswith('+') and not line.startswith('+++') %}<span class="diff-add">{{ line }}</span>
@@ -65,8 +180,8 @@
   </div>
   {% endif %}
 
-  {# Post-execution verification — only for approval_gate tasks #}
-  {% if task.type == "approval_gate" and verification is defined and verification %}
+  {# Post-execution verification — shown when task has execution context #}
+  {% if task.status in ("awaiting_approval", "complete", "rejected") and verification is defined and verification %}
   {% set v = verification %}
   <div class="mb-8">
     <div class="section-label mb-4">🔬 Post-execution Verification</div>
@@ -101,8 +216,8 @@
       {% else %}
       <div style="background:var(--bg3); border-radius:6px; padding:10px 12px;
                   border-left:3px solid #6b7280">
-        <div style="font-weight:700; color:#9ca3af; margin-bottom:4px">⚠️ Config check unavailable</div>
-        <div class="muted">{{ v.get("error","Device unreachable or no config lines to verify.") }}</div>
+        <div style="font-weight:700; color:#9ca3af; margin-bottom:4px">— No config check</div>
+        <div class="muted">{{ v.get("error","No configuration was applied (escalate_human or no_action).") }}</div>
       </div>
       {% endif %}
 
@@ -135,7 +250,7 @@
       <div style="background:var(--bg3); border-radius:6px; padding:10px 12px;
                   border-left:3px solid #6b7280">
         <div style="font-weight:700; color:#9ca3af; margin-bottom:4px">⏳ Alert check pending</div>
-        <div class="muted">Will check Prometheus in ~{{ (300 // 60)|int }} min.</div>
+        <div class="muted">Will check Prometheus in ~{{ verify_delay_min }} min.</div>
       </div>
       {% endif %}
 
@@ -143,14 +258,30 @@
   </div>
   {% endif %}
 
+  {# Downstream alerts (topology correlation) #}
+  {% set downstream = events | selectattr("type","equalto","downstream_alert") | list %}
+  {% if downstream %}
+  <div class="mb-8" style="background:#1a2e1a; border:1px solid #22c55e; border-radius:6px; padding:10px 14px; font-size:0.82em">
+    <strong style="color:#4ade80">🔗 Downstream effects (topology-correlated)</strong>
+    {% for d in downstream %}
+      <div class="muted" style="margin-top:4px">
+        <code>{{ d.ts }}</code> — <strong>{{ d.detail.alertname }}</strong> on
+        <strong>{{ d.detail.device }}</strong>: {{ d.detail.summary }}
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {# Timeline #}
   <div class="mb-8">
     <div class="section-label mb-4">Timeline</div>
     {% if events %}
+      {% set event_colors = {"parse_warning": "#f59e0b", "downstream_alert": "#22c55e", "alert_correlated": "#3b82f6", "execution_started": "#8b5cf6", "execution_complete": "#22c55e", "execution_failed": "#ef4444", "operator_commands_override": "#f59e0b"} %}
       {% for e in events %}
-        <div style="font-size:0.78em; margin-bottom:3px">
+        {% set ec = event_colors.get(e.type, "") %}
+        <div style="font-size:0.78em; margin-bottom:3px{% if ec %}; border-left:2px solid {{ ec }}; padding-left:6px{% endif %}">
           <code class="muted">{{ e.ts }}</code>
-          <strong>{{ e.type }}</strong>
+          <strong{% if ec %} style="color:{{ ec }}"{% endif %}>{{ e.type }}</strong>
           <span class="muted">({{ e.agent }})</span>
           {% if e.detail %}<span class="muted">{{ e.detail }}</span>{% endif %}
         </div>
@@ -177,8 +308,8 @@
     {% endif %}
   </div>
 
-  {# Resolution history — only shown for approval_gate tasks #}
-  {% if task.type == "approval_gate" and resolution_history is defined %}
+  {# Resolution history — shown for rca tasks with approval/execution history #}
+  {% if task.status in ("awaiting_approval", "complete", "rejected") and resolution_history is defined %}
   <div class="mt-8">
     <div class="section-label mb-4">📋 Recent Resolutions (same device)</div>
     {% if resolution_history %}

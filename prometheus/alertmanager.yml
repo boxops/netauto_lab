@@ -1,15 +1,17 @@
 ---
 # Alertmanager configuration
-# To enable real notifications, set these environment variables in .env:
-#   ALERTMANAGER_SLACK_WEBHOOK, ALERTMANAGER_SLACK_CHANNEL
-#   ALERTMANAGER_SMTP_HOST (host:port), ALERTMANAGER_EMAIL_FROM/TO
+#
+# Slack notifications: set ALERTMANAGER_SLACK_WEBHOOK and ALERTMANAGER_SLACK_CHANNEL
+# in .env, then add --config.expand-env to the alertmanager command in docker-compose.yml
+# and replace the webhook_configs below with slack_configs using ${ALERTMANAGER_SLACK_WEBHOOK}.
+#
+# The closed-loop-webhook receiver is the critical path — it drives the AI pipeline.
+# All other receivers are no-ops unless you configure a notification backend.
+
 global:
   resolve_timeout: 5m
   smtp_from: 'alerts@lab.local'
   smtp_smarthost: 'localhost:25'
-  smtp_auth_username: ''
-  smtp_auth_password: ''
-  slack_api_url: 'https://hooks.slack.com/services/REPLACE_WITH_REAL_WEBHOOK'
 
 # Alert routing
 route:
@@ -19,6 +21,7 @@ route:
   repeat_interval: 4h
   receiver: default
   routes:
+    # AI pipeline: every critical/warning alert hits the closed-loop webhook first
     - match_re:
         severity: critical|warning
       receiver: closed-loop-webhook
@@ -36,51 +39,31 @@ route:
 
 # Receivers
 receivers:
+  # No-op default — add slack_configs here once a webhook URL is configured
   - name: default
-    slack_configs:
-      - channel: '#network-alerts'
-        title: '[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
-        text: |
-          {{ range .Alerts }}
-          *Alert:* {{ .Annotations.summary }}
-          *Description:* {{ .Annotations.description }}
-          *Severity:* {{ .Labels.severity }}
-          {{ end }}
-        send_resolved: true
 
+  # No-op for critical — add paging/slack here once configured
   - name: critical-alerts
-    slack_configs:
-      - channel: '#network-alerts'
-        title: ':rotating_light: CRITICAL: {{ .GroupLabels.alertname }}'
-        text: |
-          {{ range .Alerts }}
-          *Alert:* {{ .Annotations.summary }}
-          *Description:* {{ .Annotations.description }}
-          *Runbook:* {{ .Annotations.runbook }}
-          {{ end }}
-        send_resolved: true
 
+  # No-op for network team — add routing once configured
   - name: network-team
-    slack_configs:
-      - channel: '#network-alerts'
-        title: '[{{ .Status | toUpper }}] Network: {{ .GroupLabels.alertname }}'
-        text: |
-          {{ range .Alerts }}
-          *Alert:* {{ .Annotations.summary }}
-          *Details:* {{ .Annotations.description }}
-          {{ end }}
-        send_resolved: true
 
   - name: closed-loop-webhook
     webhook_configs:
+      # Primary: deliver directly to ops agent for zero-polling latency
+      - url: 'http://ai-agent:8000/webhook/alert'
+        send_resolved: true
+        max_alerts: 0
+      # Audit log: also feed the event receiver for historical record
       - url: 'http://alert-event-receiver:8770/alertmanager/webhook'
         send_resolved: true
         max_alerts: 0
 
-# Inhibition rules
+# Inhibition rules — scope per device using sysName so a critical on one device
+# does not suppress warnings on a different device (all share instance=telegraf:9273)
 inhibit_rules:
   - source_match:
       severity: critical
     target_match:
       severity: warning
-    equal: ['instance']
+    equal: ['sysName']

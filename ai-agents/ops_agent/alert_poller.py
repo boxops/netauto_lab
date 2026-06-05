@@ -27,26 +27,55 @@ import httpx
 
 from shared.config import settings
 from shared.rate_limiter import BudgetExceededError
+from shared.pipeline_models import RcaResult
+from shared.structured_output import parse_structured
 
 logger = logging.getLogger(__name__)
-
-# Structured-tail keys the ops agent is prompted to emit
-_RCA_KEYS = {"DIAGNOSIS", "AFFECTED", "ACTION", "CONFIDENCE"}
 
 POLL_INTERVAL          = 60    # seconds between full poll cycles
 CRITICAL_POLL_INTERVAL = 15    # seconds — tight loop for critical alerts
 STARTUP_DELAY          = 30    # seconds to wait before the very first poll
 INTER_ALERT_DELAY      = 20    # seconds between consecutive investigations
 MAX_PER_CYCLE          = 2     # max new investigations to start per poll cycle
+MAX_CONCURRENT         = 2     # max simultaneous workflow investigations (prevents TPM bursts)
 RATE_LIMIT_BACKOFF     = 70    # seconds to wait after a 429 before retrying
 RETRY_BACKOFF          = 120   # seconds before retrying a failed RCA task
 
 SEVERITIES = {"critical", "warning"}
 
+# Semantic priority for alert types — lower number = higher priority.
+# When a new alert arrives for a device that already has an active RCA, we
+# compare priorities.  If the new alert has HIGHER priority (lower number)
+# than the existing task's alert type, the new alert gets its own pipeline
+# rather than being absorbed as a correlated side-note.
+#
+# Rule of thumb: "more specific / more directly actionable" = higher priority.
+#   InterfaceAdminDown = deliberate config action — most actionable
+#   InterfaceDown      = could be admin-down or physical — very specific
+#   BGPPeerDown        = routing consequence — likely caused by interface event
+#   DeviceDown         = broadest — often a consequence of upstream failure
+_ALERT_PRIORITY: dict[str, int] = {
+    "InterfaceAdminDown":        10,
+    "InterfaceDown":             20,
+    "InterfaceHighErrorRate":    25,
+    "HighInterfaceUtilization":  30,
+    "BGPPrefixCountDecreased":   35,
+    "BGPPeerDown":               40,
+    "DeviceDown":                50,
+}
+
 _ALERT_FOCUS = {
-    "InterfaceDown":            "interface is operationally down — check link state on both sides",
-    "InterfaceAdminDown":       "interface was admin-shutdown — determine if intentional or a chaos/config event",
-    "BGPPeerDown":              "BGP session is not Established — check for link flaps, config drift, or route policy issues",
+    "InterfaceDown": (
+        "Interface is operationally down. CRITICAL: call get_device_metrics(device) and check "
+        "interface_ifAdminStatus. If ifAdminStatus=2: admin-shutdown, fix is 'no shutdown'. "
+        "If ifAdminStatus=1 + ifOperStatus=2: physical/remote failure, check peer interface via topology."
+    ),
+    "InterfaceAdminDown": (
+        "Interface was admin-shutdown (ifAdminStatus=2). Determine if intentional or unintentional. "
+        "If no maintenance window found: fix_type=config_change, COMMANDS='interface {ifDescr}\\n no shutdown'. "
+        "Only use escalate_human with explicit evidence of planned maintenance."
+    ),
+    "BGPPeerDown":              "BGP session is not Established — check link state, config drift, route policy, and whether the peer interface is also down.",
     "DeviceDown":               "device is unreachable via ICMP — check reachability, upstream links, and power",
     "HighInterfaceUtilization": "interface utilization is high — identify the traffic source and affected flows",
     "InterfaceHighErrorRate":   "interface has elevated error rate — check for hardware or cabling issues",
@@ -60,10 +89,14 @@ class AlertPoller:
     the Ops Agent to investigate new firing alerts.
     """
 
-    def __init__(self, agent, task_store, rate_limiter) -> None:
+    def __init__(self, agent, task_store, rate_limiter, workflow=None) -> None:
         self._agent        = agent
         self._task_store   = task_store
         self._rate_limiter = rate_limiter
+        self._workflow     = workflow   # IncidentWorkflow instance; None when workflow mode is off
+        # Limits simultaneous LLM investigations to MAX_CONCURRENT so parallel
+        # alert storms don't exhaust the OpenAI tokens-per-minute budget at once.
+        self._investigation_sem = threading.Semaphore(MAX_CONCURRENT)
         # fingerprint → seen_key string; survives within one process lifetime.
         # Pre-populated from the TaskStore on startup so container restarts don't
         # cause the same fingerprint to be re-processed.
@@ -102,6 +135,30 @@ class AlertPoller:
 
     def stop(self) -> None:
         self._stop.set()
+
+    def push_alert(self, event: dict) -> bool:
+        """
+        Process a single alert event synchronously in a background thread.
+        Called by the /webhook/alert endpoint for immediate, zero-polling ingestion.
+
+        Returns True if the alert was accepted for investigation, False if
+        it was deduplicated, filtered, or the budget was exceeded.
+        """
+        import threading as _t
+        live_alerts = self._fetch_live_alerts()
+        work = self._classify_event(event, live_alerts)
+        if work is None:
+            return False
+
+        def _run():
+            try:
+                self._investigate(work)
+            except Exception:
+                logger.exception("AlertPoller.push_alert: investigation failed for %s",
+                                 event.get("alertname"))
+
+        _t.Thread(target=_run, name="webhook-alert", daemon=True).start()
+        return True
 
     def reset_seen(self) -> int:
         """
@@ -186,7 +243,19 @@ class AlertPoller:
                 timeout=10,
             )
             resp.raise_for_status()
-            return resp.json().get("events", [])
+            events = resp.json().get("events", [])
+            # The event receiver stores device="" even when sysName is in labels.
+            # Back-fill it here so topology correlation and incident grouping work
+            # correctly on the polling path (webhook path already has device set).
+            for e in events:
+                if not e.get("device"):
+                    labels = e.get("labels") or {}
+                    e["device"] = (
+                        labels.get("sysName")
+                        or labels.get("agent_host")
+                        or ""
+                    )
+            return events
         except Exception as exc:
             logger.warning("AlertPoller: failed to fetch events: %s", exc)
             return []
@@ -248,6 +317,8 @@ class AlertPoller:
 
         if status == "resolved":
             self._seen.pop(fp, None)
+            if fp:
+                self._try_close_incident(fp)
             return None
 
         if status != "firing":
@@ -271,6 +342,51 @@ class AlertPoller:
             fp[:12], alertname, severity,
         )
         return event
+
+    # ── topology-aware correlation ────────────────────────────────────────────
+
+    def _fetch_connected_devices(self, device: str) -> list[str]:
+        """
+        Return a list of device names directly connected to `device` via Nautobot cables.
+        Falls back to empty list on any error so a Nautobot outage never blocks processing.
+        """
+        try:
+            resp = httpx.get(
+                f"{settings.nautobot_url}/api/dcim/cables/",
+                params={"depth": 1, "limit": 200},
+                headers={"Authorization": f"Token {settings.nautobot_token}"},
+                timeout=5,
+            )
+            resp.raise_for_status()
+            cables = resp.json().get("results", [])
+            peers: set[str] = set()
+            for cable in cables:
+                for side in ("a_terminations", "b_terminations"):
+                    for term in cable.get(side, []):
+                        dev_name = (term.get("object") or {}).get("device", {})
+                        if isinstance(dev_name, dict):
+                            dev_name = dev_name.get("name", "")
+                        if dev_name and dev_name != device:
+                            peers.add(dev_name)
+            return list(peers)
+        except Exception as exc:
+            logger.debug("AlertPoller: topology lookup failed for device=%s: %s", device, exc)
+            return []
+
+    def _find_upstream_rca(self, device: str) -> dict | None:
+        """
+        Return an active RCA task for a directly connected upstream device, or None.
+        Used to link downstream effects (e.g. leaf1/Eth2 down) to an upstream root cause
+        (e.g. spine2/Eth1 admin-shutdown) rather than spawning a parallel investigation.
+        """
+        if not device:
+            return None
+        peers = self._fetch_connected_devices(device)
+        for peer in peers:
+            task = self._task_store.get_active_rca_for_device(peer, minutes=15)
+            if task:
+                return task
+        return None
 
     # ── maintenance window check ───────────────────────────────────────────────
 
@@ -324,6 +440,29 @@ class AlertPoller:
                 device, exc,
             )
         return False
+
+    def _try_close_incident(self, fp: str) -> None:
+        """
+        When the primary alert for an incident resolves, mark the incident complete.
+        Only fires for the fingerprint that originally created the incident
+        (i.e. the incident's own alert_fingerprint).
+        """
+        try:
+            incident = self._task_store.get_open_incident_for_fingerprint(fp)
+            if not incident:
+                return
+            self._task_store.close_incident(
+                incident["id"],
+                resolution=f"Primary alert {fp[:12]} resolved — auto-closed",
+            )
+            logger.info(
+                "AlertPoller: auto-closed incident=%s on resolve fp=%s",
+                incident["id"], fp[:12],
+            )
+        except Exception as exc:
+            logger.warning(
+                "AlertPoller: failed to auto-close incident for fp=%s: %s", fp[:12], exc
+            )
 
     # ── investigation ──────────────────────────────────────────────────────────
 
@@ -405,21 +544,59 @@ class AlertPoller:
 
         # Alert correlation: if there is already an active RCA for the same device
         # within the last 15 minutes, record this alert on it instead of spawning
-        # a parallel pipeline (common during alert storms).
+        # a parallel pipeline — UNLESS the new alert has higher semantic priority
+        # than the existing task (e.g. InterfaceAdminDown arriving after BGPPeerDown).
+        # A higher-priority alert always gets its own investigation so the root cause
+        # is never swallowed by a downstream-consequence task.
         if device:
             correlated = self._task_store.get_active_rca_for_device(device, minutes=15)
             if correlated:
-                self._task_store.add_event(
-                    correlated["id"], "system", "alert_correlated",
-                    {"alertname": alertname, "fingerprint": fp,
-                     "summary": summary, "severity": severity},
-                )
-                self._seen[fp] = f"{fp}:firing"
-                logger.info(
-                    "AlertPoller: correlated alert %s (fp=%s) onto existing task=%s for device=%s",
-                    alertname, fp[:12], correlated["id"], device,
-                )
-                return
+                existing_alertname = correlated.get("title", "").split(":")[0].strip()
+                existing_priority = _ALERT_PRIORITY.get(existing_alertname, 99)
+                new_priority      = _ALERT_PRIORITY.get(alertname, 99)
+                if new_priority < existing_priority:
+                    # New alert is more specific / higher priority — give it its own pipeline.
+                    # The existing task gets a note linking it as a downstream consequence.
+                    self._task_store.add_event(
+                        correlated["id"], "system", "downstream_consequence",
+                        {"alertname": alertname, "fingerprint": fp, "summary": summary,
+                         "note": f"{alertname} is a higher-priority alert for {device} — spawning dedicated pipeline"},
+                    )
+                    logger.info(
+                        "AlertPoller: priority override — %s (p=%d) spawns new pipeline over %s (p=%d) device=%s",
+                        alertname, new_priority, existing_alertname, existing_priority, device,
+                    )
+                    # fall through to create a new investigation below
+                else:
+                    self._task_store.add_event(
+                        correlated["id"], "system", "alert_correlated",
+                        {"alertname": alertname, "fingerprint": fp,
+                         "summary": summary, "severity": severity},
+                    )
+                    self._seen[fp] = f"{fp}:firing"
+                    logger.info(
+                        "AlertPoller: correlated alert %s (fp=%s) onto existing task=%s for device=%s",
+                        alertname, fp[:12], correlated["id"], device,
+                    )
+                    return
+
+        # Topology-aware correlation: if a directly connected upstream device already
+        # has an active RCA, this alert is likely a downstream effect of the same root
+        # cause.  Link it onto that task rather than spawning a parallel investigation.
+        upstream_rca = self._find_upstream_rca(device)
+        if upstream_rca:
+            self._task_store.add_event(
+                upstream_rca["id"], "system", "downstream_alert",
+                {"alertname": alertname, "fingerprint": fp,
+                 "device": device, "summary": summary, "severity": severity,
+                 "note": f"Downstream effect of root cause on {upstream_rca.get('title', upstream_rca['id'])}"},
+            )
+            self._seen[fp] = f"{fp}:firing"
+            logger.info(
+                "AlertPoller: downstream alert %s fp=%s device=%s linked to upstream task=%s",
+                alertname, fp[:12], device, upstream_rca["id"],
+            )
+            return
 
         # Maintenance window: create a deprioritised, no-auto-execute task
         # rather than skipping the alert entirely — humans can still review it.
@@ -462,6 +639,48 @@ class AlertPoller:
                     incident_id, alertname, device,
                 )
 
+        # ── Workflow path (WORKFLOW_ENABLED=true) ──────────────────────────────
+        if settings.workflow_enabled and self._workflow is not None:
+            sem = self._investigation_sem
+
+            def _run_workflow():
+                sem.acquire()
+                try:
+                    # Late topology re-check: alerts often arrive in bursts where the
+                    # upstream device's RCA task wasn't created yet at classify time.
+                    # After a 3-second yield the upstream task is usually visible.
+                    time.sleep(3)
+                    late_upstream = self._find_upstream_rca(device)
+                    if late_upstream:
+                        self._task_store.add_event(
+                            late_upstream["id"], "system", "downstream_alert",
+                            {"alertname": alertname, "fingerprint": fp,
+                             "device": device, "summary": summary, "severity": severity,
+                             "note": f"Late topology match: downstream effect of {late_upstream.get('title', late_upstream['id'])}"},
+                        )
+                        self._seen[fp] = f"{fp}:firing"
+                        logger.info(
+                            "AlertPoller: late topology match — %s fp=%s device=%s linked to upstream task=%s",
+                            alertname, fp[:12], device, late_upstream["id"],
+                        )
+                        return
+                    self._workflow.run(
+                        event=event,
+                        incident_id=incident_id,
+                        in_maintenance=in_maintenance,
+                        priority=task_priority,
+                    )
+                finally:
+                    sem.release()
+
+            threading.Thread(target=_run_workflow, daemon=True, name=f"wf-{fp[:8]}").start()
+            logger.info(
+                "AlertPoller: dispatched to workflow fp=%s alert=%s",
+                fp[:12], alertname,
+            )
+            return
+
+        # ── Legacy polling path ────────────────────────────────────────────────
         task = self._task_store.create_task(
             type="rca",
             created_by="system",
@@ -490,38 +709,6 @@ class AlertPoller:
 
         self._run_investigation(task_id, session_id, prompt, alertname, attempt=1, event=event)
 
-    # ── structured output parsing ──────────────────────────────────────────────
-
-    @staticmethod
-    def _parse_tail(text: str, expected_keys: set) -> dict:
-        """Extract KEY: value pairs from anywhere in an agent response."""
-        import re
-        result = {}
-        lines = text.split("\n")
-        n = len(lines)
-        i = 0
-        while i < n:
-            m = re.match(r"^([A-Z][A-Z_]+):\s*(.*)$", lines[i].strip())
-            if m and m.group(1) in expected_keys:
-                key   = m.group(1)
-                value = m.group(2).strip()
-                if not value:
-                    j = i + 1
-                    while j < n and not lines[j].strip():
-                        j += 1
-                    if j < n and lines[j].strip().startswith("```"):
-                        j += 1
-                        code: list[str] = []
-                        while j < n and not lines[j].strip().startswith("```"):
-                            code.append(lines[j])
-                            j += 1
-                        value = "\n".join(code).strip()
-                        i = j
-                if value:
-                    result[key] = value
-            i += 1
-        return result
-
     # ── investigation + handoff ────────────────────────────────────────────────
 
     def _run_investigation(
@@ -540,28 +727,42 @@ class AlertPoller:
                 task_id=task_id,
                 task_type="rca",
             )
-            parsed = self._parse_tail(response, _RCA_KEYS)
+            # Parse structured fields — uses with_structured_output when available,
+            # falls back to regex for Ollama/older models.
+            rca, _, rca_parse_failed = parse_structured(
+                self._agent.llm, prompt, RcaResult,
+                session_config={"configurable": {"thread_id": session_id}},
+            )
+            if rca_parse_failed:
+                self._task_store.add_event(task_id, "ops_agent", "parse_warning",
+                                           {"stage": "rca", "detail": "structured output parsing failed — fields may be empty"})
             self._task_store.complete_task(
                 task_id,
                 "ops_agent",
                 result={
                     "response":     response,
                     "tool_calls":   len(tool_calls),
-                    "diagnosis":    parsed.get("DIAGNOSIS", ""),
-                    "affected":     parsed.get("AFFECTED", ""),
-                    "action":       parsed.get("ACTION", ""),
-                    "confidence":   parsed.get("CONFIDENCE", ""),
+                    "diagnosis":    rca.diagnosis,
+                    "affected":     rca.affected,
+                    "action":       rca.action,
+                    "confidence":   rca.confidence,
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
-            logger.info("AlertPoller: completed RCA task=%s alert=%s", task_id, alertname)
+            logger.info("AlertPoller: completed RCA task=%s alert=%s confidence=%s",
+                        task_id, alertname, rca.confidence)
 
-            # Escalate to engineering agent unless ops explicitly recommends no action
-            action_lower = parsed.get("ACTION", "").lower()
-            no_action = any(kw in action_lower for kw in
+            no_action = any(kw in rca.action.lower() for kw in
                             ("no action", "no fix", "already resolved", "self-healed", "monitor only"))
-            if not no_action and event:
-                self._create_fix_proposal(task_id, event, parsed, response)
+
+            if no_action:
+                pass  # pipeline ends here cleanly
+            elif rca.confidence == "low":
+                # Insufficient confidence to drive automated remediation.
+                # Escalate directly to human review with the partial findings.
+                self._escalate_low_confidence(task_id, event, rca)
+            elif event:
+                self._create_fix_proposal(task_id, event, rca, response)
 
         except Exception as exc:
             error_str = str(exc)
@@ -614,17 +815,68 @@ class AlertPoller:
                     logger.info("AlertPoller: re-queued task=%s for retry", task_id)
         _t.Thread(target=_do_retry, daemon=True).start()
 
+    def _escalate_low_confidence(
+        self,
+        parent_task_id: str,
+        event: dict,
+        rca: "RcaResult",
+    ) -> None:
+        """
+        Create an approval_gate task directly when RCA confidence is low.
+        Skips automated fix proposal and validation to avoid propagating
+        an unreliable diagnosis through the pipeline.
+        The human sees the partial RCA findings and can act or dismiss.
+        """
+        alertname   = event.get("alertname", "")
+        fingerprint = event.get("fingerprint", "")
+        severity    = event.get("severity", "warning")
+        affected    = rca.affected or event.get("device", "unknown")
+
+        try:
+            gate = self._task_store.create_task(
+                type="approval_gate",
+                created_by="ops_agent",
+                assigned_to="human",
+                title=f"LOW CONFIDENCE — Manual review required: {alertname} on {affected}",
+                parent_id=parent_task_id,
+                alert_fingerprint=fingerprint,
+                priority="high" if severity == "critical" else "normal",
+                content={
+                    "alertname":          alertname,
+                    "alert":              event,
+                    "escalation_reason":  "low_confidence_rca",
+                    "rca": {
+                        "diagnosis":          rca.diagnosis,
+                        "affected_device":    affected,
+                        "recommended_action": rca.action,
+                        "confidence":         rca.confidence,
+                    },
+                    "reason": (
+                        f"Ops Agent has low confidence in its diagnosis for {alertname} "
+                        f"on {affected}. Automated remediation skipped. "
+                        "Please investigate manually."
+                    ),
+                },
+            )
+            self._task_store.request_approval(gate["id"], "ops_agent")
+            logger.info(
+                "AlertPoller: low-confidence escalation gate=%s for alert %s device=%s",
+                gate["id"], alertname, affected,
+            )
+        except Exception as exc:
+            logger.error("AlertPoller: failed to create low-confidence gate: %s", exc)
+
     def _create_fix_proposal(
         self,
         parent_task_id: str,
         event: dict,
-        parsed_rca: dict,
+        rca: "RcaResult",
         full_response: str,
     ) -> None:
-        alertname      = event.get("alertname", "")
-        fingerprint    = event.get("fingerprint", "")
-        severity       = event.get("severity", "normal")
-        affected       = parsed_rca.get("AFFECTED", "") or event.get("device", "unknown")
+        alertname   = event.get("alertname", "")
+        fingerprint = event.get("fingerprint", "")
+        severity    = event.get("severity", "normal")
+        affected    = rca.affected or event.get("device", "unknown")
 
         try:
             child = self._task_store.create_task(
@@ -636,13 +888,13 @@ class AlertPoller:
                 alert_fingerprint=fingerprint,
                 priority="high" if severity == "critical" else "normal",
                 content={
-                    "alertname":    alertname,
-                    "alert":        event,
+                    "alertname": alertname,
+                    "alert":     event,
                     "rca": {
-                        "diagnosis":          parsed_rca.get("DIAGNOSIS", ""),
+                        "diagnosis":          rca.diagnosis,
                         "affected_device":    affected,
-                        "recommended_action": parsed_rca.get("ACTION", ""),
-                        "confidence":         parsed_rca.get("CONFIDENCE", ""),
+                        "recommended_action": rca.action,
+                        "confidence":         rca.confidence,
                         "full_response":      full_response[-3000:],
                     },
                 },

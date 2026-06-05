@@ -153,10 +153,10 @@ All eBGP. Leaves advertise loopbacks + host routes to both spines. When `LAB_VAL
 
 Shared SQLite database (or PostgreSQL in production) used by all four agent containers and the UI to store pipeline state.
 
-| Mode        | Backend               | When to use                            |
-| ----------- | --------------------- | -------------------------------------- |
-| Default     | SQLite (`activity.db`)| Lab / development                      |
-| Production  | PostgreSQL 16         | Multi-replica, persistent, LISTEN/NOTIFY ready |
+| Mode       | Backend                | When to use                                    |
+| ---------- | ---------------------- | ---------------------------------------------- |
+| Default    | SQLite (`activity.db`) | Lab / development                              |
+| Production | PostgreSQL 16          | Multi-replica, persistent, LISTEN/NOTIFY ready |
 
 Set `TASK_DB_URL` in `.env` to switch to PostgreSQL. The `agent-postgres` service is pre-defined in `docker-compose.yml`.
 
@@ -174,15 +174,15 @@ Set `TASK_DB_URL` in `.env` to switch to PostgreSQL. The `agent-postgres` servic
 
 ## Data Persistence
 
-| Volume                 | Contents                              |
-| ---------------------- | ------------------------------------- |
+| Volume                   | Contents                            |
+| ------------------------ | ----------------------------------- |
 | `nautobot-postgres-data` | Nautobot PostgreSQL data            |
-| `gitea-postgres-data`  | Gitea PostgreSQL data                 |
-| `agent-postgres-data`  | Agent task store PostgreSQL data      |
-| `nautobot-media`       | Nautobot uploaded files               |
-| `gitea-data`           | Gitea repositories and runbooks       |
-| `prometheus-data`      | Prometheus TSDB                       |
-| `grafana-data`         | Grafana dashboards and users          |
-| `loki-data`            | Loki log chunks                       |
-| `agent-activity-data`  | Shared SQLite activity.db (default)   |
-| `rabbitmq-data`        | RabbitMQ durable queues               |
+| `gitea-postgres-data`    | Gitea PostgreSQL data               |
+| `agent-postgres-data`    | Agent task store PostgreSQL data    |
+| `nautobot-media`         | Nautobot uploaded files             |
+| `gitea-data`             | Gitea repositories and runbooks     |
+| `prometheus-data`        | Prometheus TSDB                     |
+| `grafana-data`           | Grafana dashboards and users        |
+| `loki-data`              | Loki log chunks                     |
+| `agent-activity-data`    | Shared SQLite activity.db (default) |
+| `rabbitmq-data`          | RabbitMQ durable queues             |

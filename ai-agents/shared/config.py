@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     lab_device_prefix: str = "clab-"       # prefix mapping prod device → lab device name
     lab_verify_delay: int = 30             # seconds to wait after applying lab fix before checking
 
+    # Post-execution verification delay — how long to wait after applying a fix
+    # before querying Prometheus to confirm the alert resolved.
+    # Default is 60 s (lab-friendly); set to 300 s or higher in production.
+    execution_verify_delay: int = 60
+
     # Gitea runbook library
     gitea_url: str = "http://gitea:3000"
     gitea_token: str = ""          # Gitea API token with repo read access
@@ -75,10 +80,36 @@ class Settings(BaseSettings):
     maintenance_statuses: str = "planned,staged,decommissioning"  # CSV of Nautobot statuses
     maintenance_tag: str = "maintenance"  # Nautobot tag that marks devices in maintenance
 
+    # Agent API authentication — required on all /chat, /status, /usage endpoints
+    agent_api_key: str = ""
+
+    # Tenant identifier — used to scope all task queue queries.
+    # Set to a unique value per customer/deployment in multi-tenant environments.
+    agent_tenant_id: str = "default"
+
+    # Agent identifier — used for status tracking and interactive chat budget key
+    agent_name: str = "ai_agent"
+
+    # Unified LangGraph incident workflow — replaces the 3-agent polling chain.
+    # When true: AlertPoller dispatches to ops_agent/workflow.py StateGraph.
+    # When false (default): legacy task-runner polling path is used.
+    workflow_enabled: bool = True
+
+    # Chaos / destructive tools gate — set true ONLY in lab environments.
+    # When false, shutdown_interface, restore_interface, and flap_bgp_neighbor
+    # are removed from the chaos agent's tool set entirely.
+    chaos_tools_enabled: bool = False
+
     # Approval webhook — POST when a task enters awaiting_approval
     approval_webhook_url: str = ""
     approval_webhook_secret: str = ""  # HMAC-SHA256 signing secret; empty = unsigned
     agent_ui_url: str = "http://localhost:7860"  # public URL used in webhook links
+
+    # Slack incoming webhook URL for approval gate notifications
+    slack_webhook_url: str = ""
+
+    # PagerDuty Events API v2 routing key for approval gate incidents
+    pagerduty_routing_key: str = ""
 
     @property
     def use_openai(self) -> bool:
