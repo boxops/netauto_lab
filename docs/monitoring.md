@@ -87,46 +87,25 @@ Configured in `prometheus/alertmanager.yml`:
 
 To enable Slack, set `SLACK_WEBHOOK_URL` in `.env`.
 
-### Closed-Loop Event Intake
+### Closed-Loop Alert Pipeline
 
-- Alertmanager now forwards warning and critical alerts to the internal webhook receiver at `alert-event-receiver:8770`.
-- Receiver endpoint: `POST /alertmanager/webhook`
-- Health endpoint: `GET /health`
-- Recent ingested events: `GET /events?limit=20`
+Alertmanager forwards warning and critical alerts to an internal **alert-event-receiver** service at `alert-event-receiver:8770`. This provides an auditable alert-event stream independent of Prometheus's own `/api/v1/alerts` endpoint.
 
-This provides an auditable alert-event stream for downstream orchestration jobs.
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/alertmanager/webhook` | `POST` | Receive Alertmanager webhook payloads |
+| `/health` | `GET` | Health check |
+| `/events?limit=N` | `GET` | Retrieve recent ingested alert events |
 
-### Alert Event Orchestration (Nautobot Job)
+The AI agent's **AlertPoller** background thread consumes this stream every 15 s (critical alerts) or 60 s (normal alerts). For each new alert fingerprint not already in the task queue, the AlertPoller:
 
-The `Alert Event Orchestrator` Nautobot job consumes ingested events and builds approval-gated remediation proposals:
+1. Validates the alert is still firing in live Prometheus
+2. Checks device maintenance status (if `MAINTENANCE_CHECK_ENABLED=true`)
+3. Correlates with existing open RCAs for the same device
+4. Creates or links an Incident grouping entity
+5. Creates an `rca` task and triggers the LangGraph IncidentWorkflow
 
-- Reads recent events from the alert receiver.
-- Filters by severity and status.
-- Maps alerts to recommended playbooks (check mode by default).
-- Produces artifacts:
-  - `alert_orchestration_proposals.json`
-  - `alert_orchestration_proposals.md`
-
-Optional semi-automated queue mode:
-
-- Set `queue_pending_intents=True` and `dry_run=False` to persist intents as `PENDING` `JobResult` records.
-- These records store proposal payloads for operator approval and do not execute remediation tasks directly.
-- Duplicate intents are skipped using alert fingerprint/device naming to reduce queue noise.
-
-### Alert Intent Executor (Nautobot Job)
-
-The `Alert Intent Executor` job processes `PENDING` approval intents created by `Alert Event Orchestrator`.
-
-- `action=approve`: marks intents approved and closes them.
-- `action=reject`: marks intents rejected and closes them.
-- Optional `execute_check_mode=True`: runs allowlisted playbooks in check mode only.
-- Live (non-check-mode) execution is not supported by this job.
-
-Primary artifact:
-
-- `alert_intent_execution_results.json`
-
-The job does not perform live changes; it prepares operator-reviewed actions for semi-automated closed-loop operations.
+From there the pipeline runs automatically through RCA → Fix Proposal → Validation → Approval Gate. Human review happens in the **Clano UI** at http://localhost:7860. See [`docs/closed-loop-pipeline.md`](closed-loop-pipeline.md) for the full reference.
 
 ## Loki Log Queries
 

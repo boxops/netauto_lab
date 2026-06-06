@@ -1,6 +1,6 @@
 # Closed-Loop Automation Pipeline
 
-The closed-loop pipeline is the autonomous incident-response system built into the AI agent stack. When Prometheus fires an alert, the pipeline coordinates the three agents — Ops, Engineering, and Chaos — to investigate, propose, validate, and gate a remediation, with a mandatory human approval step before any configuration change is executed on the network.
+The closed-loop pipeline is the autonomous incident-response system built into the AI agent stack. When Prometheus fires an alert, the unified agent runs a LangGraph state machine that investigates, proposes, validates, and gates a remediation. Whether the approval gate is presented to a human or auto-approved depends on the **autonomy policy** matched for that action — see [`docs/policy-autonomy.md`](policy-autonomy.md).
 
 ---
 
@@ -11,7 +11,7 @@ The closed-loop pipeline is the autonomous incident-response system built into t
          │
          ▼
   ┌──────────────────────────────────────────────────────────────────────┐
-  │  AlertPoller  (ops_agent)                                            │
+  │  AlertPoller  (ai-agent)                                             │
   │  · Critical alerts polled every 15 s, normal alerts every 60 s      │
   │  · Validates alert still firing in live Prometheus                   │
   │  · Checks device maintenance status (if enabled)                    │
@@ -21,13 +21,13 @@ The closed-loop pipeline is the autonomous incident-response system built into t
                              │ creates RCA task
                              ▼
   ┌──────────────────────────────────────────────────────────────────────┐
-  │  Stage 1 — RCA  (ops_agent)                                          │
+  │  Stage 1 — RCA  (ai-agent)                                           │
   │  Correlates alerts, metrics, and syslogs into a root cause summary  │
   └──────────────────────────┬───────────────────────────────────────────┘
                              │ creates fix_proposal task
                              ▼
   ┌──────────────────────────────────────────────────────────────────────┐
-  │  Stage 2 — Fix Proposal  (eng_agent)                                 │
+  │  Stage 2 — Fix Proposal  (ai-agent)                                  │
   │  Checks runbook library first, then generates specific remediation   │
   │  Produces a config diff showing before/after                         │
   └────────┬──────────────────────────────────────────────┬──────────────┘
@@ -36,7 +36,7 @@ The closed-loop pipeline is the autonomous incident-response system built into t
            ▼                                              │
   ┌─────────────────────────────────┐                    │
   │  Stage 3 — Validation           │                    │
-  │  (chaos_agent)                  │                    │
+  │  (ai-agent)                     │                    │
   │  Blast-radius check, topology   │                    │
   │  analysis, read-only device     │                    │
   │  inspection                     │                    │
@@ -63,13 +63,13 @@ All stages are tracked in the shared **TaskStore** (SQLite by default, PostgreSQ
 
 ### Task types
 
-| Type            | Owner         | Created by                   | Purpose                                                               |
-| --------------- | ------------- | ---------------------------- | --------------------------------------------------------------------- |
-| `incident`      | `system`      | `system` (AlertPoller)       | Groups correlated alerts from the same device into one P1–P4 incident |
-| `rca`           | `ops_agent`   | `system` (AlertPoller)       | Root cause analysis of a firing alert                                 |
-| `fix_proposal`  | `eng_agent`   | `ops_agent`                  | Specific remediation commands in check mode, with config diff         |
-| `validation`    | `chaos_agent` | `eng_agent`                  | Blast-radius and correctness check of the fix                         |
-| `approval_gate` | `human`       | `eng_agent` or `chaos_agent` | Human sign-off required before live execution                         |
+| Type            | Owner       | Created by                  | Purpose                                                               |
+| --------------- | ----------- | --------------------------- | --------------------------------------------------------------------- |
+| `incident`      | `system`    | `system` (AlertPoller)      | Groups correlated alerts from the same device into one P1–P4 incident |
+| `rca`           | `ai-agent`  | `system` (AlertPoller)      | Root cause analysis of a firing alert                                 |
+| `fix_proposal`  | `ai-agent`  | `ai-agent` (after RCA)      | Specific remediation commands in check mode, with config diff         |
+| `validation`    | `ai-agent`  | `ai-agent` (after fix)      | Blast-radius and correctness check of the fix                         |
+| `approval_gate` | `human`     | `ai-agent` (after validate) | Human sign-off required before live execution                         |
 
 ### Status lifecycle
 
@@ -97,7 +97,7 @@ Devices in a maintenance window always receive `priority=low` regardless of seve
 
 ## AlertPoller Behaviour
 
-The AlertPoller runs in a background thread inside the ops_agent container. Key behaviours:
+The AlertPoller runs in a background thread inside the `ai-agent` container. Key behaviours:
 
 ### Priority-aware polling
 
@@ -134,7 +134,7 @@ If an RCA, fix_proposal, or validation task fails, the runner schedules an autom
 
 ---
 
-## Stage 1 — Root Cause Analysis (Ops Agent)
+## Stage 1 — Root Cause Analysis (Unified AI Agent)
 
 **Triggered by:** AlertPoller detecting a new firing alert
 **Task type:** `rca`
@@ -150,7 +150,7 @@ If an RCA, fix_proposal, or validation task fails, the runner schedules an autom
 6. Creates or links to an Incident grouping entity
 7. Creates an `rca` task and immediately runs the investigation
 
-### What the Ops Agent investigates
+### What the agent investigates
 
 ```
 1. get_active_alerts()               → confirm what is currently firing
@@ -171,17 +171,17 @@ CONFIDENCE: high | medium | low
 
 ### Escalation decision
 
-If `ACTION` contains any of `no action`, `no fix`, `already resolved`, `self-healed`, or `monitor only`, the pipeline stops. Otherwise a `fix_proposal` task is created for the Engineering Agent.
+If `ACTION` contains any of `no action`, `no fix`, `already resolved`, `self-healed`, or `monitor only`, the pipeline stops. Otherwise a `fix_proposal` task is created and the agent proceeds to Stage 2.
 
 ---
 
-## Stage 2 — Fix Proposal (Engineering Agent)
+## Stage 2 — Fix Proposal (Unified AI Agent)
 
 **Triggered by:** RCA task completing with an actionable recommendation
 **Task type:** `fix_proposal`
-**Poll interval:** 15 s (critical/high), 90 s (normal)
+**Poll interval:** 15 s (critical/high), 60 s (normal)
 
-### What the Engineering Agent does
+### What the agent does
 
 ```
 0. get_runbook(alertname)                              → check runbook library FIRST
@@ -212,15 +212,28 @@ REASON:     <one sentence explaining the fix>
 
 `COMMANDS` may be provided inline or in a fenced code block — the parser handles both formats.
 
-### Confidence-based auto-approval
+### Policy-based auto-approval
 
-If all three conditions are met, the approval gate is **auto-approved** without human intervention:
+Whether the approval gate requires human intervention is determined by the **PolicyRegistry** matching the action against the `action_policies` table. The registry evaluates `fix_type`, `alertname`, `device_role`, `environment`, `confidence`, `risk`, and `prior_success_count` against stored policies, returning an `AutonomyDecision` with level L0–L5:
 
-- `RISK = low`
-- `CONFIDENCE = high`
-- The same `(device, fix_type)` combination has been successfully executed at least **2 previous times** without a follow-up alert
+| Level | Name | Approval behaviour |
+| --- | --- | --- |
+| L0 | Manual | Telemetry only — agent reports, never acts |
+| L1 | Advisory | Agent surfaces diagnosis; human decides what to do |
+| L2 | Supervised | Agent stages the fix and waits at the gate (default) |
+| L3 | Human gate | Gate always presented; executes immediately on approval click |
+| L4 | Auto-approve | Gate auto-approved when policy thresholds met (confidence, risk, prior successes) |
+| L5 | Autonomous | Agent executes and notifies; requires explicit operator configuration |
 
-Auto-approved gates show `assigned_to = system` and an `auto_approved` event in the timeline.
+The default policy (when no match found) is **L2 — Supervised**. Seven seed policies are loaded on first startup covering common BGP and interface scenarios. Policies are managed in the **⚙️ Config** tab of the Clano UI or via the `action_policies` database table.
+
+The **LearningEngine** automatically adjusts policy levels based on execution outcomes:
+- After `N` consecutive successful resolutions (`alert_resolved=True`), the policy is promoted one level (default `N=3`, capped at L4).
+- After any failed execution (`alert_resolved=False`), the policy is immediately demoted one level (never below L1).
+
+Auto-approved gates record an `auto_approved` event with `autonomy_level` and `policy_id` in the detail JSON. Human-approved gates record an `approval_policy` event with the same fields.
+
+See [`docs/policy-autonomy.md`](policy-autonomy.md) for full details on the matching algorithm, seed policies, and how to add or modify policies.
 
 ### Routing decision
 
@@ -228,18 +241,18 @@ Auto-approved gates show `assigned_to = system` and an `auto_approved` event in 
 | -------------------------------------------------------- | ---------------------------------------------------- |
 | `FIX_TYPE = no_action`                                   | Pipeline ends                                        |
 | `RISK = high` or `FIX_TYPE = escalate_human`             | Approval gate created immediately (skips validation) |
-| `RISK = low` or `medium` and `FIX_TYPE ≠ escalate_human` | Validation task created for Chaos Agent              |
+| `RISK = low` or `medium` and `FIX_TYPE ≠ escalate_human` | Validation task created — agent proceeds to Stage 3  |
 | `do_not_auto_execute = true` (maintenance window)        | Auto-approval blocked; human gate always created     |
 
 ---
 
-## Stage 3 — Validation (Chaos Agent)
+## Stage 3 — Validation (Unified AI Agent)
 
 **Triggered by:** Fix proposal completing with low or medium risk
 **Task type:** `validation`
-**Poll interval:** 15 s (critical/high), 120 s (normal)
+**Poll interval:** 15 s (critical/high), 60 s (normal)
 
-### What the Chaos Agent checks
+### What the agent checks
 
 ```
 1. get_topology()                    → blast radius: which other devices depend on this?
@@ -260,7 +273,7 @@ NOTES:          <one sentence summarising the validation finding>
 
 ### Feedback propagation
 
-After completing, the Chaos Agent writes structured feedback to the parent `fix_proposal` task and the grandparent `rca` task for long-term accuracy tracking in the KPI dashboard.
+After completing, the agent writes structured feedback to the parent `fix_proposal` task and the grandparent `rca` task for long-term accuracy tracking in the KPI dashboard.
 
 ### Routing decision
 
@@ -273,7 +286,7 @@ After completing, the Chaos Agent writes structured feedback to the parent `fix_
 
 ## Stage 4 — Approval Gate (Human)
 
-**Triggered by:** Engineering Agent (high-risk) or Chaos Agent (validated low/medium-risk fix)
+**Triggered by:** AI agent (high-risk fix) or AI agent (validated low/medium-risk fix)
 **Task type:** `approval_gate`
 **Status on creation:** `awaiting_approval`
 
@@ -287,10 +300,10 @@ The approval gate contains everything a human needs to make an informed decision
 | `commands`           | Exact configuration lines to be applied            |
 | `config_diff`        | Unified diff of current running-config vs proposed |
 | `fix_type`           | Classification of the change                       |
-| `risk_confirmed`     | Risk level as assessed by the Chaos Agent          |
-| `validation_verdict` | Chaos Agent verdict (`correct` / `partial` / etc.) |
-| `chaos_notes`        | One-sentence Chaos Agent validation summary        |
-| `rca`                | Full RCA context from the Ops Agent                |
+| `risk_confirmed`     | Risk level confirmed by the validation stage       |
+| `validation_verdict` | Validation verdict (`correct` / `partial` / etc.) |
+| `chaos_notes`        | One-sentence validation summary                    |
+| `rca`                | Full RCA context from Stage 1                      |
 
 ### Approval webhook
 
@@ -356,7 +369,7 @@ The **Alert Processing Pipeline** section offers two views, toggled with the **�
 A card layout shows the four pipeline stages for a selected alert fingerprint:
 
 ```
-[🔍 RCA · ops_agent] › [🔧 Fix Proposal · eng_agent] › [✅ Validation · chaos_agent] › [🔐 Approval Gate · human]
+[🔍 RCA · ai-agent] › [🔧 Fix Proposal · ai-agent] › [✅ Validation · ai-agent] › [🔐 Approval Gate · human]
 ```
 
 Each card shows status, key result fields, and age. Connecting arrows turn green when stages complete.
@@ -415,7 +428,7 @@ All pipeline behaviour is controlled by environment variables in `.env`:
 | Variable                        | Default                 | Description                                    |
 | ------------------------------- | ----------------------- | ---------------------------------------------- |
 | `OPENAI_API_KEY`                | —                       | Required for OpenAI (gpt-4o)                   |
-| `OPENAI_MODEL`                  | `gpt-4o`                | Model used by all three agents                 |
+| `OPENAI_MODEL`                  | `gpt-4o`                | Model used by the unified agent                |
 | `DAILY_BUDGET_USD`              | `5.00`                  | Hard daily spend limit across all agents       |
 | `MAX_TOKENS_PER_AGENT_PER_HOUR` | `2,000,000`             | Hourly token cap per agent                     |
 | `ACTIVITY_DB_PATH`              | `/app/data/activity.db` | SQLite path (used when `TASK_DB_URL` is empty) |
@@ -488,7 +501,7 @@ RABBITMQ_URL=amqp://netauto:password@rabbitmq:5672/
 
 ## Data Model
 
-All pipeline state lives in three tables inside the task store (SQLite or PostgreSQL).
+Pipeline state lives in seven tables inside the task store (SQLite or PostgreSQL).
 
 ### `tasks`
 
@@ -501,7 +514,7 @@ All pipeline state lives in three tables inside the task store (SQLite or Postgr
 | `type`                | TEXT    | `incident` / `rca` / `fix_proposal` / `validation` / `approval_gate`               |
 | `status`              | TEXT    | See lifecycle diagram                                                              |
 | `priority`            | TEXT    | `critical` / `high` / `normal` / `low`                                             |
-| `created_by`          | TEXT    | `system`, `ops_agent`, `eng_agent`, `chaos_agent`                                  |
+| `created_by`          | TEXT    | `system` (AlertPoller), `ai-agent` (pipeline stages), `intent_evaluator`           |
 | `assigned_to`         | TEXT    | Agent or `human` responsible for processing                                        |
 | `content`             | TEXT    | JSON input context passed to the processing agent                                  |
 | `result`              | TEXT    | JSON structured output after completion                                            |
@@ -524,7 +537,8 @@ Append-only event log. Key event types:
 | `alert_correlated`      | rca               | `alertname`, `fingerprint`, `severity`                                                  |
 | `approval_requested`    | approval_gate     | —                                                                                       |
 | `approved`              | approval_gate     | —                                                                                       |
-| `auto_approved`         | approval_gate     | `reason` (risk + confidence + prior executions)                                         |
+| `auto_approved`         | approval_gate     | `reason`, `autonomy_level` (L0–L5), `policy_id`                                         |
+| `approval_policy`       | approval_gate     | `autonomy_level`, `policy_id`, `reason` (recorded when human approves a policy-gated task) |
 | `execution_started`     | approval_gate     | `device`, `commands`                                                                    |
 | `execution_suppressed`  | approval_gate     | `reason` (maintenance window)                                                           |
 | `execution_aborted`     | approval_gate     | `reason` (lab validation failed)                                                        |
@@ -539,7 +553,27 @@ Append-only event log. Key event types:
 
 ### `task_feedback`
 
-Structured feedback written by the Chaos Agent: `verdict`, `confidence` (0.0–1.0), `notes`. Used to compute the KPI validation accuracy metric.
+Structured feedback written by the validation stage: `verdict`, `confidence` (0.0–1.0), `notes`. Used to compute the KPI validation accuracy metric.
+
+### `token_usage`
+
+Token counts and estimated USD cost per agent session. Read by the Cost Monitor panel in the Clano UI.
+
+### `action_policies`
+
+One row per autonomy policy. Fields: `id`, `tenant_id`, `name`, `alertname`, `fix_type`, `device_role`, `environment`, `min_confidence`, `max_risk`, `min_prior_successes`, `autonomy_level` (L0–L5), `enabled`, `created_at`.
+
+Empty string in `alertname`, `fix_type`, `device_role`, or `environment` acts as a wildcard that matches any value. See [`docs/policy-autonomy.md`](policy-autonomy.md).
+
+### `policy_performance`
+
+One row per execution outcome recorded by the LearningEngine. Fields: `id`, `policy_id`, `fix_type`, `device_role`, `tenant_id`, `alert_resolved` (0/1), `ttr_seconds`, `created_at`. Queried to count consecutive successes for promotion decisions.
+
+### `standing_intents`
+
+One row per standing intent. Fields: `id`, `tenant_id`, `name`, `intent_type` (`suppress` / `escalate` / `monitor` / `chaos_schedule`), `device`, `alertname`, `metric_query`, `threshold`, `description`, `enabled`, `last_triggered_at`, `created_at`.
+
+See [`docs/intent-layer.md`](intent-layer.md).
 
 ---
 
@@ -597,7 +631,7 @@ risk: low
 automation_confidence: high
 ```
 
-The Engineering Agent calls `get_runbook(alertname)` as its first tool call for any automated fix request. If no Gitea token is configured, the agent falls back to built-in runbooks for the seven standard alert types.
+The AI agent calls `get_runbook(alertname)` as its first tool call for any fix-proposal stage. If no Gitea token is configured, the agent falls back to built-in runbooks for the seven standard alert types.
 
 ### Migrating to PostgreSQL
 

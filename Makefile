@@ -41,7 +41,7 @@ NC     := \033[0m
 help:  ## Show this help message
 	@awk 'BEGIN { \
 	    FS = ":.*##"; \
-	    printf "\n  \033[1mNetwork Automation Stack\033[0m  —  available targets\n" \
+	    printf "\n  \033[1mClano — Closed-Loop Autonomous Network Ops\033[0m  —  available targets\n" \
 	  } \
 	  /^##@/ { printf "\n  $(YELLOW)%s$(NC)\n", substr($$0, 5) } \
 	  /^[a-zA-Z_-]+:.*?##/ { printf "    $(CYAN)%-24s$(NC) %s\n", $$1, $$2 }' \
@@ -294,11 +294,11 @@ sync-jobs:  ## Pull the latest commits from the netauto-jobs Git repo into Nauto
 define AGENT_CHAT_PY
 import sys, httpx, json
 OPS_URL = 'http://localhost:8000'
-print('Connecting to Ops Agent...')
+print('Connecting to Clano AI Agent...')
 session_id = ''
 while True:
     try:
-        msg = input('\n[Ops Agent] > ').strip()
+        msg = input('\n[Clano] > ').strip()
         if msg.lower() in ('exit', 'quit', 'q'):
             break
         if not msg:
@@ -320,8 +320,8 @@ while True:
 endef
 export AGENT_CHAT_PY
 
-agent-chat:  ## Start an interactive CLI chat with the Ops Agent
-	@echo -e "$(CYAN)Network AI Agents CLI – type 'exit' to quit$(NC)"
+agent-chat:  ## Start an interactive CLI chat with the AI agent
+	@echo -e "$(CYAN)Clano AI Agent CLI – type 'exit' to quit$(NC)"
 	@echo ""
 	@which python3 >/dev/null 2>&1 || (echo "python3 required"; exit 1)
 	@python3 -c "$$AGENT_CHAT_PY"

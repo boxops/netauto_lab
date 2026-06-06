@@ -1,21 +1,24 @@
 # AI Agent Tools Framework
 
-This document describes the tool architecture for the network automation AI agents, the data model
-behind each tier, and the workflow patterns agents are expected to follow.
+This document describes the tool architecture for the network automation AI agent, the data model
+behind each tier, and the workflow patterns the agent is expected to follow.
 
 ---
 
 ## Overview
 
-Each agent (Ops, Engineering, Chaos) is a LangGraph ReAct agent backed by an LLM. The agent
-decides which tools to call and in what order based on the user's request and the guidance in its
-system prompt. Tools are the only mechanism through which an agent can access live data — the LLM
-itself has no network access.
+The unified AI agent is a LangGraph ReAct agent backed by an LLM. It decides which tools to call
+and in what order based on the user's request and the guidance in its system prompt. Tools are the
+only mechanism through which the agent can access live data — the LLM itself has no network access.
 
-### The Four-Tier Model
+### The Five-Tier Model
 
 ```
 ┌────────────────────────────────────────────────────────────┐
+│  Tier 0 – Runbook      Gitea runbook library               │
+│  Known fix?            get_runbook(alertname)              │
+│  Check first.          Returns YAML procedure if exists    │
+├────────────────────────────────────────────────────────────┤
 │  Tier 1 – Discovery    Nautobot REST API                   │
 │  What exists?          devices, interfaces, topology,      │
 │                        VLANs, prefixes, IP addresses       │
@@ -28,15 +31,17 @@ itself has no network access.
 │  What happened?        interface events, BGP events,       │
 │                        error/warning messages              │
 ├────────────────────────────────────────────────────────────┤
-│  Tier 4 – Actions      Nautobot Jobs                       │
+│  Tier 4 – Actions      Nautobot Jobs + chaos tools         │
 │  Change something      run_show_commands (Commands Runner) │
 │  (requires approval)   run_config_commands (Deploy Config) │
+│                        chaos tools (CHAOS_TOOLS_ENABLED)   │
 └────────────────────────────────────────────────────────────┘
 ```
 
-Agents work top-to-bottom through the tiers: discover what exists, measure its current state,
-investigate event history, then act. Skipping Tier 1 — reaching for metrics or actions without
-first grounding in inventory data — is the primary cause of poor agent responses.
+The agent works top-to-bottom through the tiers: check for a known runbook, then discover what
+exists, measure current state, investigate event history, and finally act. Skipping Tier 1 —
+reaching for metrics or actions without first grounding in inventory data — is the primary cause
+of poor agent responses.
 
 ---
 
@@ -117,6 +122,17 @@ Actions are executed by submitting jobs to the Nautobot Celery queue. The two jo
 
 ## Tool Reference
 
+### Tier 0 — Runbook Library
+
+| Tool                       | When to use                                             | Key argument      |
+| -------------------------- | ------------------------------------------------------- | ----------------- |
+| `get_runbook(alertname)`   | **First tool call** for any pipeline alert investigation | exact alert name  |
+
+Returns the YAML runbook from the Gitea `runbooks` repository if one exists for the alert name.
+When a runbook is found, the agent follows its prescribed steps rather than re-deriving the fix
+from first principles. This reduces token usage by 60–80% for known alert types. Custom runbooks
+can be added to the Gitea `runbooks` repository as `{AlertName}.yaml` files.
+
 ### Tier 1 — Nautobot Discovery
 
 | Tool                                     | When to use                                    | Key argument     |
@@ -152,19 +168,29 @@ Actions are executed by submitting jobs to the Nautobot Celery queue. The two jo
 | `get_recent_errors(device_name, minutes)`    | ERROR/WARNING/CRITICAL log lines        |
 | `query_logs(device, pattern, minutes)`       | Arbitrary log pattern (LogQL)           |
 
-### Tier 4 — Actions (Nautobot Jobs)
+### Tier 4 — Actions (Nautobot Jobs + Chaos Tools)
 
-All action tools submit jobs to the Nautobot Celery queue and poll for completion.
+**Standard action tools** (always available):
+
+All standard action tools submit jobs to the Nautobot Celery queue and poll for completion.
 Output is read from `GET /api/extras/job-results/{id}/logs/`.
+
+| Tool                                                         | Nautobot Job                        | Notes                               |
+| ------------------------------------------------------------ | ----------------------------------- | ----------------------------------- |
+| `run_show_commands(device_name, commands)`                   | Commands Runner (`is_config=False`) | Read-only; any show command         |
+| `run_config_commands(device_name, config_lines, check_mode)` | Deploy Device Configurations        | check_mode=True (default) = dry run |
+
+**Chaos tools** (available only when `CHAOS_TOOLS_ENABLED=true`):
+
+Chaos tools are destructive by default and intended for lab environments only. When
+`CHAOS_TOOLS_ENABLED=false` (the default), `verify_bgp_state` is the only chaos tool exposed.
 
 | Tool                                                         | Nautobot Job                        | Notes                                                    |
 | ------------------------------------------------------------ | ----------------------------------- | -------------------------------------------------------- |
-| `run_show_commands(device_name, commands)`                   | Commands Runner (`is_config=False`) | Read-only; any show command                              |
-| `run_config_commands(device_name, config_lines, check_mode)` | Deploy Device Configurations        | check_mode=True (default) = simulation only              |
-| `shutdown_interface(device, interface, check_mode)`          | Deploy Device Configurations        | Chaos — admin-shut; check=True shows current state first |
-| `restore_interface(device, interface, check_mode)`           | Deploy Device Configurations        | Chaos — no shutdown                                      |
-| `flap_bgp_neighbor(device, neighbor_ip, method, check_mode)` | Commands Runner (`is_config=True`)  | Chaos — clear BGP session                                |
-| `verify_bgp_state(device, neighbor_ip)`                      | Commands Runner (`is_config=False`) | Chaos — confirm BGP is Established                       |
+| `shutdown_interface(device, interface, check_mode)`          | Deploy Device Configurations        | Admin-shut; check=True (default) shows current state     |
+| `restore_interface(device, interface, check_mode)`           | Deploy Device Configurations        | No shutdown — restores interface to service              |
+| `flap_bgp_neighbor(device, neighbor_ip, method, check_mode)` | Commands Runner (`is_config=True`)  | Clears BGP session; check=True does not disrupt session  |
+| `verify_bgp_state(device, neighbor_ip)`                      | Commands Runner (`is_config=False`) | Read-only — confirms BGP peer is Established             |
 
 ---
 
@@ -274,36 +300,41 @@ get_recent_errors(minutes=60)
 
 ---
 
-## Agent Tool Sets
+## Agent Tool Set
 
-| Tool                    | Ops | Engineering | Chaos |
-| ----------------------- | :-: | :---------: | :---: |
-| get_all_devices         |  ✓  |      ✓      |   ✓   |
-| get_device_info         |  ✓  |      ✓      |   ✓   |
-| get_device_interfaces   |  ✓  |      ✓      |   ✓   |
-| get_topology            |  ✓  |      ✓      |   ✓   |
-| get_connected_devices   |  ✓  |      ✓      |   ✓   |
-| get_vlans               |  ✓  |      ✓      |   —   |
-| get_prefixes            |  ✓  |      ✓      |   —   |
-| get_ip_addresses        |  ✓  |      ✓      |   —   |
-| get_available_ips       |  ✓  |      ✓      |   —   |
-| search_nautobot         |  ✓  |      ✓      |   —   |
-| get_devices_by_location |  ✓  |      ✓      |   —   |
-| get_active_alerts       |  ✓  |      ✓      |   ✓   |
-| get_recent_alert_events |  ✓  |      —      |   ✓   |
-| get_device_metrics      |  ✓  |      ✓      |   ✓   |
-| get_interface_metrics   |  ✓  |      ✓      |   ✓   |
-| query_prometheus        |  ✓  |      —      |   ✓   |
-| get_interface_events    |  ✓  |      —      |   ✓   |
-| get_bgp_events          |  ✓  |      —      |   ✓   |
-| get_recent_errors       |  ✓  |      —      |   ✓   |
-| query_logs              |  ✓  |      —      |   ✓   |
-| run_show_commands       |  ✓  |      ✓      |   ✓   |
-| run_config_commands     |  ✓  |      ✓      |   ✓   |
-| shutdown_interface      |  —  |      —      |   ✓   |
-| restore_interface       |  —  |      —      |   ✓   |
-| flap_bgp_neighbor       |  —  |      —      |   ✓   |
-| verify_bgp_state        |  —  |      —      |   ✓   |
+The unified AI agent has access to all tools from `OPS_TOOLS` (the full set defined in
+`shared/tools.py`) plus the chaos tools from `ops_agent/chaos_tools.py` (gated by
+`CHAOS_TOOLS_ENABLED`).
+
+| Tool                    | Tier | Notes                                          |
+| ----------------------- | :--: | ---------------------------------------------- |
+| `get_runbook`           |  0   | Always called first for alert investigations   |
+| `get_all_devices`       |  1   |                                                |
+| `get_device_info`       |  1   |                                                |
+| `get_device_interfaces` |  1   |                                                |
+| `get_topology`          |  1   |                                                |
+| `get_connected_devices` |  1   |                                                |
+| `get_vlans`             |  1   |                                                |
+| `get_prefixes`          |  1   |                                                |
+| `get_ip_addresses`      |  1   |                                                |
+| `get_available_ips`     |  1   |                                                |
+| `search_nautobot`       |  1   |                                                |
+| `get_devices_by_location` | 1  |                                                |
+| `get_active_alerts`     |  2   |                                                |
+| `get_recent_alert_events` | 2  |                                                |
+| `get_device_metrics`    |  2   |                                                |
+| `get_interface_metrics` |  2   |                                                |
+| `query_prometheus`      |  2   |                                                |
+| `get_interface_events`  |  3   |                                                |
+| `get_bgp_events`        |  3   |                                                |
+| `get_recent_errors`     |  3   |                                                |
+| `query_logs`            |  3   |                                                |
+| `run_show_commands`     |  4   |                                                |
+| `run_config_commands`   |  4   | check_mode=True by default                     |
+| `shutdown_interface`    |  4   | Chaos — requires `CHAOS_TOOLS_ENABLED=true`    |
+| `restore_interface`     |  4   | Chaos — requires `CHAOS_TOOLS_ENABLED=true`    |
+| `flap_bgp_neighbor`     |  4   | Chaos — requires `CHAOS_TOOLS_ENABLED=true`    |
+| `verify_bgp_state`      |  4   | Read-only — always available                   |
 
 ---
 
@@ -312,12 +343,12 @@ get_recent_errors(minutes=60)
 1. Implement the function in `ai-agents/shared/tools.py` decorated with `@tool`.
 2. Write a docstring that explains **what the tool returns**, **when to use it vs. similar tools**,
    and **what each argument means** with an example value.
-3. Add the tool to the appropriate set (`_NAUTOBOT_TOOLS`, `_PROMETHEUS_TOOLS`, `_LOKI_TOOLS`)
-   or directly to `OPS_TOOLS` / `ENG_TOOLS` if agent-specific.
-4. Update the system prompt of any agent that should use it — add it to the Tool Guide section
-   and to any relevant Workflow Patterns.
-5. Update this document: add a row to the Tool Reference table and the Agent Tool Sets table.
-6. Rebuild the affected agent containers: `make rebuild` or `make rebuild SVC=<service-name>`.
+3. Add the tool to the appropriate tier list (`_NAUTOBOT_TOOLS`, `_PROMETHEUS_TOOLS`,
+   `_LOKI_TOOLS`, `_ACTION_TOOLS`) — `OPS_TOOLS` is automatically assembled from these.
+4. Update the system prompt in `ai-agents/ops_agent/agent.py` — add the tool to the Tool Guide
+   section and to any relevant Workflow Patterns.
+5. Update this document: add a row to the Tool Reference table and the Agent Tool Set table.
+6. Rebuild the agent container: `make rebuild SVC=ai-agent`.
 
 ### Docstring Template
 

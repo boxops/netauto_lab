@@ -100,12 +100,13 @@ docker compose --profile host-metrics up -d node-exporter
 
 ### Step 4: Access Services
 
-| Service  | URL                   | Credentials                                      |
-| -------- | --------------------- | ------------------------------------------------ |
-| Nautobot | http://localhost:8080 | admin / `$NAUTOBOT_SUPERUSER_PASSWORD` in `.env` |
-| Grafana  | http://localhost:3000 | admin / `$GRAFANA_ADMIN_PASSWORD` in `.env`      |
-| Gitea    | http://localhost:3001 | gitadmin / `$GITEA_ADMIN_PASSWORD` in `.env`     |
-| Agent UI | http://localhost:7860 | (none)                                           |
+| Service   | URL                   | Credentials                                      |
+| --------- | --------------------- | ------------------------------------------------ |
+| Nautobot  | http://localhost:8080 | admin / `$NAUTOBOT_SUPERUSER_PASSWORD` in `.env` |
+| Grafana   | http://localhost:3000 | admin / `$GRAFANA_ADMIN_PASSWORD` in `.env`      |
+| Gitea     | http://localhost:3001 | gitadmin / `$GITEA_ADMIN_PASSWORD` in `.env`     |
+| Clano UI  | http://localhost:7860 | (none)                                           |
+| AI Agent  | http://localhost:8000 | (none — set `AGENT_API_KEY` in `.env` to enable) |
 
 ### Step 5 (Optional): Deploy the Virtual Lab
 

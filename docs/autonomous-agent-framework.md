@@ -153,12 +153,12 @@ means updating tool implementations, not agent logic.
 
 | Stage | Name | Owner | Key Output |
 |---|---|---|---|
-| 1 | Sense & Correlate | Sensor agent / poller | Incident with grouped alerts, priority |
-| 2 | Diagnose | Diagnosis agent | RCA with confidence score and evidence |
-| 3 | Remediate | Engineering agent | Commands, risk level, config diff |
-| 4 | Validate | Validation agent | Blast-radius verdict and correctness check |
-| — | Approval Gate | Human (or auto) | Approved / rejected decision |
-| 5 | Verify | Executor / verifier | Config applied status, alert resolution, TTR |
+| 1 | Sense & Correlate | AlertPoller (ai-agent) | Incident with grouped alerts, priority |
+| 2 | Diagnose | ai-agent (LangGraph) | RCA with confidence score and evidence |
+| 3 | Remediate | ai-agent (LangGraph) | Commands, risk level, config diff |
+| 4 | Validate | ai-agent (LangGraph) | Blast-radius verdict and correctness check |
+| — | Approval Gate | Human (or auto-policy) | Approved / rejected decision |
+| 5 | Verify | ai-agent (post-execution) | Config applied status, alert resolution, TTR |
 
 The loop closes at Stage 5 when the system confirms the intent was restored. If the alert
 persists after execution, the loop restarts at Stage 1 with the verification failure as
@@ -239,9 +239,12 @@ unified agent) or each role can run as a separate service.
 | **Verifier** | Confirm config applied, check alert resolution, record TTR | `execution_verified` event |
 | **Learner** | Aggregate feedback, update autonomy levels, identify runbook gaps | metrics + policy updates |
 
-**Separation guideline:** The Remediator must never also be the Validator. The Validator
-must never also be the Executor. These separations mirror standard change-management
-practice and are the minimal safety net for autonomous operations.
+**Separation in the unified agent:** Although all roles are implemented inside one
+LangGraph state machine, the stage separation is enforced by the graph topology —
+each stage node is called in sequence and cannot short-circuit to a downstream stage.
+The approval gate node enforces the human (or policy) check before the executor node
+can run. This provides the same safety guarantees as a multi-process separation while
+eliminating inter-service coordination overhead.
 
 ---
 
@@ -492,137 +495,81 @@ framework above. The goal is to identify what to evolve versus what to replace.
 | Aspect | Verdict | Notes |
 |---|---|---|
 | Four-stage pipeline | **Strong** | RCA → Fix → Validation → Approval maps cleanly to the framework |
-| Task store data model | **Strong** | Events, feedback, incidents, tenant_id already present |
-| Tool tier model | **Strong** | Discovery → Metrics → Logs → Actions is textbook |
+| Task store data model | **Strong** | Events, feedback, incidents, tenant_id — 7 tables with full audit trail |
+| Tool tier model | **Strong** | Runbook → Discovery → Metrics → Logs → Actions is textbook |
 | Runbook-first approach | **Strong** | `get_runbook()` is the first tool call; Gitea-backed |
-| Stage separation | **Strong** | Diagnosis, remediation, and validation are distinct agents |
-| Approval gate | **Strong** | Config diff, risk, validation verdict all presented |
+| Stage separation | **Strong** | All pipeline roles in one unified agent; stages are LangGraph state machine nodes |
+| Approval gate | **Strong** | Config diff, autonomy level, blast radius, validation verdict, rejection reason capture |
 | Audit trail | **Strong** | Append-only event log with 20+ event types |
+| L0–L5 autonomy policies | **Strong** | `PolicyRegistry` matches `(fix_type, alertname, device_role, environment)` to autonomy level |
+| LearningEngine | **Strong** | Auto-promotes after 3 consecutive successes (capped at L4); demotes on failure |
+| Intent layer | **Strong** | `IntentRegistry` + `IntentEvaluator` for suppress, escalate, monitor, chaos_schedule |
+| TopologyCorrelator | **Strong** | BFS on Nautobot cable graph; blast-radius and cascading-failure root-cause inference |
 | Rate limiting & budget | **Good** | Per-agent hourly token cap + daily USD budget |
-| Maintenance windows | **Good** | Nautobot-backed, blocks auto-execute |
-| Auto-approval | **Good** | Track-record-based, foundation for graduated autonomy |
+| Maintenance windows | **Good** | Nautobot-backed; blocks auto-execute regardless of autonomy level |
 | Lab validation | **Good** | Optional pre-production test on Containerlab |
-| SSE real-time UI | **Good** | Chronicle view is a good explainability surface |
+| SSE real-time UI | **Good** | Chronicle view with autonomy level badge, intent-trigger badge, Stage 5 Verify chapter |
 | Webhook notifications | **Good** | HMAC-signed, approve/reject links |
+| RabbitMQ task bus | **Good** | Near-zero latency dispatch; polling loops remain as fallback |
 
-### Where the Stack Has Gaps
+### Remaining Gaps
 
 | Gap | Severity | Description |
 |---|---|---|
-| No intent/policy layer | **High** | System is purely reactive. There is no standing policy like "all BGP peers must be up". Intent is implicit in Alertmanager rules, not declared in this system. |
-| Binary autonomy model | **Medium** | Auto-approve is triggered by risk+confidence+execution count. There is no per-action-class autonomy level configuration. Hard to tune per environment. |
-| No feedback loop to agent behavior | **Medium** | Feedback (TTR, verdict, resolved) is collected but does not update agent prompts, runbooks, or autonomy thresholds dynamically. Manual process. |
-| Cross-domain correlation | **Medium** | Alert correlation is per-device within a 15-minute window. Cascading failures across devices with a shared root cause create separate incidents. |
-| Polling latency | **Medium** | Background thread polling (15–120 s) is acceptable for a lab but limits time-to-diagnosis in production. RabbitMQ is already optional; making it default eliminates this. |
-| Agent roles hardcoded | **Low** | Ops/Eng/Chaos split is in Python files. Adding a new specialized agent (e.g., a security agent) requires code changes, not configuration. |
-| No proactive health checks | **Low** | The system responds to Prometheus alerts. It does not proactively query for degraded state that has not yet triggered an alert (e.g., prefix count dropping toward a threshold). |
 | Single-tenant UI | **Low** | `tenant_id` exists in the task store schema but the UI does not filter by tenant. |
+| Proactive runbook gap detection | **Low** | LLM-generated fixes are not automatically proposed as runbook candidates in Gitea. Manual runbook authoring is required. |
+| Non-LLM deterministic validation | **Low** | Validation is always LLM-driven. Deterministic checks (e.g., "interface oper-state must be up") could short-circuit the LLM for common fix types. |
 
 ### Feasibility Verdict
 
-**The current stack is the right foundation. A rewrite is not warranted.**
+**The current stack fully implements the five-stage framework.**
 
-The core architecture — task store, pipeline stages, tool tier model, event log, and
-approval gate — is sound and aligns with how Cisco, Juniper, and Aruba approach the
-same problem. The gaps are in policy governance and proactive monitoring, which are
-additive features, not architectural replacements.
+The original gaps (intent layer, graduated autonomy, feedback loop, topology correlation,
+proactive monitoring, RabbitMQ dispatch) have all been addressed. The core architecture
+is sound and aligns with how Cisco, Juniper, and Aruba approach the same problem.
 
-A rewrite would discard several months of accumulated operational detail (runbooks,
-the event schema, the Chronicle UI, maintenance window logic) without producing a
-meaningfully better foundation.
-
-The correct path is evolutionary: add the intent/policy layer on top of the reactive
-pipeline, promote RabbitMQ from optional to default, and formalize autonomy levels
-as configuration.
+Remaining opportunities are additive: multi-tenant UI filtering, automatic runbook candidate
+extraction from LLM-generated fixes, and deterministic pre-validation for common fix types.
 
 ---
 
-## 10. Recommended Roadmap
+## 10. Roadmap Status
 
-These are sequenced by impact-to-effort ratio, not by difficulty. Each item is
-independent; they do not need to be done in order.
+Items from the original roadmap, with current implementation status.
 
-### Tier 1 — High Impact, Low Effort
+### ✅ Completed
 
-**1.1 Formalize autonomy levels as configuration**
+| Item | Notes |
+|---|---|
+| Formalize autonomy levels as configuration | `action_policies` table + `PolicyRegistry` — L0–L5 with match criteria |
+| Make RabbitMQ the default dispatch path | `RABBITMQ_URL` is set by default in `docker-compose.yml`; polling remains as fallback |
+| Add rejection feedback to the runbook pipeline | Rejection reason captured in the UI and stored in `task_events` |
+| Add a lightweight intent registry | `IntentRegistry` + `IntentEvaluator` with 4 intent types |
+| Cross-device incident correlation | `TopologyCorrelator` BFS on Nautobot cable graph; incident grouping by device |
+| Autonomy demotion on verification failure | `LearningEngine` demotes immediately on `alert_resolved=False`; promotes after 3 successes |
 
-Add an `action_policies` table to the task store. The approval-gate runner reads it
-before deciding whether to auto-approve or wait for a human. Start with three
-action classes: `bgp_peer_reset`, `interface_restore`, `config_change_generic`.
+### 🔲 Remaining (Medium Impact, Higher Effort)
 
-Effort: ~1 day. Impact: Operators can tune autonomy per environment without code
-changes.
+**Non-LLM deterministic validation rules**
 
-**1.2 Make RabbitMQ the default dispatch path**
-
-The RabbitMQ task bus already exists and is tested. Flip the default from polling to
-message dispatch. Keep polling as the fallback for environments without RabbitMQ.
-
-Effort: ~0.5 days. Impact: Eliminates 15–120 s polling latency; time-to-diagnosis
-drops to near-real-time.
-
-**1.3 Add rejection feedback to the runbook pipeline**
-
-When a human rejects an approval gate, capture the rejection reason and write it as
-a runbook annotation in Gitea. The next time the same alert type arrives, the
-Remediator sees the annotation and avoids the same mistake.
-
-Effort: ~1 day. Impact: System learns from human feedback without LLM retraining.
-
-### Tier 2 — High Impact, Medium Effort
-
-**2.1 Add a lightweight intent registry**
-
-Define standing policies as YAML: `{metric: bgp_peers_established, threshold: < all,
-device_role: leaf, severity: warning}`. A background poller evaluates each policy on
-a configurable interval and creates incidents when a policy is violated, without waiting
-for Alertmanager.
-
-Effort: ~3 days. Impact: Proactive detection of degraded state that has not yet
-triggered a Prometheus alert.
-
-**2.2 Cross-device incident correlation**
-
-When a new RCA is created, check for open incidents on topologically adjacent devices
-(Tier 1 topology query). If a common upstream device is shared, link both RCAs to the
-same incident. The Chronicle view would then show a multi-device incident narrative.
-
-Effort: ~2 days. Impact: Alert storms during major failures are grouped into one
-P1 incident rather than dozens of separate pipelines.
-
-**2.3 Autonomy demotion on verification failure**
-
-When `execution_verified` records `alert_resolved: false`, automatically lower the
-autonomy level for that action class by one step and write an event to the audit trail.
-Restore it after N subsequent successful executions.
-
-Effort: ~1 day. Impact: System self-corrects when a fix type proves unreliable.
-
-### Tier 3 — Medium Impact, Higher Effort
-
-**3.1 Non-LLM deterministic validation rules**
-
-Add a library of deterministic validation checks for known fix types (e.g., "for
-`interface_restore`, verify the interface oper-state is `up` before creating an
-approval gate"). These run before the validation agent and short-circuit to a
-high-confidence verdict when they pass. The validation agent only runs when deterministic
-rules cannot produce a verdict.
+Add a library of deterministic checks for known fix types (e.g., "for `interface_restore`,
+verify interface oper-state is `up` before creating an approval gate"). These run before the
+LLM validation stage and short-circuit to a high-confidence verdict when they pass.
 
 Effort: ~3 days. Impact: Faster, cheaper, more reliable validation for common cases.
 
-**3.2 Proactive runbook gap detection**
+**Proactive runbook gap detection**
 
-After each LLM-generated fix (where no runbook existed), write the diagnosis + fix
-as a candidate runbook to a `runbook-candidates` branch in Gitea. An operator can
-review and promote to `main`. After promotion, the next occurrence uses the runbook
-rather than the LLM.
+After each LLM-generated fix (where no runbook existed), write the diagnosis + fix as a
+candidate runbook to a `runbook-candidates` branch in Gitea. An operator can review and
+promote to `main`. After promotion, the next occurrence follows the runbook.
 
 Effort: ~2 days. Impact: Runbook library grows automatically from production incidents.
 
-**3.3 Multi-tenant UI**
+**Multi-tenant UI**
 
-Filter the Pipeline Dashboard, Task Queue, and Incidents by `tenant_id`. The task store
-already has the column; the gap is UI filtering and auth integration.
+Filter the Operations Dashboard, Task Queue, and Incidents by `tenant_id`. The task store
+already has the column; the gap is UI filtering and authentication integration.
 
 Effort: ~2 days. Impact: Multiple teams or environments can share one deployment.
 

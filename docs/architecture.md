@@ -23,25 +23,28 @@ Four isolated Docker networks are created:
                     └──────┬───────┘
           ┌────────────────┼──────────────────┐
           ▼                ▼                  ▼
-    :8080 Nautobot   :3000 Grafana    :7860 Agent UI
+    :8080 Nautobot   :3000 Grafana    :7860 Clano UI
           │                │                  │
     ┌─────┴──────┐   ┌─────┴──────┐   ┌──────┴──────────┐
-    │ PostgreSQL │   │ Prometheus │   │ Ops Agent       │
-    │ Redis      │   │ Loki       │   │ Eng Agent       │
-    └────────────┘   │ Alertmgr  │   │ Chaos Agent     │
-                     └─────┬──────┘   └────────┬────────┘
-                           │ scrapes            │ shared
-              ┌────────────┼────────────┐  ┌───┴──────────┐
-              ▼            ▼            ▼  │ Agent TaskDB │
-        Telegraf    Node Exporter   Blackbox│ (SQLite or   │
-              │                            │  PostgreSQL) │
-      ┌───────┴───────┐                   └──────────────┘
-      │  SNMP polling │
-      │  cEOS devices │
-      └───────┬───────┘
-              │ syslog
+    │ PostgreSQL │   │ Prometheus │   │ AI Agent  :8000  │
+    │ Redis      │   │ Loki       │   │ (unified)        │
+    └────────────┘   │ Alertmgr  │   └────────┬─────────┘
+                     └─────┬──────┘            │ shared
+                           │ scrapes      ┌────┴──────────┐
+              ┌────────────┼──────────┐   │ Agent TaskDB  │
+              ▼            ▼          ▼   │ (PostgreSQL   │
+        Telegraf    Node Exporter Blackbox│  or SQLite)   │
+              │                          └───────────────┘
+      ┌───────┴───────┐
+      │  SNMP polling │     ┌──────────────────┐
+      │  cEOS devices │     │ topology-api :8765│
+      └───────┬───────┘     │ (Nautobot graph) │
+              │ syslog      └──────────────────┘
               ▼
-           Promtail → Loki
+           Promtail → Loki     ┌──────────────────────┐
+                               │ alert-event-receiver  │
+                               │ :8770 (webhook sink)  │
+                               └──────────────────────┘
 ```
 
 ## Source of Truth Plane
@@ -59,7 +62,7 @@ Four isolated Docker networks are created:
 
 - Self-hosted Git server for generated configs, Ansible playbooks, Golden Config diffs, and agent runbooks.
 - Reachable at port 3001; backed by separate PostgreSQL database.
-- **Runbook library**: The Engineering Agent reads `{AlertName}.yaml` files from the `netauto/runbooks` repository via the Gitea API to accelerate fix generation for known alert types.
+- **Runbook library**: The AI agent reads `{AlertName}.yaml` files from the `netauto/runbooks` repository via the Gitea API as the first step of every fix-proposal stage. Known alert types are handled by their runbook rather than re-derived by the LLM.
 
 ## Monitoring Plane
 
@@ -94,6 +97,23 @@ Four pre-provisioned dashboards:
 - Pipeline stages extract structured labels: `device`, `facility`, `severity`, `interface`, `bgp_neighbor`.
 - Loki stores logs with 90-day retention.
 
+## Supporting Services
+
+### topology-api
+
+- Lightweight Python FastAPI server (port 8765, internal only).
+- Exposes a single `/topology` endpoint that returns the full Nautobot device graph (devices + cables) as JSON.
+- Used by `TopologyCorrelator` inside the AI agent for blast-radius calculation and cascading-failure root-cause inference without hitting the Nautobot REST API directly on every pipeline run.
+- Runs inside the `mgmt-network` and `monitoring-network`; no external port binding.
+
+### alert-event-receiver
+
+- Lightweight Python HTTP server (port 8770, internal only).
+- Receives Alertmanager webhook POSTs (`POST /alertmanager/webhook`) and stores them as an NDJSON event log.
+- Exposes `GET /events?limit=N` for the AlertPoller to consume.
+- Provides an auditable, deduplicated alert event stream independent of Prometheus's own `/api/v1/alerts` endpoint.
+- Runs inside `monitoring-network` and `mgmt-network`; no external port binding.
+
 ## Automation Plane
 
 ### Ansible Container
@@ -126,51 +146,58 @@ All eBGP. Leaves advertise loopbacks + host routes to both spines. When `LAB_VAL
 
 ## AI Assistance Plane
 
-### Ops Agent
+### Unified Agent
 
-- **Purpose**: Reactive NOC assistance — investigate alerts, correlate metrics and logs, run the closed-loop pipeline.
+A single **UnifiedAgent** (LangGraph ReAct) handles all pipeline stages — RCA, fix generation, validation, and execution — in one FastAPI service on **port 8000**.
+
 - **Model**: GPT-4o (falls back to local Ollama `llama3`).
-- **Safety**: All Ansible actions default to `check_mode=True`; live execution requires explicit user approval.
-- **API**: FastAPI on port 8000.
-- **Background threads**: AlertPoller (priority-aware: 15 s for critical, 60 s for normal).
+- **Safety**: All config actions default to `check_mode=True`; live execution is gated by the autonomy policy.
+- **Shared modules**:
+  - `PolicyRegistry` — queries `action_policies` table to determine the L0–L5 autonomy level for each pipeline action.
+  - `LearningEngine` — auto-promotes policies after N consecutive successful resolutions; demotes on failure.
+  - `IntentRegistry` + `IntentEvaluator` — standing policies for proactive monitoring, alert suppression, escalation, and chaos scheduling.
+  - `TopologyCorrelator` — builds an adjacency graph from Nautobot cable data; provides blast-radius calculation and root-cause inference for cascading failures.
+- **Background threads**: AlertPoller (15 s critical, 60 s normal), IntentEvaluator (5 min poll for monitor intents), APScheduler (chaos_schedule intents).
 
-### Engineering Agent
-
-- **Purpose**: Fix generation and config design — generates vendor-specific remediations, plans IP space, writes playbooks.
-- **Model**: GPT-4o (same fallback).
-- **API**: FastAPI on port 8001.
-- **Background threads**: EngTaskRunner (15 s priority loop, 90 s normal loop), approved gate executor.
-- **Runbook-first**: Calls `get_runbook(alertname)` before re-deriving fixes from scratch.
-
-### Chaos Agent
-
-- **Purpose**: Fix validation, blast-radius assessment, and controlled chaos experiments.
-- **Model**: GPT-4o (same fallback).
-- **API**: FastAPI on port 8002.
-- **Background threads**: ChaosTaskRunner (15 s priority loop, 120 s normal loop), APScheduler for repeating chaos runs.
+See [`docs/agents.md`](agents.md) for capabilities, [`docs/policy-autonomy.md`](policy-autonomy.md) for the autonomy system, and [`docs/intent-layer.md`](intent-layer.md) for standing intents.
 
 ### Agent TaskStore
 
-Shared SQLite database (or PostgreSQL in production) used by all four agent containers and the UI to store pipeline state.
+Shared SQLite database (or PostgreSQL in production) used by all agent containers and the UI.
 
-| Mode       | Backend                | When to use                                    |
-| ---------- | ---------------------- | ---------------------------------------------- |
-| Default    | SQLite (`activity.db`) | Lab / development                              |
-| Production | PostgreSQL 16          | Multi-replica, persistent, LISTEN/NOTIFY ready |
+| Mode | Backend | When to use |
+| --- | --- | --- |
+| Default | SQLite (`activity.db`) | Lab / development |
+| Production | PostgreSQL 16 | Multi-replica, persistent, LISTEN/NOTIFY ready |
 
 Set `TASK_DB_URL` in `.env` to switch to PostgreSQL. The `agent-postgres` service is pre-defined in `docker-compose.yml`.
 
-### Agent UI
+**Schema tables:**
+
+| Table | Purpose |
+| --- | --- |
+| `tasks` | Main task queue (`rca`, `fix_proposal`, `validation`, `approval_gate`, `incident`) |
+| `task_events` | Append-only event log per task (20+ event types) |
+| `task_feedback` | Validation feedback for KPI accuracy tracking |
+| `token_usage` | Token usage and cost per agent per session |
+| `action_policies` | Autonomy policies (L0–L5) with match criteria (alertname, fix_type, device_role, environment) |
+| `policy_performance` | Execution outcome history per policy — feeds the LearningEngine |
+| `standing_intents` | Proactive monitoring rules, alert suppression, escalation overrides, chaos schedules |
+
+### Clano UI
 
 - FastAPI application serving the web UI on port 7860.
 - Jinja2 server-side templates with HTMX for partial updates.
-- **Real-time updates via SSE**: A single persistent connection to `/stream/tasks` drives all live widgets. When any task state changes, the server pushes a `tasks-changed` event; HTMX triggers targeted refreshes. This replaces polling entirely on the pipeline page.
-- **Tabs**: Pipeline Dashboard · Ops Agent · Engineering Agent · Chaos Agent · 🚨 Incidents · Activity · Cost Monitor.
-- **Pipeline views**: The Alert Processing Pipeline panel offers two views toggled by a button group:
-  - **📊 Visual** — card-per-stage layout with status, key fields, and connecting arrows.
-  - **📖 Chronicle** — vertical timeline narrative with stage chapters, gap timings, confidence/risk/verdict badges, collapsible detail panels, and a header summarising alert severity, device, and time-to-resolution.
-- **Performance**: All agent HTTP calls inside async handlers use `asyncio.gather` for concurrency (the three `/partials/agent-status` calls, for example, run in parallel rather than sequentially). A single shared `httpx.AsyncClient` is created at startup and reused across all requests. All synchronous SQLite calls are dispatched to a thread pool via `run_in_threadpool` so the asyncio event loop is never blocked.
-- Shares the `agent-activity-data` Docker volume with all three agent containers.
+- **Real-time updates via SSE**: A single persistent connection to `/stream/tasks` drives all live widgets. When any task state changes, the server pushes a `tasks-changed` event; HTMX triggers targeted refreshes.
+- **Navigation (5 tabs)**:
+  - **📡 Operations** — Alert Processing Pipeline (Visual + Chronicle views), Ops Health KPI bar, Task Queue, Task Detail.
+  - **🚨 Incidents** — Grouped incident view with severity, affected devices, and linked pipeline chains.
+  - **💬 Assist** — Interactive chat with the unified agent.
+  - **⚙️ Config** — Autonomy policies (L0–L5 gauge, policy list, Learning Engine performance), standing intents (add/manage), UI preferences.
+  - **📊 System** — Cost Monitor (token usage, budget burn), Activity Log (full audit trail of agent conversations).
+- **Chronicle view**: Each pipeline chain renders as a vertical narrative timeline (Intent-triggered or Alert-triggered badge, stage chapters with autonomy level badge, blast-radius block, runbook provenance, rejection reason capture, Stage 5 Verify chapter with config confirm + alert resolution cards).
+- **Performance**: All agent HTTP calls use `asyncio.gather`; a single shared `httpx.AsyncClient` is reused across requests; synchronous DB calls are dispatched via `run_in_threadpool`.
+- Shares the `agent-activity-data` Docker volume with all agent containers.
 
 ## Data Persistence
 

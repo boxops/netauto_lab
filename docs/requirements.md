@@ -1,5 +1,7 @@
 # **INTERMEDIATE NETWORK AUTOMATION STACK**
 
+> **Historical document.** This file captures the original project requirements as specified. The implemented system (Clano) has evolved beyond several of these requirements — the AI agent is now a unified LangGraph agent (not three separate agents), autonomy levels are formally implemented (L0–L5 PolicyRegistry), and the intent layer is operational. Refer to [`architecture.md`](architecture.md), [`agents.md`](agents.md), and [`closed-loop-pipeline.md`](closed-loop-pipeline.md) for current implementation details.
+
 ## **Project Overview**
 
 Create an intermediate-level, production-ready network automation and observability platform that evolves beyond the basic stack. The solution must be containerized, vendor-agnostic, and feature AI-driven network operations capabilities.
