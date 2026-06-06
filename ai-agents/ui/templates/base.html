@@ -3,17 +3,23 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{% block title %}Network AI Agents{% endblock %}</title>
+    <title>{% block title %}Clano{% endblock %}</title>
     <link rel="stylesheet" href="/static/style.css" />
     <script src="/static/htmx.min.js"></script>
+    <script>
+      // Apply help-text preference before body renders to avoid flash
+      if (localStorage.getItem("clano-help-texts") === "0") {
+        document.documentElement.classList.add("no-help");
+      }
+    </script>
   </head>
   <body>
     <div class="page-header">
       <div class="flex items-center gap-12 flex-wrap">
         <div>
-          <h1>📡 NetOps AI</h1>
+          <h1>📡 Clano</h1>
           <p class="muted" style="font-size:0.82em; margin-top:2px">
-            Closed-loop autonomous network operations · powered by AI agents
+            Closed-Loop Autonomous Network Ops · powered by AI agents
           </p>
         </div>
         {# Compact agent health badge — top-right corner #}

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% set active_tab = "config" %}
-{% block title %}Config — NetOps AI{% endblock %}
+{% block title %}Config — Clano{% endblock %}
 
 {% block content %}
 
@@ -249,6 +249,63 @@
   function toggleMonitorFields(val) {
     document.getElementById("monitor-fields").style.display = (val === "monitor") ? "block" : "none";
   }
+</script>
+
+<hr class="divider" />
+
+{# ════════════════════════════════════════════════════════════════════════════
+   SECTION C — UI PREFERENCES
+   ════════════════════════════════════════════════════════════════════════════ #}
+<div class="section-title" id="ui-prefs-section">🖥️ UI Preferences</div>
+
+<div style="background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:16px 20px; max-width:520px">
+  <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap">
+    <div style="flex:1; min-width:180px">
+      <div style="font-size:0.9em; font-weight:600; color:var(--text); margin-bottom:3px">Help text callouts</div>
+      <div class="muted" style="font-size:0.8em">
+        Blue explanation boxes that appear throughout the UI.
+        Turning them off also hides the "How this works" banner on the Operations tab.
+        Re-enabling restores the banner.
+      </div>
+    </div>
+    <div style="display:flex; flex-direction:column; align-items:center; gap:6px">
+      <button id="help-toggle-btn"
+              onclick="toggleHelpTexts()"
+              class="btn btn-secondary"
+              style="min-width:100px; font-size:0.85em; padding:7px 16px">
+      </button>
+      <span id="help-toggle-status" style="font-size:0.78em; font-weight:600"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+  function updateHelpToggleUI() {
+    var off = document.documentElement.classList.contains("no-help");
+    var btn = document.getElementById("help-toggle-btn");
+    var status = document.getElementById("help-toggle-status");
+    if (btn) btn.textContent = off ? "Enable" : "Disable";
+    if (status) {
+      status.textContent = off ? "Hidden" : "Visible";
+      status.style.color = off ? "#6b7280" : "#22c55e";
+    }
+  }
+
+  function toggleHelpTexts() {
+    var off = document.documentElement.classList.contains("no-help");
+    if (off) {
+      document.documentElement.classList.remove("no-help");
+      localStorage.setItem("clano-help-texts", "1");
+      localStorage.removeItem("onboarding-dismissed");
+    } else {
+      document.documentElement.classList.add("no-help");
+      localStorage.setItem("clano-help-texts", "0");
+    }
+    updateHelpToggleUI();
+  }
+
+  // Set button state on load
+  document.addEventListener("DOMContentLoaded", updateHelpToggleUI);
 </script>
 
 {% endblock %}

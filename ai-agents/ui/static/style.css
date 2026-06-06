@@ -679,6 +679,9 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; 
 .help-callout strong { color: var(--text); }
 .help-callout p { margin: 6px 0 0; }
 
+/* Global help-text suppression — set by UI Preferences toggle */
+html.no-help .help-callout { display: none !important; }
+
 /* ── Autonomy level gauge strip ──────────────────────── */
 .autonomy-gauge {
   display: flex;

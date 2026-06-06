@@ -1,11 +1,29 @@
 {% extends "base.html" %}
 {% set active_tab = "system" %}
-{% block title %}System — NetOps AI{% endblock %}
+{% block title %}System — Clano{% endblock %}
 
 {% block content %}
 
 {# ════════════════════════════════════════════════════════════════════════════
-   SECTION A — ACTIVITY LOG
+   SECTION A — COST MONITOR
+   ════════════════════════════════════════════════════════════════════════════ #}
+<div class="section-title">💰 Cost Monitor</div>
+<p class="muted" style="font-size:0.82em; margin-bottom:12px">
+  Token usage and estimated USD cost for all AI agent activity in the last 24 hours.
+  The daily budget is set via the <code>DAILY_COST_LIMIT_USD</code> environment variable.
+</p>
+
+<div id="cost-kpis"
+     hx-get="/partials/cost-kpis"
+     hx-trigger="load, every 30s"
+     hx-swap="innerHTML">
+  <div class="muted" style="font-size:0.85em; padding:8px 0">Loading cost data…</div>
+</div>
+
+<hr class="divider" />
+
+{# ════════════════════════════════════════════════════════════════════════════
+   SECTION B — ACTIVITY LOG
    ════════════════════════════════════════════════════════════════════════════ #}
 <div class="section-title">🕒 Activity Log</div>
 <p class="muted" style="font-size:0.82em; margin-bottom:12px">
@@ -45,24 +63,6 @@
      hx-trigger="load"
      hx-swap="innerHTML">
   <div class="muted" style="font-size:0.85em; padding:8px 0">Loading activity…</div>
-</div>
-
-<hr class="divider" />
-
-{# ════════════════════════════════════════════════════════════════════════════
-   SECTION B — COST MONITOR
-   ════════════════════════════════════════════════════════════════════════════ #}
-<div class="section-title">💰 Cost Monitor</div>
-<p class="muted" style="font-size:0.82em; margin-bottom:12px">
-  Token usage and estimated USD cost for all AI agent activity in the last 24 hours.
-  The daily budget is set via the <code>DAILY_COST_LIMIT_USD</code> environment variable.
-</p>
-
-<div id="cost-kpis"
-     hx-get="/partials/cost-kpis"
-     hx-trigger="load, every 30s"
-     hx-swap="innerHTML">
-  <div class="muted" style="font-size:0.85em; padding:8px 0">Loading cost data…</div>
 </div>
 
 {% endblock %}

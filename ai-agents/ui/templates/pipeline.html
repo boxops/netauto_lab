@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% set active_tab = "pipeline" %}
-{% block title %}Operations — NetOps AI{% endblock %}
+{% block title %}Operations — Clano{% endblock %}
 
 {% block content %}
 
@@ -160,9 +160,11 @@
 </div>
 
 <script>
-  // Show onboarding callout unless previously dismissed
+  // Show onboarding callout unless dismissed or help texts globally disabled
   (function () {
-    if (!localStorage.getItem("onboarding-dismissed")) {
+    var helpOff = localStorage.getItem("clano-help-texts") === "0";
+    var dismissed = localStorage.getItem("onboarding-dismissed") === "1";
+    if (!helpOff && !dismissed) {
       document.getElementById("onboarding-callout").style.display = "block";
     }
   })();
