@@ -1,0 +1,65 @@
+{% if not policies %}
+  <div class="muted" style="font-size:0.85em; padding:8px 0">No policies defined.</div>
+{% else %}
+<table style="width:100%; border-collapse:collapse; font-size:0.83em">
+  <thead>
+    <tr style="color:var(--muted); border-bottom:1px solid var(--border); text-align:left">
+      <th style="padding:6px 10px">Name</th>
+      <th style="padding:6px 10px">Alert</th>
+      <th style="padding:6px 10px">Fix type</th>
+      <th style="padding:6px 10px">Role</th>
+      <th style="padding:6px 10px">Env</th>
+      <th style="padding:6px 10px">Level</th>
+      <th style="padding:6px 10px">Status</th>
+      <th style="padding:6px 10px"></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for p in policies %}
+  {% set level_color = {
+    'L0': '#ef4444', 'L1': '#f97316', 'L2': '#eab308',
+    'L3': '#22c55e', 'L4': '#3b82f6', 'L5': '#8b5cf6'
+  }.get(p.autonomy_level, '#6b7280') %}
+  <tr style="border-bottom:1px solid var(--border)"
+      id="policy-row-{{ p.id }}">
+    <td style="padding:7px 10px; font-weight:500">{{ p.name }}</td>
+    <td style="padding:7px 10px; color:var(--muted)">{{ p.alertname or '—' }}</td>
+    <td style="padding:7px 10px; color:var(--muted)">{{ p.fix_type or 'any' }}</td>
+    <td style="padding:7px 10px; color:var(--muted)">{{ p.device_role or 'any' }}</td>
+    <td style="padding:7px 10px; color:var(--muted)">{{ p.environment or 'any' }}</td>
+    <td style="padding:7px 10px">
+      <span class="pill" style="background:{{ level_color }}22; color:{{ level_color }};
+             border-color:{{ level_color }}55; font-size:0.78em; font-weight:700">
+        {{ p.autonomy_level }}
+      </span>
+    </td>
+    <td style="padding:7px 10px">
+      {% if p.enabled %}
+        <span style="color:#22c55e; font-size:0.82em">enabled</span>
+      {% else %}
+        <span style="color:var(--muted); font-size:0.82em">disabled</span>
+      {% endif %}
+    </td>
+    <td style="padding:7px 10px">
+      <button class="btn btn-sm btn-secondary"
+              hx-post="/partials/policy-toggle/{{ p.id }}"
+              hx-target="#policy-list"
+              hx-swap="innerHTML"
+              style="font-size:0.78em; padding:3px 10px">
+        {{ 'Disable' if p.enabled else 'Enable' }}
+      </button>
+      <button class="btn btn-sm"
+              style="font-size:0.78em; padding:3px 10px; background:var(--bg3);
+                     border:1px solid #ef444455; color:#ef4444; border-radius:4px; margin-left:4px"
+              hx-delete="/partials/policy-delete/{{ p.id }}"
+              hx-target="#policy-list"
+              hx-swap="innerHTML"
+              hx-confirm="Delete policy '{{ p.name }}'?">
+        Delete
+      </button>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}

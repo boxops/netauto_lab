@@ -6,12 +6,15 @@ Combines all capabilities (ops, engineering, validation, chaos) into one service
 Background tasks started in lifespan:
   - AlertPoller: polls Alertmanager for new firing alerts, dispatches to workflow
   - IncidentWorkflow: LangGraph pipeline (investigate→fix→validate→approval gate on single rca task)
+  - IntentEvaluator: proactively checks standing intents against live Prometheus
   - OpsScheduler: APScheduler for repeating lab experiments / scheduled scenarios
   - ActiveTasksRefresher: Prometheus gauge for active task counts
+  - policy-promotion-sweep: hourly thread that promotes policies after N consecutive successes
 
 Active endpoints: /health, /metrics, /status, /chat, /chat/stream, /usage,
   /tasks (CRUD + feedback), /webhook/alert, /workflow/resume/{id},
-  /poller/reset, /schedule, /schedules, /schedule/{job_id}
+  /poller/reset, /schedule, /schedules, /schedule/{job_id},
+  /policies (CRUD), /intents (CRUD)
 """
 from __future__ import annotations
 
@@ -22,7 +25,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -37,6 +40,8 @@ from shared.unified_agent import UnifiedAgent, AGENT_NAME
 from ops_agent.alert_poller import AlertPoller
 from ops_agent.workflow import IncidentWorkflow
 from ops_agent.scheduler import OpsScheduler
+from shared.intent_registry import IntentEvaluator
+from shared.pipeline_models import ActionPolicy, StandingIntent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -59,19 +64,58 @@ _workflow    = IncidentWorkflow(task_store, rate_limiter, status_handler)
 poller       = AlertPoller(agent, task_store, rate_limiter, workflow=_workflow)
 scheduler: OpsScheduler | None = None
 
+# CLANO singletons — re-use instances already created inside _workflow
+_policy_registry  = _workflow._policy_registry
+_intent_registry  = _workflow._intent_registry
+_learning_engine  = _workflow._learning_engine
+_intent_evaluator = IntentEvaluator(
+    intent_registry=_intent_registry,
+    task_store=task_store,
+    alert_poller=poller,
+    prometheus_url=settings.prometheus_url,
+    evaluation_interval=settings.intent_evaluation_interval,
+    tenant_id=settings.agent_tenant_id,
+)
+
 
 # ── Lifespan ───────────────────────────────────────────────────────────────────
+
+def _promotion_sweep_loop(stop_event: threading.Event, interval: int = 3600) -> None:
+    """Hourly background sweep: promote policies that hit the consecutive-success threshold."""
+    stop_event.wait(300)  # initial delay — let the system stabilise
+    while not stop_event.is_set():
+        try:
+            promoted = _learning_engine.evaluate_promotions(tenant_id=settings.agent_tenant_id)
+            if promoted:
+                logger.info("Promotion sweep: promoted %d policies: %s", len(promoted), promoted)
+        except Exception:
+            logger.exception("Promotion sweep failed")
+        stop_event.wait(interval)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global scheduler
     warn_if_no_api_key(AGENT_NAME)
+    if settings.policy_auto_seed:
+        _policy_registry.seed_defaults()
     scheduler = OpsScheduler(agent)
     poller.start()
     _metrics.start()
+    if settings.intent_check_enabled:
+        _intent_evaluator.start()
+    _promo_stop = threading.Event()
+    threading.Thread(
+        target=_promotion_sweep_loop,
+        args=(_promo_stop,),
+        daemon=True,
+        name="policy-promotion-sweep",
+    ).start()
     yield
     poller.stop()
     _metrics.stop()
+    _intent_evaluator.stop()
+    _promo_stop.set()
     if scheduler:
         scheduler.shutdown()
 
@@ -100,6 +144,10 @@ class ChatResponse(BaseModel):
     response:   str
     session_id: str
     tool_calls: list[dict] = []
+
+
+class ResumeRequest(BaseModel):
+    operator_commands: str = ""
 
 
 class ScheduleRequest(BaseModel):
@@ -329,11 +377,12 @@ async def alertmanager_webhook(request: Request):
 # ── Workflow resume (Phase 2 after human approval) ────────────────────────────
 
 @app.post("/workflow/resume/{task_id}")
-async def workflow_resume(task_id: str):
-    """Trigger Phase 2 of the incident workflow: execute the approved fix."""
-    if not settings.workflow_enabled:
-        raise HTTPException(status_code=400, detail="WORKFLOW_ENABLED is false")
+async def workflow_resume(task_id: str, body: ResumeRequest = Body(default=ResumeRequest())):
+    """Trigger Phase 2 of the incident workflow: execute the approved fix.
 
+    Optional body field ``operator_commands`` passes manual fix commands typed
+    by the operator at the approval gate (used when fix_type=escalate_human).
+    """
     gate = task_store.get_task(task_id)
     if not gate:
         raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
@@ -345,7 +394,7 @@ async def workflow_resume(task_id: str):
 
     threading.Thread(
         target=_workflow.resume_execution,
-        args=(task_id, "human"),
+        args=(task_id, "human", body.operator_commands),
         daemon=True,
         name=f"resume-{task_id}",
     ).start()
@@ -385,6 +434,64 @@ async def delete_schedule(job_id: str):
     if not removed:
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
     return {"deleted": True, "job_id": job_id}
+
+
+# ── Autonomy policy endpoints ─────────────────────────────────────────────────
+
+@app.get("/policies")
+async def list_policies(tenant_id: str = "default"):
+    return task_store.list_policies(tenant_id=tenant_id)
+
+
+@app.post("/policies", status_code=201)
+async def create_policy(body: ActionPolicy):
+    data = body.model_dump(exclude_none=True)
+    data.setdefault("tenant_id", settings.agent_tenant_id)
+    return task_store.create_policy(data)
+
+
+@app.put("/policies/{policy_id}")
+async def update_policy(policy_id: str, body: ActionPolicy):
+    existing = task_store.get_policy(policy_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Policy {policy_id!r} not found")
+    return task_store.update_policy(policy_id, body.model_dump(exclude_none=True))
+
+
+@app.delete("/policies/{policy_id}", status_code=204)
+async def delete_policy(policy_id: str):
+    if not task_store.get_policy(policy_id):
+        raise HTTPException(status_code=404, detail=f"Policy {policy_id!r} not found")
+    task_store.delete_policy(policy_id)
+
+
+# ── Standing intent endpoints ─────────────────────────────────────────────────
+
+@app.get("/intents")
+async def list_intents(tenant_id: str = "default"):
+    return _intent_registry.list_intents(tenant_id=tenant_id)
+
+
+@app.post("/intents", status_code=201)
+async def create_intent(body: StandingIntent):
+    data = body.model_dump(exclude_none=True)
+    data.setdefault("tenant_id", settings.agent_tenant_id)
+    return _intent_registry.create_intent(data)
+
+
+@app.put("/intents/{intent_id}")
+async def update_intent(intent_id: str, body: StandingIntent):
+    existing = _intent_registry.get_intent(intent_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Intent {intent_id!r} not found")
+    return _intent_registry.update_intent(intent_id, body.model_dump(exclude_none=True))
+
+
+@app.delete("/intents/{intent_id}", status_code=204)
+async def delete_intent(intent_id: str):
+    if not _intent_registry.get_intent(intent_id):
+        raise HTTPException(status_code=404, detail=f"Intent {intent_id!r} not found")
+    _intent_registry.delete_intent(intent_id)
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────

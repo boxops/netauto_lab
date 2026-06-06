@@ -41,6 +41,25 @@
     {% endfor %}
   </table>
 
+  {# ── Topology context ────────────────────────────────────────────────────── #}
+  {% if topology_ctx and topology_ctx.is_leaf_symptom %}
+  <div class="mb-12" style="background:#1c1917; border:1px solid #f97316; border-radius:8px; padding:12px 14px; font-size:0.83em">
+    <span style="color:#f97316; font-weight:700">⬇ Downstream symptom</span>
+    {% if topology_ctx.upstream_cause %}
+      — root cause: <strong>{{ topology_ctx.upstream_cause }}</strong>
+    {% endif %}
+    {% if topology_ctx.affected_devices %}
+      <div class="muted" style="margin-top:4px">
+        Blast radius: {{ topology_ctx.affected_devices | join(", ") }}
+      </div>
+    {% endif %}
+  </div>
+  {% elif topology_ctx and topology_ctx.affected_devices %}
+  <div class="mb-8" style="font-size:0.82em; color:var(--muted)">
+    Blast radius: {{ topology_ctx.affected_devices | join(", ") }}
+  </div>
+  {% endif %}
+
   {# ── Parse warnings ──────────────────────────────────────────────────────── #}
   {% set parse_warnings = events | selectattr("type","equalto","parse_warning") | list %}
   {% if parse_warnings %}

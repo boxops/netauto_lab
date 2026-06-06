@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% set active_tab = "policies" %}
+{% block title %}Autonomy Policies — Network AI Agents{% endblock %}
+
+{% block content %}
+<p class="muted mb-16" style="font-size:0.83em">
+  Autonomy policies control whether pipeline stages execute automatically (L4–L5) or require
+  human approval (L0–L3). Policies are matched by alert type, fix class, device role, and
+  environment — most-specific match wins.
+</p>
+
+<div class="flex gap-8 items-center mb-16" style="flex-wrap:wrap">
+  <span style="font-size:0.82em; color:var(--muted)">
+    L0 suppress · L1 advisory · L2 supervised · L3 co-pilot · L4 auto-approve · L5 full-autonomous
+  </span>
+</div>
+
+{# ── Policy table ──────────────────────────────────────────────────────────── #}
+<div class="section-title mb-8">Active Policies</div>
+<div id="policy-list"
+     hx-get="/partials/policy-list"
+     hx-trigger="load, every 15s"
+     hx-swap="innerHTML">
+  <div class="muted" style="font-size:0.85em; padding:8px 0">Loading…</div>
+</div>
+
+{# ── Add policy form ──────────────────────────────────────────────────────── #}
+<div class="section-title mt-24 mb-8">Add Policy</div>
+<form hx-post="/partials/policy-create"
+      hx-target="#policy-list"
+      hx-swap="innerHTML"
+      style="background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:16px">
+  <div class="flex gap-12 flex-wrap">
+    <div style="display:flex; flex-direction:column; gap:4px; flex:1; min-width:140px">
+      <label style="font-size:0.78em; color:var(--muted)">Name</label>
+      <input name="name" required placeholder="BGP peer reset (leaf/lab)"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:110px">
+      <label style="font-size:0.78em; color:var(--muted)">Fix type</label>
+      <select name="fix_type"
+              style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                     padding:6px 8px; color:var(--fg); font-size:0.85em">
+        <option value="">any</option>
+        <option value="config_change">config_change</option>
+        <option value="runbook">runbook</option>
+        <option value="escalate_human">escalate_human</option>
+      </select>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:100px">
+      <label style="font-size:0.78em; color:var(--muted)">Device role</label>
+      <select name="device_role"
+              style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                     padding:6px 8px; color:var(--fg); font-size:0.85em">
+        <option value="">any</option>
+        <option value="leaf">leaf</option>
+        <option value="spine">spine</option>
+        <option value="core">core</option>
+      </select>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:110px">
+      <label style="font-size:0.78em; color:var(--muted)">Environment</label>
+      <select name="environment"
+              style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                     padding:6px 8px; color:var(--fg); font-size:0.85em">
+        <option value="">any</option>
+        <option value="lab" selected>lab</option>
+        <option value="staging">staging</option>
+        <option value="production">production</option>
+      </select>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:90px">
+      <label style="font-size:0.78em; color:var(--muted)">Autonomy level</label>
+      <select name="autonomy_level" required
+              style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                     padding:6px 8px; color:var(--fg); font-size:0.85em">
+        <option value="L0">L0 — suppress</option>
+        <option value="L1">L1 — advisory</option>
+        <option value="L2" selected>L2 — supervised</option>
+        <option value="L3">L3 — co-pilot</option>
+        <option value="L4">L4 — auto-approve</option>
+        <option value="L5">L5 — full-autonomous</option>
+      </select>
+    </div>
+    <div style="display:flex; align-items:flex-end">
+      <button type="submit" class="btn btn-primary" style="font-size:0.85em; padding:7px 16px">
+        Add policy
+      </button>
+    </div>
+  </div>
+</form>
+
+{# ── Policy performance ─────────────────────────────────────────────────────── #}
+<div class="section-title mt-24 mb-8">Policy Performance (last 30 days)</div>
+<div hx-get="/partials/policy-performance"
+     hx-trigger="load, every 30s"
+     hx-swap="innerHTML">
+  <div class="muted" style="font-size:0.85em; padding:8px 0">Loading…</div>
+</div>
+{% endblock %}

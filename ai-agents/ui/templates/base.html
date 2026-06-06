@@ -9,65 +9,50 @@
   </head>
   <body>
     <div class="page-header">
-      <h1>🌐 Network Automation AI Agents</h1>
-      <p>
-        <strong>Ops Agent</strong> — investigate incidents, propose fixes,
-        validate changes, and execute approved remediations
-      </p>
-    </div>
-
-    <div
-      id="status-bar"
-      hx-get="/partials/status-bar"
-      hx-trigger="load, every 30s"
-      hx-swap="outerHTML"
-    >
-      <div class="status-bar">
-        <span class="muted">Checking agent status…</span>
+      <div class="flex items-center gap-12 flex-wrap">
+        <div>
+          <h1>📡 NetOps AI</h1>
+          <p class="muted" style="font-size:0.82em; margin-top:2px">
+            Closed-loop autonomous network operations · powered by AI agents
+          </p>
+        </div>
+        {# Compact agent health badge — top-right corner #}
+        <div style="margin-left:auto"
+             id="status-bar"
+             hx-get="/partials/status-bar"
+             hx-trigger="load, every 30s"
+             hx-swap="outerHTML">
+          <span class="muted" style="font-size:0.78em">Checking…</span>
+        </div>
       </div>
     </div>
 
     <nav class="nav-tabs">
-      <a
-        class="nav-tab {% if active_tab == 'pipeline' %}active{% endif %}"
-        href="/"
-        >📊 Pipeline
-        <span
-          id="approval-badge"
-          hx-get="/partials/pending-approvals"
-          hx-trigger="load, sse-refresh"
-          hx-swap="innerHTML"
-        ></span>
+      <a class="nav-tab {% if active_tab == 'pipeline' %}active{% endif %}" href="/">
+        📡 Operations
+        <span id="approval-badge"
+              hx-get="/partials/pending-approvals"
+              hx-trigger="load, sse-refresh"
+              hx-swap="innerHTML"></span>
       </a>
-      <a
-        class="nav-tab {% if active_tab == 'ops' %}active{% endif %}"
-        href="/chat/ops"
-        >🚨 Ops Agent</a
-      >
-      <a
-        class="nav-tab {% if active_tab == 'incidents' %}active{% endif %}"
-        href="/incidents"
-        >🚨 Incidents</a
-      >
-      <a
-        class="nav-tab {% if active_tab == 'activity' %}active{% endif %}"
-        href="/activity"
-        >🕒 Activity</a
-      >
-      <a
-        class="nav-tab {% if active_tab == 'cost' %}active{% endif %}"
-        href="/cost"
-        >💰 Cost Monitor</a
-      >
+      <a class="nav-tab {% if active_tab == 'incidents' %}active{% endif %}" href="/incidents">
+        🚨 Incidents
+      </a>
+      <a class="nav-tab {% if active_tab == 'ops' %}active{% endif %}" href="/chat/ops">
+        💬 Assist
+      </a>
+      <a class="nav-tab {% if active_tab == 'config' %}active{% endif %}" href="/config">
+        ⚙️ Config
+      </a>
+      <a class="nav-tab {% if active_tab == 'system' %}active{% endif %}" href="/system">
+        📊 System
+      </a>
     </nav>
 
     <div class="content">{% block content %}{% endblock %}</div>
 
     <script>
       // ── SSE task-change stream ───────────────────────────────────────────────────
-      // One persistent connection per page.  When the server signals any task state
-      // change, we fire a custom 'sse-refresh' event on polling targets so HTMX
-      // fetches fresh content immediately instead of waiting for the next poll tick.
       (function () {
         var sse = null;
         var TARGETS = [
@@ -75,6 +60,7 @@
           "task-queue-body",
           "approval-badge",
           "incident-list",
+          "ops-health-bar",
         ];
 
         function connect() {
@@ -87,7 +73,7 @@
           });
           sse.onerror = function () {
             sse.close();
-            setTimeout(connect, 5000); // reconnect after 5 s on error
+            setTimeout(connect, 5000);
           };
         }
 

@@ -1,21 +1,23 @@
 {# ── Pipeline Chronicle ──────────────────────────────────────────────────────
-#} {# Renders the full pipeline as a human-readable incident narrative. Each
-stage is a "chapter" with prose, structured data, collapsible details, and time
-gaps showing how long the pipeline spent between stages. #} {% set ov = overall
-%} {# ── Overall header ────────────────────────────────────────────────────────
+   Renders the full pipeline as a human-readable incident narrative. Each stage
+   is a "chapter" with prose, structured findings, collapsible details, and time
+   gaps showing how long each stage took. Approval actions are inline.
 #}
-<div
-  id="pipeline-chronicle"
-  hx-get="/partials/chronicle?fp={{ fp }}"
-  hx-trigger="sse-refresh"
-  hx-swap="outerHTML"
->
+{% set ov = overall %}
+
+<div id="pipeline-chronicle"
+     hx-get="/partials/chronicle?fp={{ fp }}"
+     hx-trigger="sse-refresh"
+     hx-swap="outerHTML">
+
   {% if not chapters %}
-  <div class="muted" style="padding: 20px 0; font-size: 0.87em">
-    No pipeline stages found for this alert.
+  <div class="muted" style="padding:20px 0; font-size:0.87em">
+    No pipeline stages found for this alert. Alerts appear here automatically when Prometheus fires them.
   </div>
+
   {% else %}
 
+  {# ── Overall header ────────────────────────────────────────────────────── #}
   <div class="chronicle-header">
     <div class="flex items-center gap-8 flex-wrap">
       {% if ov.severity == "critical" %}
@@ -26,82 +28,104 @@ gaps showing how long the pipeline spent between stages. #} {% set ov = overall
       <span class="chronicle-sev-badge info">P3</span>
       {% endif %}
 
-      <span style="font-weight: 700; font-size: 0.9em">
-        {{ ov.alertname or "Alert" }}
-      </span>
+      <span style="font-weight:700; font-size:0.9em">{{ ov.alertname or "Alert" }}</span>
+
       {% if ov.device %}
-      <span style="font-size: 0.85em">·</span>
-      <code style="font-size: 0.82em; color: var(--text)">{{ ov.device }}</code>
+      <span style="font-size:0.85em">·</span>
+      <code style="font-size:0.82em; color:var(--text)">{{ ov.device }}</code>
       {% endif %}
 
-      <span
-        class="pill"
-        style="background:{{ ov.color }}22; color:{{ ov.color }}; border-color:{{ ov.color }}55; font-size:0.75em"
-      >
+      {# Source badge: intent vs alert-triggered #}
+      {% if ov.is_intent_triggered %}
+      <span class="pill" style="background:#7c3aed22; color:#a78bfa; border-color:#7c3aed55; font-size:0.75em"
+            title="This pipeline was triggered by a standing intent, not a live Alertmanager alert.">
+        🎯 Intent · {{ ov.intent_name or "monitor" }}
+      </span>
+      {% else %}
+      <span class="pill" style="background:#1e293b; color:#94a3b8; border-color:#334155; font-size:0.75em"
+            title="This pipeline was triggered by a Prometheus / Alertmanager alert.">
+        🔔 Alert-triggered
+      </span>
+      {% endif %}
+
+      <span class="pill"
+            style="background:{{ ov.color }}22; color:{{ ov.color }}; border-color:{{ ov.color }}55; font-size:0.75em">
         {{ ov.label }}
       </span>
 
       {% if ov.ttr_str %}
-      <span class="muted" style="font-size: 0.78em"
-        >· resolved in {{ ov.ttr_str }}</span
-      >
+      <span class="muted" style="font-size:0.78em">· resolved in {{ ov.ttr_str }}</span>
       {% endif %}
     </div>
   </div>
 
-  {# ── Timeline
-  ──────────────────────────────────────────────────────────────── #}
+  {# ── Timeline ─────────────────────────────────────────────────────────── #}
+  {% set level_colors = {"L0":"#6b7280","L1":"#3b82f6","L2":"#f59e0b","L3":"#f97316","L4":"#22c55e","L5":"#a855f7"} %}
+  {% set level_names  = {"L0":"Manual","L1":"Advisory","L2":"Supervised","L3":"Human gate","L4":"Auto-approve","L5":"Autonomous"} %}
+
   <div class="chronicle">
-    {% for ch in chapters %} {# ── Gap divider ── #} {% if ch.gap_str %}
+    {% for ch in chapters %}
+
+    {# ── Gap divider ── #}
+    {% if ch.gap_str %}
     <div class="chronicle-gap">┄┄ {{ ch.gap_str }} ┄┄</div>
-    {% endif %} {# ── Chapter ── #} {% set spine_color = ch.badge_color if
-    ch.badge_color else "#334155" %}
+    {% endif %}
+
+    {# ── Chapter ── #}
+    {% set spine_color = ch.badge_color if ch.badge_color else "#334155" %}
     <div class="chronicle-chapter" style="border-left-color:{{ spine_color }}">
+
       {# Chapter header row #}
       <div class="chapter-header">
         <div class="chronicle-dot" style="background:{{ spine_color }}"></div>
-        <code class="muted" style="font-size: 0.72em; min-width: 56px"
-          >{{ ch.timestamp }}</code
-        >
-        <strong
-          style="font-size:0.78em; letter-spacing:0.06em; color:{{ spine_color }}"
-        >
+        <code class="muted" style="font-size:0.72em; min-width:56px">{{ ch.timestamp }}</code>
+        <strong style="font-size:0.78em; letter-spacing:0.06em; color:{{ spine_color }}">
           {{ ch.label }}
         </strong>
         {% if ch.badge_text %}
-        <span
-          class="pill"
-          style="background:{{ spine_color }}22; color:{{ spine_color }}; border-color:{{ spine_color }}44; font-size:0.72em"
-        >
+        <span class="pill"
+              style="background:{{ spine_color }}22; color:{{ spine_color }}; border-color:{{ spine_color }}44; font-size:0.72em">
           {{ ch.badge_icon }} {{ ch.badge_text }}
         </span>
         {% endif %}
-        <span class="muted" style="margin-left: auto; font-size: 0.72em">
-          <a
-            href="#"
-            onclick="event.preventDefault(); htmx.ajax('GET','/partials/task/{{ ch.task_id }}',{target:'#chronicle-task-detail',swap:'innerHTML'}); document.getElementById('chronicle-task-detail').style.display='block'"
-            style="color: var(--text-sub); text-decoration: none"
-          >
+
+        {# Autonomy level badge — shows on approval gate and verify chapters #}
+        {% if ch.autonomy_level %}
+        {% set lc = level_colors.get(ch.autonomy_level, "#6b7280") %}
+        <span class="pill"
+              style="background:{{ lc }}22; color:{{ lc }}; border-color:{{ lc }}55; font-size:0.72em"
+              title="{{ ch.policy_reason or 'Autonomy level applied to this pipeline action.' }}">
+          {{ ch.autonomy_level }} · {{ level_names.get(ch.autonomy_level, "") }}
+        </span>
+        {% endif %}
+
+        <span class="muted" style="margin-left:auto; font-size:0.72em">
+          <a href="#"
+             onclick="event.preventDefault(); htmx.ajax('GET','/partials/task/{{ ch.task_id }}',{target:'#chronicle-task-detail',swap:'innerHTML'}); document.getElementById('chronicle-task-detail').style.display='block'"
+             style="color:var(--text-sub); text-decoration:none">
             <code>{{ ch.task_id }}</code>
           </a>
         </span>
       </div>
 
-      {# ── RCA body ── #} {% if ch.type == "rca" %}
+      {# ════════════════════════════════════════════════════════════════════ #}
+      {# STAGE 1 — RCA (Root Cause Analysis)                                 #}
+      {# ════════════════════════════════════════════════════════════════════ #}
+      {% if ch.type == "rca" %}
       <div class="chapter-body">
+
         {% if ch.status in ("running", "claimed", "pending") %}
         <p class="muted chronicle-prose">
           <span class="pulse-dot"></span>
-          The Ops Agent is investigating
-          <strong>{{ ch.device or "the device" }}</strong>…
+          The AI agent is investigating <strong>{{ ch.device or "the device" }}</strong>…
+          It is querying Nautobot (inventory), Prometheus (metrics), and Loki (logs) to find the root cause.
         </p>
+
         {% else %}
         <p class="chronicle-prose">
-          The Ops Agent investigated
-          <strong>{{ ch.device or "the device" }}</strong>
-          {% if ch.tool_calls %}using <strong>{{ ch.tool_calls }}</strong> tool
-          calls{% endif %} {% if ch.alertname %}, examining the
-          <em>{{ ch.alertname }}</em> alert{% endif %}.
+          The AI agent investigated <strong>{{ ch.device or "the device" }}</strong>
+          {% if ch.tool_calls %}using <strong>{{ ch.tool_calls }}</strong> tool calls{% endif %}
+          {% if ch.alertname %}, examining the <em>{{ ch.alertname }}</em> alert{% endif %}.
         </p>
 
         {% if ch.diagnosis %}
@@ -109,88 +133,122 @@ gaps showing how long the pipeline spent between stages. #} {% set ov = overall
           <span class="finding-label">Diagnosis</span>
           <span>{{ ch.diagnosis }}</span>
         </div>
-        {% endif %} {% if ch.action %}
-        <div class="chronicle-finding" style="border-left-color: #60a5fa">
-          <span class="finding-label" style="color: #60a5fa"
-            >Recommended action</span
-          >
+        {% endif %}
+
+        {% if ch.action %}
+        <div class="chronicle-finding" style="border-left-color:#60a5fa">
+          <span class="finding-label" style="color:#60a5fa">Recommended action</span>
           <span>{{ ch.action }}</span>
         </div>
-        {% endif %} {% if ch.full_response %}
+        {% endif %}
+
+        {# Blast radius — devices that may be affected by the root cause #}
+        {% if ch.affected_devices %}
+        <div class="chronicle-finding" style="border-left-color:#f97316">
+          <span class="finding-label" style="color:#f97316">Blast radius</span>
+          <span>
+            {% for d in ch.affected_devices %}
+            <code style="background:var(--bg3); padding:1px 5px; border-radius:3px; font-size:0.85em; margin-right:4px">{{ d }}</code>
+            {% endfor %}
+            <span class="muted" style="font-size:0.85em">— devices that could be affected by this change</span>
+          </span>
+        </div>
+        {% endif %}
+
+        {% if ch.full_response %}
         <details class="chronicle-details">
-          <summary>▶ Full analysis</summary>
+          <summary>▶ Full agent analysis</summary>
           <pre class="chronicle-pre">{{ ch.full_response }}</pre>
         </details>
-        {% endif %} {% endif %}
+        {% endif %}
+        {% endif %}
       </div>
 
-      {# ── Fix Proposal body ── #} {% elif ch.type == "fix_proposal" %}
+      {# ════════════════════════════════════════════════════════════════════ #}
+      {# STAGE 2 — FIX PROPOSAL                                              #}
+      {# ════════════════════════════════════════════════════════════════════ #}
+      {% elif ch.type == "fix_proposal" %}
       <div class="chapter-body">
         {% if ch.status in ("running", "claimed", "pending") %}
         <p class="muted chronicle-prose">
           <span class="pulse-dot"></span>
-          The Ops Agent is generating a fix proposal for
-          <strong>{{ ch.device or "the device" }}</strong>…
-        </p>
-        {% else %}
-        <p class="chronicle-prose">
-          The Ops Agent {% if ch.tool_calls %} made {{ ch.tool_calls }} tool
-          calls and{% endif %} proposed a
-          <strong
-            >{{ ch.fix_type | replace("_", " ") if ch.fix_type else
-            "configuration change" }}</strong
-          >
-          on <strong>{{ ch.device or "the device" }}</strong>. {% if ch.risk %}
-          Assessed risk: <em>{{ ch.risk }}</em>. {% endif %}
+          The AI agent is generating a fix proposal for <strong>{{ ch.device or "the device" }}</strong>…
         </p>
 
+        {% else %}
+        <p class="chronicle-prose">
+          The AI agent{% if ch.tool_calls %} made {{ ch.tool_calls }} tool calls and{% endif %}
+          proposed a <strong>{{ ch.fix_type | replace("_", " ") if ch.fix_type else "configuration change" }}</strong>
+          on <strong>{{ ch.device or "the device" }}</strong>.
+          {% if ch.risk %} Assessed risk: <em>{{ ch.risk }}</em>.{% endif %}
+        </p>
+
+        {# Runbook provenance — was a known procedure used or was this AI-generated? #}
+        {% if ch.runbook and ch.runbook != "none" %}
+        <div class="chronicle-finding" style="border-left-color:#10b981">
+          <span class="finding-label" style="color:#10b981">Runbook used</span>
+          <span><strong>{{ ch.runbook }}</strong> — a known procedure was followed, which improves consistency and reduces uncertainty.</span>
+        </div>
+        {% else %}
+        <div class="chronicle-finding" style="border-left-color:#6b7280">
+          <span class="finding-label">Runbook</span>
+          <span class="muted">No matching runbook found — the AI generated this fix from first-principles analysis of the alert, metrics, and logs.</span>
+        </div>
+        {% endif %}
+
         {% if ch.commands %}
-        <div style="margin: 10px 0 6px">
-          <span class="finding-label" style="color: #60a5fa"
-            >Commands to apply</span
-          >
+        <div style="margin:10px 0 4px">
+          <span class="finding-label" style="color:#60a5fa">Commands to apply</span>
         </div>
         <pre class="chronicle-commands">{{ ch.commands }}</pre>
-        {% endif %} {% if ch.reason %}
+        {% endif %}
+
+        {% if ch.reason %}
         <div class="chronicle-finding">
           <span class="finding-label">Reasoning</span>
           <span>{{ ch.reason }}</span>
         </div>
-        {% endif %} {% if ch.config_diff %}
+        {% endif %}
+
+        {% if ch.config_diff %}
         <details class="chronicle-details">
           <summary>▶ Config diff (before → after)</summary>
-          <pre
-            class="config-diff"
-          >{% for line in ch.config_diff.splitlines() %}{% if line.startswith('+') and not line.startswith('+++') %}<span class="diff-add">{{ line }}</span>
+          <pre class="config-diff">{% for line in ch.config_diff.splitlines() %}{% if line.startswith('+') and not line.startswith('+++') %}<span class="diff-add">{{ line }}</span>
 {% elif line.startswith('-') and not line.startswith('---') %}<span class="diff-del">{{ line }}</span>
 {% elif line.startswith('@@') %}<span class="diff-hunk">{{ line }}</span>
 {% else %}{{ line }}
 {% endif %}{% endfor %}</pre>
         </details>
-        {% endif %} {% if ch.full_response %}
+        {% endif %}
+
+        {% if ch.full_response %}
         <details class="chronicle-details">
           <summary>▶ Full agent response</summary>
           <pre class="chronicle-pre">{{ ch.full_response }}</pre>
         </details>
-        {% endif %} {% endif %}
+        {% endif %}
+        {% endif %}
       </div>
 
-      {# ── Validation body ── #} {% elif ch.type == "validation" %}
+      {# ════════════════════════════════════════════════════════════════════ #}
+      {# STAGE 3 — VALIDATION                                                #}
+      {# ════════════════════════════════════════════════════════════════════ #}
+      {% elif ch.type == "validation" %}
       <div class="chapter-body">
         {% if ch.status in ("running", "claimed", "pending") %}
         <p class="muted chronicle-prose">
           <span class="pulse-dot"></span>
-          The Ops Agent is validating the proposed fix {% if ch.device %}for
-          <strong>{{ ch.device }}</strong>{% endif %}…
+          The AI agent is validating the proposed fix
+          {% if ch.device %}for <strong>{{ ch.device }}</strong>{% endif %}…
+          It is checking blast radius and confirming the fix is correct before routing to the approval gate.
         </p>
+
         {% else %}
         <p class="chronicle-prose">
-          The Ops Agent validated the fix {% if ch.device %}for
-          <strong>{{ ch.device }}</strong>{% endif %} and returned a verdict of
-          <strong style="color:{{ ch.badge_color }}"
-            >{{ ch.verdict or "unknown" }}</strong
-          >. {% if ch.risk_confirmed %} Risk confirmed:
-          <em>{{ ch.risk_confirmed }}</em>. {% endif %}
+          The AI agent validated the fix {% if ch.device %}for <strong>{{ ch.device }}</strong>{% endif %}
+          and returned a verdict of
+          <strong style="color:{{ ch.badge_color }}">{{ ch.verdict or "unknown" }}</strong>.
+          {% if ch.risk_confirmed %} Confirmed risk level: <em>{{ ch.risk_confirmed }}</em>.{% endif %}
         </p>
 
         {% if ch.notes %}
@@ -198,209 +256,214 @@ gaps showing how long the pipeline spent between stages. #} {% set ov = overall
           <span class="finding-label">Validation notes</span>
           <span>{{ ch.notes }}</span>
         </div>
-        {% endif %} {% if ch.verdict in ("incorrect", "unverifiable") %}
-        <div class="chronicle-finding" style="border-left-color: #ef4444">
-          <span class="finding-label" style="color: #ef4444"
-            >Pipeline stopped</span
-          >
-          <span
-            >No approval gate was created — the fix was not validated as
-            safe.</span
-          >
+        {% endif %}
+
+        {% if ch.verdict in ("incorrect", "unverifiable") %}
+        <div class="chronicle-finding" style="border-left-color:#ef4444">
+          <span class="finding-label" style="color:#ef4444">Pipeline stopped</span>
+          <span>No approval gate was created — the fix was not validated as safe. The pipeline ends here.</span>
         </div>
-        {% endif %} {% endif %}
+        {% endif %}
+        {% endif %}
       </div>
 
-      {# ── Approval Gate body ── #} {% elif ch.type == "approval_gate" %}
+      {# ════════════════════════════════════════════════════════════════════ #}
+      {# STAGE 4 — APPROVAL GATE                                             #}
+      {# ════════════════════════════════════════════════════════════════════ #}
+      {% elif ch.type == "approval_gate" %}
       <div class="chapter-body">
-        {# --- Awaiting human approval --- #} {% if ch.awaiting_approval %}
+
+        {# --- Awaiting human approval --- #}
+        {% if ch.awaiting_approval %}
         <p class="chronicle-prose">
-          A human must review and approve this change before it can be applied
-          to
-          <strong>{{ ch.device or "the device" }}</strong>. {% if
-          ch.do_not_auto_execute %}
-          <span
-            class="pill"
-            style="
-              background: #f59e0b22;
-              color: #f59e0b;
-              border-color: #f59e0b55;
-              font-size: 0.72em;
-            "
-            >⚠️ Maintenance window — auto-execution suppressed</span
-          >
+          The AI agent has completed its analysis and is waiting for a human to review and approve this change
+          before it is applied to <strong>{{ ch.device or "the device" }}</strong>.
+          {% if ch.do_not_auto_execute %}
+          <span class="pill" style="background:#f59e0b22; color:#f59e0b; border-color:#f59e0b55; font-size:0.72em">
+            ⚠️ Maintenance window active — auto-execution suppressed
+          </span>
           {% endif %}
         </p>
 
+        {# Summary of what the AI found #}
+        {% if ch.validation_verdict or ch.risk_confirmed %}
+        <div class="chronicle-finding" style="border-left-color:#a855f7; margin-bottom:10px">
+          <span class="finding-label" style="color:#a855f7">Validation summary</span>
+          <span>
+            Verdict: <strong>{{ ch.validation_verdict or "—" }}</strong>
+            · Risk confirmed: <strong>{{ ch.risk_confirmed or "—" }}</strong>
+            {% if ch.chaos_notes %} · {{ ch.chaos_notes }}{% endif %}
+          </span>
+        </div>
+        {% endif %}
+
         {% if ch.commands %}
-        <div style="margin: 10px 0 4px">
-          <span class="finding-label" style="color: #a855f7"
-            >Commands to apply on {{ ch.device }}</span
-          >
+        <div style="margin:10px 0 4px">
+          <span class="finding-label" style="color:#a855f7">Commands that will be applied to {{ ch.device }}</span>
         </div>
-        <pre
-          class="chronicle-commands"
-          style="border-color: #a855f7; box-shadow: 0 0 0 1px #a855f733"
-        >
-{{ ch.commands }}</pre
-        >
-        {% endif %} {% if ch.validation_verdict %}
-        <div
-          class="chronicle-finding"
-          style="border-left-color: #a855f7; margin-bottom: 8px"
-        >
-          <span class="finding-label" style="color: #a855f7"
-            >Ops Agent verdict</span
-          >
-          <span
-            >{{ ch.validation_verdict }} (risk: {{ ch.risk_confirmed or "—" }})
-            {% if ch.chaos_notes %} — {{ ch.chaos_notes }}{% endif %}</span
-          >
-        </div>
-        {% endif %} {# Inline approve / reject #}
-        <div class="flex gap-8 items-center flex-wrap" style="margin-top: 12px">
-          <button
-            class="btn btn-primary btn-sm"
-            hx-post="/tasks/{{ ch.task_id }}/approve"
-            hx-target="#chronicle-action-{{ ch.task_id }}"
-            hx-swap="innerHTML"
-          >
-            ✅ Approve
-          </button>
-          <button
-            class="btn btn-danger btn-sm"
-            hx-post="/tasks/{{ ch.task_id }}/reject"
-            hx-target="#chronicle-action-{{ ch.task_id }}"
-            hx-swap="innerHTML"
-          >
-            ❌ Reject
-          </button>
-          <span
-            id="chronicle-action-{{ ch.task_id }}"
-            class="muted"
-            style="font-size: 0.82em"
-          ></span>
-        </div>
+        <pre class="chronicle-commands" style="border-color:#a855f7; box-shadow:0 0 0 1px #a855f733">{{ ch.commands }}</pre>
+        {% endif %}
 
         {% if ch.config_diff %}
-        <details class="chronicle-details" style="margin-top: 12px">
-          <summary>▶ Config diff (what will change)</summary>
-          <pre
-            class="config-diff"
-          >{% for line in ch.config_diff.splitlines() %}{% if line.startswith('+') and not line.startswith('+++') %}<span class="diff-add">{{ line }}</span>
+        <details class="chronicle-details" style="margin-top:10px">
+          <summary>▶ Config diff — what will change on the device</summary>
+          <pre class="config-diff">{% for line in ch.config_diff.splitlines() %}{% if line.startswith('+') and not line.startswith('+++') %}<span class="diff-add">{{ line }}</span>
 {% elif line.startswith('-') and not line.startswith('---') %}<span class="diff-del">{{ line }}</span>
 {% elif line.startswith('@@') %}<span class="diff-hunk">{{ line }}</span>
 {% else %}{{ line }}
 {% endif %}{% endfor %}</pre>
         </details>
-        {% endif %} {# --- Rejected --- #} {% elif ch.status == "rejected" %}
-        <p class="chronicle-prose">This change was rejected.</p>
+        {% endif %}
 
-        {# --- Approved + executed --- #} {% else %} {# Approval line #} {% if
-        ch.approved_by %}
+        {# Approve / Reject controls #}
+        <div style="margin-top:14px; padding:12px 14px; background:var(--bg3); border-radius:8px; border:1px solid var(--border)">
+          <div style="font-size:0.8em; font-weight:600; color:var(--text-sub); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.05em">
+            Your decision
+          </div>
+          <div class="flex gap-8 items-center flex-wrap">
+            <button class="btn btn-primary btn-sm"
+                    hx-post="/tasks/{{ ch.task_id }}/approve"
+                    hx-target="#chronicle-action-{{ ch.task_id }}"
+                    hx-swap="innerHTML">
+              ✅ Approve &amp; Execute
+            </button>
+            <button class="btn btn-danger btn-sm"
+                    onclick="document.getElementById('reject-form-{{ ch.task_id }}').style.display='block'; this.style.display='none'"
+                    id="reject-btn-{{ ch.task_id }}">
+              ❌ Reject
+            </button>
+            <span id="chronicle-action-{{ ch.task_id }}" class="muted" style="font-size:0.82em"></span>
+          </div>
+
+          {# Rejection reason form — revealed on Reject click #}
+          <div id="reject-form-{{ ch.task_id }}" style="display:none; margin-top:10px">
+            <label style="font-size:0.78em; color:var(--text-sub); display:block; margin-bottom:4px">
+              Rejection reason
+              <span style="font-weight:400">(optional — helps the AI learn from this decision and avoid the same mistake)</span>
+            </label>
+            <textarea id="reject-reason-{{ ch.task_id }}" name="reason" rows="2"
+              placeholder="e.g. 'Wrong device targeted' or 'Risk is higher than assessed — this is a spine during business hours'"
+              style="width:100%; max-width:520px; background:var(--bg2); border:1px solid var(--border);
+                     color:var(--text); border-radius:6px; padding:6px 10px; font-size:0.82em;
+                     resize:vertical; margin-bottom:6px; display:block"></textarea>
+            <button class="btn btn-danger btn-sm"
+                    hx-post="/tasks/{{ ch.task_id }}/reject"
+                    hx-target="#chronicle-action-{{ ch.task_id }}"
+                    hx-include="#reject-reason-{{ ch.task_id }}"
+                    hx-swap="innerHTML">
+              Confirm rejection
+            </button>
+            <button class="btn btn-secondary btn-sm" style="margin-left:6px"
+                    onclick="document.getElementById('reject-form-{{ ch.task_id }}').style.display='none'; document.getElementById('reject-btn-{{ ch.task_id }}').style.display='inline-flex'">
+              Cancel
+            </button>
+          </div>
+        </div>
+
+        {# --- Rejected --- #}
+        {% elif ch.status == "rejected" %}
+        <p class="chronicle-prose">This change was <strong>rejected</strong> by a human operator. The pipeline has ended.</p>
+
+        {# --- Approved (execution happened — now shown in VERIFY chapter) --- #}
+        {% else %}
+        {% if ch.approved_by %}
         <p class="chronicle-prose">
           Approved by <strong>{{ ch.approved_by }}</strong>
           {% if ch.approval_ts %}at {{ ch.approval_ts }}{% endif %}.
+          Execution has been handed off to the agent.
         </p>
-        {% endif %} {# Execution result #} {% if ch.exec_status %}
-        <p class="chronicle-prose">
-          Configuration applied to <strong>{{ ch.device or "device" }}</strong>.
-          {% if ch.changes_applied %} {{ ch.changes_applied }}. {% endif %}
-        </p>
-        {% endif %} {# Config verification #} {% if ch.config_applied is not
-        none %} {% if ch.config_applied == true %}
-        <div class="chronicle-finding" style="border-left-color: #22c55e">
-          <span class="finding-label" style="color: #22c55e"
-            >Config verified on device ✅</span
-          >
-          <span>
-            {% for ln in ch.found_lines[:4] %}
-            <code style="color: #4ade80; font-size: 0.82em">{{ ln }}</code>{% if
-            not loop.last %},&nbsp;{% endif %} {% endfor %} {% if ch.found_lines
-            | length > 4 %}and {{ ch.found_lines | length - 4 }} more{% endif %}
-            confirmed in running-config.
-          </span>
-        </div>
-        {% else %}
-        <div class="chronicle-finding" style="border-left-color: #ef4444">
-          <span class="finding-label" style="color: #ef4444"
-            >Config NOT confirmed on device ❌</span
-          >
-          <span>
-            {% for ln in ch.missing_lines[:3] %}
-            <code style="color: #f87171; font-size: 0.82em">{{ ln }}</code>{% if
-            not loop.last %},&nbsp;{% endif %} {% endfor %} not found in
-            running-config.
-          </span>
-        </div>
-        {% endif %} {% endif %} {# Alert resolution #} {% if ch.alert_resolved
-        is not none %} {% if ch.alert_resolved == true %}
-        <div class="chronicle-finding" style="border-left-color: #22c55e">
-          <span class="finding-label" style="color: #22c55e"
-            >Alert cleared ✅</span
-          >
-          <span>
-            {{ ch.alertname or "Alert" }} is no longer firing in Prometheus. {%
-            if ch.ttr_str %}Time to resolve:
-            <strong>{{ ch.ttr_str }}</strong>.{% endif %}
-          </span>
-        </div>
-        {% else %}
-        <div class="chronicle-finding" style="border-left-color: #f59e0b">
-          <span class="finding-label" style="color: #f59e0b"
-            >Alert still firing ⚠️</span
-          >
-          <span
-            >{{ ch.alertname or "Alert" }} is still firing on {{ ch.device }}.
-            Further investigation may be needed.</span
-          >
-        </div>
-        {% endif %} {% elif ch.exec_status == "success" %}
-        <div class="chronicle-finding" style="border-left-color: #6b7280">
-          <span class="finding-label">Alert check pending</span>
-          <span class="muted"
-            >Prometheus will be checked in ~{{ (300 // 60)|int }} minutes.</span
-          >
-        </div>
-        {% endif %} {# Commands block in collapsible #} {% if ch.commands %}
-        <details class="chronicle-details" style="margin-top: 8px">
-          <summary>▶ Commands applied</summary>
-          <pre class="chronicle-commands">{{ ch.commands }}</pre>
-        </details>
-        {% endif %} {% endif %}{# end awaiting/rejected/executed branches #}
+        {% endif %}
+        {% endif %}
+
       </div>
+
+      {# ════════════════════════════════════════════════════════════════════ #}
+      {# STAGE 5 — VERIFY (execution result + alert resolution)              #}
+      {# ════════════════════════════════════════════════════════════════════ #}
+      {% elif ch.type == "verify" %}
+      <div class="chapter-body">
+
+        {% if ch.approved_by %}
+        <p class="chronicle-prose">
+          Approved by <strong>{{ ch.approved_by }}</strong>.
+          The agent applied the configuration to <strong>{{ ch.device or "the device" }}</strong>
+          and then verified the outcome in Prometheus.
+        </p>
+        {% endif %}
+
+        {# Two-column result cards #}
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; font-size:0.83em">
+
+          {# Config verification card #}
+          {% set cfg_color = "#22c55e" if ch.config_applied == true else ("#ef4444" if ch.config_applied == false else "#6b7280") %}
+          <div style="background:var(--bg3); border-radius:6px; padding:10px 12px; border-left:3px solid {{ cfg_color }}">
+            <div style="font-weight:700; color:{{ cfg_color }}; margin-bottom:6px">
+              {% if ch.config_applied == true %}✅ Config confirmed on device
+              {% elif ch.config_applied == false %}❌ Config NOT confirmed on device
+              {% else %}— Config check pending{% endif %}
+            </div>
+            {% if ch.config_applied == true %}
+              <div class="muted" style="margin-bottom:4px">The following lines were found in the running configuration:</div>
+              {% for ln in ch.found_lines[:4] %}<code style="color:#4ade80; font-size:0.85em; display:block">+ {{ ln }}</code>{% endfor %}
+              {% if ch.found_lines | length > 4 %}<span class="muted">…and {{ ch.found_lines | length - 4 }} more lines</span>{% endif %}
+            {% elif ch.config_applied == false %}
+              <div class="muted" style="margin-bottom:4px">These lines were expected but not found in running-config:</div>
+              {% for ln in ch.missing_lines[:4] %}<code style="color:#f87171; font-size:0.85em; display:block">✗ {{ ln }}</code>{% endfor %}
+            {% else %}
+              <span class="muted">Will check device configuration after execution completes.</span>
+            {% endif %}
+          </div>
+
+          {# Alert resolution card #}
+          {% set alr_color = "#22c55e" if ch.alert_resolved == true else ("#f59e0b" if ch.alert_resolved == false else "#6b7280") %}
+          <div style="background:var(--bg3); border-radius:6px; padding:10px 12px; border-left:3px solid {{ alr_color }}">
+            <div style="font-weight:700; color:{{ alr_color }}; margin-bottom:6px">
+              {% if ch.alert_resolved == true %}✅ Alert cleared in Prometheus
+              {% elif ch.alert_resolved == false %}⚠️ Alert still firing
+              {% else %}⏳ Checking Prometheus…{% endif %}
+            </div>
+            {% if ch.ttr_str %}
+            <div>Resolved in <strong>{{ ch.ttr_str }}</strong> from investigation start.</div>
+            {% endif %}
+            {% if ch.check_at %}
+            <div class="muted" style="font-size:0.85em; margin-top:4px">Checked at {{ ch.check_at }}</div>
+            {% elif ch.alert_resolved is none %}
+            <div class="muted">
+              Prometheus will be checked in ~{{ verify_delay_min }} min after execution.
+              If the alert is still firing, the pipeline restarts automatically.
+            </div>
+            {% endif %}
+            {% if ch.alert_resolved == false %}
+            <div class="muted" style="margin-top:6px; font-size:0.85em">
+              The alert did not clear. The learning engine has noted this and may adjust the autonomy level for this fix type.
+            </div>
+            {% endif %}
+          </div>
+
+        </div>
+      </div>
+
       {% endif %}{# end type branches #}
-    </div>
-    {# end chronicle-chapter #} {% endfor %}{# end chapters loop #} {# ──
-    In-progress tail ── #} {% if ov.status == "active" %}
+    </div>{# end chronicle-chapter #}
+    {% endfor %}{# end chapters loop #}
+
+    {# In-progress tail #}
+    {% if ov.status in ("active", "verifying") %}
     <div class="chronicle-gap">┄┄ in progress ┄┄</div>
-    <div
-      class="chronicle-chapter"
-      style="border-left-color: #3b82f6; background: transparent"
-    >
-      <div class="chapter-header" style="opacity: 0.55">
-        <div
-          class="chronicle-dot"
-          style="background: #3b82f6; animation: pulse 1.5s infinite"
-        ></div>
-        <span class="muted" style="font-size: 0.82em">⟳ Pipeline running…</span>
+    <div class="chronicle-chapter" style="border-left-color:#3b82f6; background:transparent">
+      <div class="chapter-header" style="opacity:0.55">
+        <div class="chronicle-dot" style="background:#3b82f6; animation:pulse 1.5s infinite"></div>
+        <span class="muted" style="font-size:0.82em">⟳ Pipeline running…</span>
       </div>
     </div>
     {% endif %}
-  </div>
-  {# end chronicle #} {# ── Inline task detail flyout ── #}
-  <div
-    id="chronicle-task-detail"
-    style="
-      display: none;
-      margin-top: 16px;
-      padding: 14px;
-      background: var(--bg2);
-      border-radius: 8px;
-      border: 1px solid var(--border);
-    "
-  ></div>
+
+  </div>{# end chronicle #}
+
+  {# Inline task detail flyout #}
+  <div id="chronicle-task-detail"
+       style="display:none; margin-top:16px; padding:14px; background:var(--bg2);
+              border-radius:8px; border:1px solid var(--border)"></div>
 
   {% endif %}{# end not chapters #}
-</div>
-{# end outermost SSE wrapper #}
+</div>{# end SSE wrapper #}

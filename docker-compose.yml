@@ -554,7 +554,6 @@ services:
     env_file: .env
     environment:
       AGENT_API_KEY: "${AGENT_API_KEY:-}"
-      WORKFLOW_ENABLED: "${WORKFLOW_ENABLED:-true}"
       # Destructive chaos tools (shutdown_interface, flap_bgp_neighbor).
       # Set true ONLY in lab environments.
       CHAOS_TOOLS_ENABLED: "${CHAOS_TOOLS_ENABLED:-false}"
@@ -581,6 +580,8 @@ services:
       prometheus:
         condition: service_healthy
       agent-postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     restart: unless-stopped
     logging:

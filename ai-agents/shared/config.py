@@ -90,10 +90,23 @@ class Settings(BaseSettings):
     # Agent identifier — used for status tracking and interactive chat budget key
     agent_name: str = "ai_agent"
 
-    # Unified LangGraph incident workflow — replaces the 3-agent polling chain.
-    # When true: AlertPoller dispatches to ops_agent/workflow.py StateGraph.
-    # When false (default): legacy task-runner polling path is used.
-    workflow_enabled: bool = True
+    # Deployment environment — drives autonomy policy defaults.
+    # lab: permissive defaults (L4 for known fix types)
+    # staging: moderate defaults (L3)
+    # production: conservative defaults (L2, always human-gated)
+    environment: str = "lab"
+
+    # Autonomy policy — seed built-in default policies on startup if the table is empty.
+    policy_auto_seed: bool = True
+
+    # Standing intent registry — proactive health monitoring independent of alerts.
+    intent_check_enabled: bool = True
+    intent_evaluation_interval: int = 300  # seconds between proactive intent evaluation cycles
+
+    # Topology correlation — cross-device incident grouping.
+    topology_correlation_window: int = 30   # minutes: window to search for upstream RCAs
+    topology_blast_radius_hops: int = 2     # BFS depth for blast-radius calculation
+    topology_cache_ttl: int = 60            # seconds: cache Nautobot topology between polls
 
     # Chaos / destructive tools gate — set true ONLY in lab environments.
     # When false, shutdown_interface, restore_interface, and flap_bgp_neighbor

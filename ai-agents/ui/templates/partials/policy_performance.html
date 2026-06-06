@@ -1,0 +1,40 @@
+{% if not stats %}
+  <div class="muted" style="font-size:0.85em; padding:8px 0">
+    No execution data yet. Run some pipeline stages to see policy effectiveness.
+  </div>
+{% else %}
+<table style="width:100%; border-collapse:collapse; font-size:0.83em">
+  <thead>
+    <tr style="color:var(--muted); border-bottom:1px solid var(--border); text-align:left">
+      <th style="padding:6px 10px">Policy</th>
+      <th style="padding:6px 10px">Executions</th>
+      <th style="padding:6px 10px">Resolved</th>
+      <th style="padding:6px 10px">Accuracy</th>
+      <th style="padding:6px 10px">Avg TTR</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for s in stats %}
+  {% set pct = ((s.resolved or 0) / s.total * 100) | round(1) if s.total else 0 %}
+  {% set acc_color = '#22c55e' if pct >= 80 else ('#f97316' if pct >= 50 else '#ef4444') %}
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:7px 10px; font-weight:500">
+      {{ policy_names.get(s.policy_id, s.policy_id or 'default-L2') }}
+    </td>
+    <td style="padding:7px 10px; color:var(--muted)">{{ s.total }}</td>
+    <td style="padding:7px 10px; color:var(--muted)">{{ s.resolved or 0 }}</td>
+    <td style="padding:7px 10px">
+      <span style="color:{{ acc_color }}; font-weight:600">{{ pct }}%</span>
+    </td>
+    <td style="padding:7px 10px; color:var(--muted)">
+      {% if s.avg_ttr %}
+        {{ (s.avg_ttr / 60) | round(1) }} min
+      {% else %}
+        —
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}

@@ -8,6 +8,8 @@ Exports:
   agent_llm_tokens_total              — counter  (agent, model, token_type)
   agent_pipeline_confidence_total     — counter  (agent, confidence_level)
   agent_active_tasks                  — gauge    (agent, task_type)
+  agent_policy_decisions_total        — counter  (policy_id, autonomy_level, outcome)
+  agent_policy_ttr_seconds            — histogram (policy_id)
 
 Served on /metrics of each agent's FastAPI app.
 """
@@ -66,6 +68,17 @@ if _HAS_PROM and _METRICS_ENABLED:
         "Number of tasks currently in running/claimed state",
         ["agent", "task_type"],
     )
+    _policy_decisions_total = Counter(
+        "agent_policy_decisions_total",
+        "Autonomy policy decisions by policy, level, and outcome",
+        ["policy_id", "autonomy_level", "outcome"],
+    )
+    _policy_ttr_seconds = Histogram(
+        "agent_policy_ttr_seconds",
+        "Time-to-resolution per autonomy policy (seconds)",
+        ["policy_id"],
+        buckets=[30, 60, 120, 300, 600, 1800, 3600],
+    )
     _METRICS_READY = True
 else:
     _METRICS_READY = False
@@ -101,6 +114,26 @@ def set_active_tasks(agent: str, task_type: str, count: int) -> None:
     if not _METRICS_READY:
         return
     _active_tasks.labels(agent=agent, task_type=task_type).set(count)
+
+
+def record_policy_decision(
+    policy_id: str,
+    autonomy_level: str,
+    outcome: str,  # "auto_approved" | "approval_requested" | "suppressed" | "escalated"
+) -> None:
+    if not _METRICS_READY:
+        return
+    _policy_decisions_total.labels(
+        policy_id=policy_id or "default",
+        autonomy_level=autonomy_level,
+        outcome=outcome,
+    ).inc()
+
+
+def record_policy_ttr(policy_id: str, ttr_seconds: int) -> None:
+    if not _METRICS_READY:
+        return
+    _policy_ttr_seconds.labels(policy_id=policy_id or "default").observe(ttr_seconds)
 
 
 # ── FastAPI /metrics endpoint factory ─────────────────────────────────────────

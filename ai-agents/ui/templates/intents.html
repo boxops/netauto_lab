@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% set active_tab = "intents" %}
+{% block title %}Standing Intents — Network AI Agents{% endblock %}
+
+{% block content %}
+<p class="muted mb-16" style="font-size:0.83em">
+  Standing intents let you declare persistent network expectations. A <strong>suppress</strong>
+  intent skips investigation for known-flapping links; <strong>escalate</strong> forces human
+  approval regardless of risk; <strong>monitor</strong> proactively fires on Prometheus threshold
+  breaches even without an active alert.
+</p>
+
+{# ── Intent table ──────────────────────────────────────────────────────────── #}
+<div class="section-title mb-8">Active Intents</div>
+<div id="intent-list"
+     hx-get="/partials/intent-list"
+     hx-trigger="load, every 15s"
+     hx-swap="innerHTML">
+  <div class="muted" style="font-size:0.85em; padding:8px 0">Loading…</div>
+</div>
+
+{# ── Add intent form ──────────────────────────────────────────────────────── #}
+<div class="section-title mt-24 mb-8">Add Intent</div>
+<form hx-post="/partials/intent-create"
+      hx-target="#intent-list"
+      hx-swap="innerHTML"
+      style="background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:16px">
+  <div class="flex gap-12 flex-wrap">
+    <div style="display:flex; flex-direction:column; gap:4px; flex:1; min-width:140px">
+      <label style="font-size:0.78em; color:var(--muted)">Name</label>
+      <input name="name" required placeholder="suppress leaf1 flap"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:110px">
+      <label style="font-size:0.78em; color:var(--muted)">Intent type</label>
+      <select name="intent_type" required
+              style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                     padding:6px 8px; color:var(--fg); font-size:0.85em">
+        <option value="suppress">suppress</option>
+        <option value="escalate">escalate</option>
+        <option value="monitor">monitor</option>
+        <option value="chaos_schedule">chaos_schedule</option>
+      </select>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:120px">
+      <label style="font-size:0.78em; color:var(--muted)">Device (empty = any)</label>
+      <input name="device" placeholder="leaf1"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:140px">
+      <label style="font-size:0.78em; color:var(--muted)">Alert name (empty = any)</label>
+      <input name="alertname" placeholder="InterfaceDown"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; flex:1; min-width:140px">
+      <label style="font-size:0.78em; color:var(--muted)">Description</label>
+      <input name="description" placeholder="Optional description"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+    </div>
+    <div style="display:flex; align-items:flex-end">
+      <button type="submit" class="btn btn-primary" style="font-size:0.85em; padding:7px 16px">
+        Add intent
+      </button>
+    </div>
+  </div>
+</form>
+{% endblock %}

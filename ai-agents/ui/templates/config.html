@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% set active_tab = "config" %}
+{% block title %}Config — NetOps AI{% endblock %}
+
+{% block content %}
+
+{# ════════════════════════════════════════════════════════════════════════════
+   SECTION A — AUTONOMY POLICIES
+   ════════════════════════════════════════════════════════════════════════════ #}
+<div class="section-title">🤖 Autonomy Policies</div>
+
+<div class="help-callout">
+  <strong>What are autonomy policies?</strong><br>
+  Policies tell the AI how much independence it has for each type of network fix.
+  A BGP peer reset on a lab leaf might be set to <strong>L4 (auto-approve)</strong> after a few successful runs,
+  while the same fix on a production spine stays at <strong>L2 (human must click Approve)</strong>.
+  The <strong>Learning Engine</strong> automatically promotes or demotes a policy based on whether past fixes
+  actually resolved the alert — so the system earns autonomy incrementally rather than being granted it upfront.
+</div>
+
+{# L0-L5 visual guide #}
+<div style="margin-bottom:20px">
+  <div style="font-size:0.75em; font-weight:600; color:var(--text-sub); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px">
+    Autonomy levels — hover each level for details
+  </div>
+  <div class="autonomy-gauge">
+    {% set levels = [
+      ("L0", "#6b7280", "Manual",       "Telemetry only. You do everything — the AI watches and reports, never acts."),
+      ("L1", "#3b82f6", "Advisory",     "AI surfaces its diagnosis. You interpret the findings and decide what to do."),
+      ("L2", "#f59e0b", "Supervised",   "AI stages a complete fix and waits at an approval gate. You review and click Approve. This is the safe default."),
+      ("L3", "#f97316", "Human gate",   "AI executes after your explicit approval. The gate is always presented, but execution is fast once approved."),
+      ("L4", "#22c55e", "Auto-approve", "AI auto-approves within policy constraints (confidence + risk thresholds + N prior successes). You review outcomes, not individual changes."),
+      ("L5", "#a855f7", "Autonomous",   "AI executes, notifies, and loops. You review exceptions only. Use only in lab/test environments."),
+    ] %}
+    {% for code, color, name, desc in levels %}
+    <div class="gauge-level" style="background:{{ color }}22; color:{{ color }}; border:1px solid {{ color }}44"
+         title="{{ code }} · {{ name }}: {{ desc }}">
+      <span style="font-size:0.68em">{{ code }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  <div style="display:flex; gap:0; font-size:0.72em; color:var(--text-sub)">
+    {% for code, color, name, desc in levels %}
+    <div style="flex:1; text-align:center; color:{{ color }}; font-weight:600">{{ name }}</div>
+    {% endfor %}
+  </div>
+  <div style="display:flex; gap:0; font-size:0.7em; color:var(--text-sub); margin-top:6px">
+    <div style="flex:1; text-align:center">You do everything</div>
+    <div style="flex:2"></div>
+    <div style="flex:1; text-align:center; color:var(--text-sub)">← Default</div>
+    <div style="flex:2"></div>
+    <div style="flex:1; text-align:center">AI does everything</div>
+  </div>
+</div>
+
+{# Policy list #}
+<div class="section-title mb-8" style="font-size:0.85em">Active Policies</div>
+<div id="policy-list"
+     hx-get="/partials/policy-list"
+     hx-trigger="load, every 30s"
+     hx-swap="innerHTML">
+  <div class="muted" style="font-size:0.85em; padding:8px 0">Loading…</div>
+</div>
+
+{# Add policy form #}
+<div class="section-title mt-20 mb-8" style="font-size:0.85em">Add Policy</div>
+<form hx-post="/partials/policy-create"
+      hx-target="#policy-list"
+      hx-swap="innerHTML"
+      style="background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:6px">
+  <div class="flex gap-12 flex-wrap">
+    <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:160px">
+      <label style="font-size:0.78em; color:var(--muted)">Policy name</label>
+      <input name="name" required placeholder="BGP reset — lab leaf"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:120px">
+      <label style="font-size:0.78em; color:var(--muted)">Fix type (empty = any)</label>
+      <input name="fix_type" placeholder="runbook / config_change"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:100px">
+      <label style="font-size:0.78em; color:var(--muted)">Device role (empty = any)</label>
+      <input name="device_role" placeholder="leaf / spine"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:100px">
+      <label style="font-size:0.78em; color:var(--muted)">Environment (empty = any)</label>
+      <input name="environment" placeholder="lab / production"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:110px">
+      <label style="font-size:0.78em; color:var(--muted)">Autonomy level</label>
+      <select name="autonomy_level"
+              style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                     padding:6px 8px; color:var(--fg); font-size:0.85em">
+        <option value="L2" selected>L2 — Supervised (default)</option>
+        <option value="L0">L0 — Manual</option>
+        <option value="L1">L1 — Advisory</option>
+        <option value="L3">L3 — Human gate</option>
+        <option value="L4">L4 — Auto-approve</option>
+        <option value="L5">L5 — Autonomous</option>
+      </select>
+    </div>
+    <div style="display:flex; align-items:flex-end">
+      <button type="submit" class="btn btn-primary" style="font-size:0.85em; padding:7px 16px">
+        Add policy
+      </button>
+    </div>
+  </div>
+</form>
+
+{# Policy performance — now prominently surfaced #}
+<div class="section-title mt-24 mb-8" style="font-size:0.85em">Policy Performance & Learning</div>
+<p class="muted" style="font-size:0.82em; margin-bottom:10px">
+  The Learning Engine automatically promotes policies by one level after
+  <strong>3 consecutive successful resolutions</strong>, and demotes them after a failure.
+  The table below shows each policy's track record.
+</p>
+<div id="policy-performance"
+     hx-get="/partials/policy-performance"
+     hx-trigger="load, every 60s"
+     hx-swap="innerHTML">
+  <div class="muted" style="font-size:0.85em; padding:8px 0">Loading performance data…</div>
+</div>
+
+<hr class="divider" />
+
+{# ════════════════════════════════════════════════════════════════════════════
+   SECTION B — STANDING INTENTS
+   ════════════════════════════════════════════════════════════════════════════ #}
+<div class="section-title" id="intents-section">🎯 Standing Intents</div>
+
+<div class="help-callout">
+  <strong>What are standing intents?</strong><br>
+  Intents are persistent declarations about how the network should behave.
+  Unlike policies (which control <em>how much autonomy</em> the AI uses), intents control
+  <em>when</em> the AI acts and <em>what it does</em> with specific alert types.
+</div>
+
+{# Intent type reference table #}
+<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:10px; margin-bottom:20px; font-size:0.82em">
+  {% set itypes = [
+    ("suppress",       "#ef4444", "🔕 Suppress",
+     "Skip investigation for matching alerts entirely. Use for known-flapping links or maintenance work you are already tracking."),
+    ("escalate",       "#f97316", "⬆️ Escalate",
+     "Force the approval gate to always appear, regardless of the policy's autonomy level. Use for production devices where you never want auto-execution."),
+    ("monitor",        "#3b82f6", "📈 Monitor",
+     "Proactively query a Prometheus metric on a schedule. Creates an RCA task when a threshold is breached — before an Alertmanager alert fires."),
+    ("chaos_schedule", "#8b5cf6", "⚡ Chaos Schedule",
+     "Run a chaos scenario on a cron expression for regular resilience testing."),
+  ] %}
+  {% for itype, color, label, desc in itypes %}
+  <div style="background:var(--bg2); border:1px solid {{ color }}44; border-radius:8px; padding:12px 14px; border-top:3px solid {{ color }}">
+    <div style="font-weight:700; color:{{ color }}; margin-bottom:6px">{{ label }}</div>
+    <div style="color:var(--text-sub); line-height:1.5">{{ desc }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+{# Intent list #}
+<div class="section-title mb-8" style="font-size:0.85em">Active Intents</div>
+<div id="intent-list"
+     hx-get="/partials/intent-list"
+     hx-trigger="load, every 15s"
+     hx-swap="innerHTML">
+  <div class="muted" style="font-size:0.85em; padding:8px 0">Loading…</div>
+</div>
+
+{# Add intent form #}
+<div class="section-title mt-20 mb-8" style="font-size:0.85em">Add Intent</div>
+<form hx-post="/partials/intent-create"
+      hx-target="#intent-list"
+      hx-swap="innerHTML"
+      style="background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:16px">
+  <div class="flex gap-12 flex-wrap">
+    <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:160px">
+      <label style="font-size:0.78em; color:var(--muted)">Name</label>
+      <input name="name" required placeholder="suppress leaf1 flap"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:130px">
+      <label style="font-size:0.78em; color:var(--muted)">Intent type</label>
+      <select name="intent_type" id="intent-type-select" required
+              onchange="toggleMonitorFields(this.value)"
+              style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                     padding:6px 8px; color:var(--fg); font-size:0.85em">
+        <option value="suppress">suppress</option>
+        <option value="escalate">escalate</option>
+        <option value="monitor">monitor</option>
+        <option value="chaos_schedule">chaos_schedule</option>
+      </select>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:110px">
+      <label style="font-size:0.78em; color:var(--muted)">Device (empty = any)</label>
+      <input name="device" placeholder="leaf1"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-width:130px">
+      <label style="font-size:0.78em; color:var(--muted)">Alert name (empty = any)</label>
+      <input name="alertname" placeholder="InterfaceDown"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:140px">
+      <label style="font-size:0.78em; color:var(--muted)">Description</label>
+      <input name="description" placeholder="Optional description"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+    </div>
+  </div>
+
+  {# Extra fields for monitor type — shown/hidden via JS #}
+  <div id="monitor-fields" style="display:none; margin-top:12px; padding:12px; background:var(--bg3); border-radius:6px; border:1px solid #3b82f644">
+    <div style="font-size:0.78em; color:#60a5fa; font-weight:600; margin-bottom:10px">
+      📈 Monitor — Prometheus threshold settings
+    </div>
+    <div class="flex gap-12 flex-wrap">
+      <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:200px">
+        <label style="font-size:0.78em; color:var(--muted)">PromQL metric query</label>
+        <input name="metric_query" placeholder="bgp_peers_established{device='leaf1'}"
+               style="background:var(--bg2); border:1px solid var(--border); border-radius:4px;
+                      padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%; font-family:monospace">
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:140px">
+        <label style="font-size:0.78em; color:var(--muted)">Threshold expression</label>
+        <input name="threshold" placeholder="&lt; 1"
+               style="background:var(--bg2); border:1px solid var(--border); border-radius:4px;
+                      padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%; font-family:monospace">
+        <span class="muted" style="font-size:0.72em">Operators: &lt; &lt;= &gt; &gt;= == !=</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:14px">
+    <button type="submit" class="btn btn-primary" style="font-size:0.85em; padding:7px 16px">
+      Add intent
+    </button>
+  </div>
+</form>
+
+<script>
+  function toggleMonitorFields(val) {
+    document.getElementById("monitor-fields").style.display = (val === "monitor") ? "block" : "none";
+  }
+</script>
+
+{% endblock %}

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% set active_tab = "system" %}
+{% block title %}System — NetOps AI{% endblock %}
+
+{% block content %}
+
+{# ════════════════════════════════════════════════════════════════════════════
+   SECTION A — ACTIVITY LOG
+   ════════════════════════════════════════════════════════════════════════════ #}
+<div class="section-title">🕒 Activity Log</div>
+<p class="muted" style="font-size:0.82em; margin-bottom:12px">
+  Every conversation the AI agent has is recorded here with its tool calls, latency, and outcome.
+  Use this to audit what the agent did and why, or to replay a session.
+</p>
+
+<div class="flex gap-8 mb-12 items-center flex-wrap">
+  <select id="agent-filter"
+          hx-get="/partials/activity"
+          hx-target="#activity-body"
+          hx-trigger="change"
+          hx-include="#agent-filter"
+          hx-swap="innerHTML"
+          style="background:var(--bg2); border:1px solid var(--border); color:var(--text);
+                 border-radius:6px; padding:6px 10px; font-size:0.83em">
+    <option value="All">All agents</option>
+    <option value="ai_agent">AI Agent</option>
+  </select>
+  <button class="btn btn-secondary btn-sm"
+          hx-get="/partials/activity"
+          hx-target="#activity-body"
+          hx-include="#agent-filter"
+          hx-swap="innerHTML">
+    🔄 Refresh
+  </button>
+  {% if summary %}
+  <span class="muted" style="font-size:0.82em; margin-left:8px">
+    {{ summary.total_sessions }} sessions · {{ summary.total_messages }} messages ·
+    avg latency {{ summary.avg_latency_ms }}ms
+  </span>
+  {% endif %}
+</div>
+
+<div id="activity-body"
+     hx-get="/partials/activity"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+  <div class="muted" style="font-size:0.85em; padding:8px 0">Loading activity…</div>
+</div>
+
+<hr class="divider" />
+
+{# ════════════════════════════════════════════════════════════════════════════
+   SECTION B — COST MONITOR
+   ════════════════════════════════════════════════════════════════════════════ #}
+<div class="section-title">💰 Cost Monitor</div>
+<p class="muted" style="font-size:0.82em; margin-bottom:12px">
+  Token usage and estimated USD cost for all AI agent activity in the last 24 hours.
+  The daily budget is set via the <code>DAILY_COST_LIMIT_USD</code> environment variable.
+</p>
+
+<div id="cost-kpis"
+     hx-get="/partials/cost-kpis"
+     hx-trigger="load, every 30s"
+     hx-swap="innerHTML">
+  <div class="muted" style="font-size:0.85em; padding:8px 0">Loading cost data…</div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,74 @@
+{# ── Ops Health KPI bar ───────────────────────────────────────────────────────
+   get_kpis() returns a nested dict:
+     today: {total_tasks, complete, failed, awaiting_approval, auto_resolved, escalated}
+     mttr:  {avg_minutes, p50_minutes, resolved_today}
+#}
+{% set today = (kpis or {}).get("today", {}) %}
+{% set mttr_d = (kpis or {}).get("mttr", {}) %}
+
+<div id="ops-health-bar"
+     class="ops-health-bar"
+     hx-get="/partials/ops-health"
+     hx-trigger="sse-refresh, every 30s"
+     hx-swap="outerHTML">
+
+  {# Active pipelines = all tasks minus terminal states #}
+  {% set _total = today.get("total_tasks", 0) %}
+  {% set _done  = today.get("complete", 0) + today.get("failed", 0) + today.get("awaiting_approval", 0) %}
+  {% set active = _total - _done if _total > _done else 0 %}
+  <div class="ops-health-kpi">
+    <div class="kpi-value" style="color:{% if active > 0 %}#3b82f6{% else %}var(--text-sub){% endif %}">
+      {{ active }}
+    </div>
+    <div class="kpi-label">Active pipelines</div>
+  </div>
+
+  {# Pending approvals #}
+  {% set approvals = today.get("awaiting_approval", 0) %}
+  <div class="ops-health-kpi">
+    <div class="kpi-value" style="color:{% if approvals > 0 %}#a855f7{% else %}var(--text-sub){% endif %}">
+      {{ approvals }}
+    </div>
+    <div class="kpi-label">Awaiting approval</div>
+  </div>
+
+  {# Resolved today #}
+  {% set resolved = today.get("complete", 0) %}
+  <div class="ops-health-kpi">
+    <div class="kpi-value" style="color:{% if resolved > 0 %}#22c55e{% else %}var(--text-sub){% endif %}">
+      {{ resolved }}
+    </div>
+    <div class="kpi-label">Resolved today</div>
+  </div>
+
+  {# Failed today #}
+  {% set failed = today.get("failed", 0) %}
+  <div class="ops-health-kpi">
+    <div class="kpi-value" style="color:{% if failed > 0 %}#ef4444{% else %}var(--text-sub){% endif %}">
+      {{ failed }}
+    </div>
+    <div class="kpi-label">Failed today</div>
+  </div>
+
+  {# Average TTR — avg_minutes already in fractional minutes #}
+  {% set avg_min = mttr_d.get("avg_minutes") %}
+  <div class="ops-health-kpi">
+    {% if avg_min %}
+    {% set tm = avg_min | int %}
+    {% set ts = ((avg_min - tm) * 60) | int %}
+    <div class="kpi-value" style="color:var(--text)">{{ tm }}m {% if ts %}{{ ts }}s{% endif %}</div>
+    {% else %}
+    <div class="kpi-value" style="color:var(--text-sub)">—</div>
+    {% endif %}
+    <div class="kpi-label">Avg TTR today</div>
+  </div>
+
+  {# AI Agent health #}
+  <div class="ops-health-kpi">
+    <div class="kpi-value" style="font-size:1em; color:{% if agent_online %}#22c55e{% else %}#ef4444{% endif %}">
+      {% if agent_online %}● Online{% else %}● Offline{% endif %}
+    </div>
+    <div class="kpi-label">AI Agent</div>
+  </div>
+
+</div>

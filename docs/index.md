@@ -23,6 +23,7 @@ Welcome to the documentation for the **Intermediate Network Automation Stack** â
 | [Data Loader](data-loader.md)                   | Declarative Nautobot data reconciliation and CRUD workflow                                        |
 | [AI Agents](agents.md)                          | Agent capabilities, runbook library, REST APIs, and example prompts                               |
 | [Agent Tools Framework](agent-tools-framework.md) | Tool tier model, adding new tools, docstring conventions                                        |
+| [Autonomous Agent Framework](autonomous-agent-framework.md) | Framework: design principles, the five-stage loop, autonomy levels, governance, stack assessment, and roadmap |
 | [Closed-Loop Pipeline](closed-loop-pipeline.md) | Autonomous incident-response pipeline: stages, incidents, approval gate, post-execution verification, data model |
 | [Ansible Playbooks](ansible.md)                 | Automation playbooks reference                                                                    |
 | [Monitoring](monitoring.md)                     | Dashboards, alerts, and metrics reference                                                         |

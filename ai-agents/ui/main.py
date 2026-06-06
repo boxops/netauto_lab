@@ -535,6 +535,7 @@ def _extract_gate_events(task: dict) -> dict:
         "exec_status": "", "changes_applied": "",
         "config_applied": None, "found_lines": [], "missing_lines": [],
         "alert_resolved": None, "ttr_seconds": 0, "check_at": "",
+        "autonomy_level": "", "policy_id": None, "policy_reason": "",
     }
     for e in events:
         et = e.get("event_type", "")
@@ -548,6 +549,13 @@ def _extract_gate_events(task: dict) -> dict:
         elif et == "auto_approved":
             out["approved_by"] = "system (auto-approved)"
             out["approval_ts"] = _ts_short(e.get("timestamp"))
+            out["autonomy_level"] = d.get("autonomy_level", "")
+            out["policy_id"]      = d.get("policy_id")
+            out["policy_reason"]  = d.get("reason", "")
+        elif et == "approval_policy":
+            out["autonomy_level"] = d.get("autonomy_level", "")
+            out["policy_id"]      = d.get("policy_id")
+            out["policy_reason"]  = d.get("reason", "")
         elif et == "execution_complete":
             out["exec_status"]     = d.get("status", "")
             out["config_applied"]  = d.get("config_applied")
@@ -598,19 +606,20 @@ def _build_chapter(task: dict, prev_completed_at: str | None) -> dict:
         conf = result.get("confidence", "")
         bt, bc, bi = _confidence_badge(conf)
         ch.update({
-            "label":        "ROOT CAUSE IDENTIFIED" if status == "complete" else
-                            ("INVESTIGATING…" if status in ("running", "claimed") else "INVESTIGATION PENDING"),
-            "badge_text":   bt, "badge_color": bc, "badge_icon": bi,
-            "alertname":    content.get("alertname", ""),
-            "severity":     content.get("severity", ""),
-            "device":       content.get("device") or result.get("affected", ""),
-            "instance":     content.get("instance", ""),
-            "summary":      content.get("summary", ""),
-            "diagnosis":    result.get("diagnosis", ""),
-            "confidence":   conf,
-            "action":       result.get("action", ""),
-            "tool_calls":   result.get("tool_calls", 0),
-            "full_response": _truncate(result.get("full_response", ""), 1800),
+            "label":           "ROOT CAUSE IDENTIFIED" if status == "complete" else
+                               ("INVESTIGATING…" if status in ("running", "claimed") else "INVESTIGATION PENDING"),
+            "badge_text":      bt, "badge_color": bc, "badge_icon": bi,
+            "alertname":       content.get("alertname", ""),
+            "severity":        content.get("severity", ""),
+            "device":          content.get("device") or result.get("affected", ""),
+            "instance":        content.get("instance", ""),
+            "summary":         content.get("summary", ""),
+            "diagnosis":       result.get("diagnosis", ""),
+            "confidence":      conf,
+            "action":          result.get("action", ""),
+            "tool_calls":      result.get("tool_calls", 0),
+            "full_response":   _truncate(result.get("full_response", ""), 1800),
+            "affected_devices": result.get("affected_devices", []),
         })
 
     elif tp == "fix_proposal":
@@ -618,17 +627,18 @@ def _build_chapter(task: dict, prev_completed_at: str | None) -> dict:
         bt, bc, bi = _risk_badge(result.get("risk", ""))
         commands = result.get("commands", "")
         ch.update({
-            "label":      "FIX PROPOSED" if status == "complete" else
-                          ("GENERATING FIX…" if status in ("running", "claimed") else "FIX PENDING"),
-            "badge_text": bt, "badge_color": bc, "badge_icon": bi,
-            "fix_type":   result.get("fix_type", ""),
-            "device":     result.get("device", ""),
-            "commands":   commands if commands not in ("none", "", None) else "",
-            "risk":       result.get("risk", ""),
-            "confidence": result.get("confidence", ""),
-            "reason":     result.get("reason", ""),
+            "label":       "FIX PROPOSED" if status == "complete" else
+                           ("GENERATING FIX…" if status in ("running", "claimed") else "FIX PENDING"),
+            "badge_text":  bt, "badge_color": bc, "badge_icon": bi,
+            "fix_type":    result.get("fix_type", ""),
+            "device":      result.get("device", ""),
+            "commands":    commands if commands not in ("none", "", None) else "",
+            "risk":        result.get("risk", ""),
+            "confidence":  result.get("confidence", ""),
+            "reason":      result.get("reason", ""),
+            "runbook":     result.get("runbook", ""),
             "config_diff": result.get("config_diff", ""),
-            "tool_calls": result.get("tool_calls", 0),
+            "tool_calls":  result.get("tool_calls", 0),
             "full_response": _truncate(result.get("full_response", ""), 1800),
         })
 
@@ -685,7 +695,9 @@ def _build_chapter(task: dict, prev_completed_at: str | None) -> dict:
             "do_not_auto_execute": bool(content.get("do_not_auto_execute") or task.get("do_not_auto_execute")),
             "config_diff":        content.get("config_diff") or fix.get("config_diff", ""),
             **ev,
-            "ttr_str": ttr_str,
+            "ttr_str":       ttr_str,
+            "autonomy_level": ev.get("autonomy_level", ""),
+            "policy_reason":  ev.get("policy_reason", ""),
         })
 
     return ch
@@ -740,25 +752,26 @@ def _pipeline_chronicle_context(fp: str) -> dict:
         bt, bc, bi = _confidence_badge(conf)
         rca_ts = _ts_short(rca_event.get("timestamp") if rca_event else created_at)
         chapters.append({
-            "type":          "rca",
-            "task_id":       task["id"],
-            "status":        "complete" if rca_d.get("diagnosis") else status,
-            "timestamp":     rca_ts,
-            "gap_str":       "",
-            "gap_seconds":   0,
-            "label":         "ROOT CAUSE IDENTIFIED" if rca_d.get("diagnosis") else
-                             ("INVESTIGATING…" if status in ("running", "claimed") else "INVESTIGATION PENDING"),
-            "badge_text":    bt, "badge_color": bc, "badge_icon": bi,
-            "alertname":     content.get("alertname", ""),
-            "severity":      content.get("severity", ""),
-            "device":        content.get("device") or rca_d.get("affected", ""),
-            "instance":      content.get("instance", ""),
-            "summary":       content.get("summary", ""),
-            "diagnosis":     rca_d.get("diagnosis", ""),
-            "confidence":    conf,
-            "action":        rca_d.get("action", ""),
-            "tool_calls":    rca_d.get("tool_calls", 0),
-            "full_response": _truncate(rca_d.get("response", ""), 1800),
+            "type":             "rca",
+            "task_id":          task["id"],
+            "status":           "complete" if rca_d.get("diagnosis") else status,
+            "timestamp":        rca_ts,
+            "gap_str":          "",
+            "gap_seconds":      0,
+            "label":            "ROOT CAUSE IDENTIFIED" if rca_d.get("diagnosis") else
+                                ("INVESTIGATING…" if status in ("running", "claimed") else "INVESTIGATION PENDING"),
+            "badge_text":       bt, "badge_color": bc, "badge_icon": bi,
+            "alertname":        content.get("alertname", ""),
+            "severity":         content.get("severity", ""),
+            "device":           content.get("device") or rca_d.get("affected", ""),
+            "instance":         content.get("instance", ""),
+            "summary":          content.get("summary", ""),
+            "diagnosis":        rca_d.get("diagnosis", ""),
+            "confidence":       conf,
+            "action":           rca_d.get("action", ""),
+            "tool_calls":       rca_d.get("tool_calls", 0),
+            "full_response":    _truncate(rca_d.get("response", ""), 1800),
+            "affected_devices": rca_d.get("affected_devices", []),
         })
 
     # ── Fix Proposal chapter ─────────────────────────────────────────────────
@@ -785,6 +798,7 @@ def _pipeline_chronicle_context(fp: str) -> dict:
             "risk":          fix_d.get("risk", ""),
             "confidence":    fix_d.get("confidence", ""),
             "reason":        fix_d.get("reason", ""),
+            "runbook":       fix_d.get("runbook", ""),
             "config_diff":   fix_d.get("config_diff", ""),
             "tool_calls":    fix_d.get("tool_calls", 0),
             "full_response": _truncate(fix_d.get("full_response", ""), 1800),
@@ -835,18 +849,13 @@ def _pipeline_chronicle_context(fp: str) -> dict:
         gap_s = _seconds_between(val_done, task.get("completed_at") or task.get("created_at"))
 
         if awaiting:
-            label, bt, bc, bi = "AWAITING APPROVAL",  "Requires action", "#a855f7", "🟣"
+            gate_label, bt, bc, bi = "AWAITING APPROVAL", "Requires action", "#a855f7", "🟣"
         elif status == "rejected":
-            label, bt, bc, bi = "REJECTED",           "Rejected",        "#9ca3af", "✗"
-        elif es == "success" and ar is True:
-            label = "RESOLVED"
-            bt, bc, bi = (f"TTR {ttr_str}" if ttr_str else "Resolved"), "#22c55e", "✅"
-        elif es == "success":
-            label, bt, bc, bi = "EXECUTED",           "Success",         "#22c55e", "✅"
-        elif es == "failed":
-            label, bt, bc, bi = "EXECUTION FAILED",   "Failed",          "#ef4444", "❌"
+            gate_label, bt, bc, bi = "REJECTED",          "Rejected",        "#9ca3af", "✗"
+        elif es:
+            gate_label, bt, bc, bi = "APPROVED",          "Approved",        "#22c55e", "✅"
         else:
-            label, bt, bc, bi = "APPROVAL GATE",      "Pending",         "#6b7280", "⏳"
+            gate_label, bt, bc, bi = "APPROVAL GATE",     "Pending",         "#6b7280", "⏳"
 
         chapters.append({
             "type":               "approval_gate",
@@ -855,7 +864,7 @@ def _pipeline_chronicle_context(fp: str) -> dict:
             "timestamp":          _ts_short(task.get("completed_at") or task.get("created_at")),
             "gap_str":            _fmt_gap(gap_s),
             "gap_seconds":        gap_s,
-            "label":              label,
+            "label":              gate_label,
             "badge_text":         bt, "badge_color": bc, "badge_icon": bi,
             "device":             device,
             "commands":           commands if commands not in ("none", "", None) else "",
@@ -866,16 +875,56 @@ def _pipeline_chronicle_context(fp: str) -> dict:
             "awaiting_approval":  awaiting,
             "do_not_auto_execute": bool(content.get("do_not_auto_execute")),
             "config_diff":        content.get("config_diff") or fix.get("config_diff", ""),
-            **ev,
-            "ttr_str": ttr_str,
+            "approved_by":        ev["approved_by"],
+            "approval_ts":        ev["approval_ts"],
+            "autonomy_level":     ev.get("autonomy_level", ""),
+            "policy_reason":      ev.get("policy_reason", ""),
         })
+
+        # ── Stage 5: VERIFY chapter — emitted only after execution ───────────
+        if es:
+            if es == "success" and ar is True:
+                v_label, v_bt, v_bc, v_bi = "RESOLVED",          f"TTR {ttr_str}" if ttr_str else "Resolved", "#22c55e", "✅"
+            elif es == "success":
+                v_label, v_bt, v_bc, v_bi = "EXECUTED",          "Verifying…",     "#3b82f6", "⟳"
+            else:
+                v_label, v_bt, v_bc, v_bi = "EXECUTION FAILED",  "Failed",          "#ef4444", "❌"
+
+            chapters.append({
+                "type":           "verify",
+                "task_id":        task["id"],
+                "status":         "complete" if ar is not None else "running",
+                "timestamp":      _ts_short(task.get("completed_at")),
+                "gap_str":        "",
+                "gap_seconds":    0,
+                "label":          v_label,
+                "badge_text":     v_bt, "badge_color": v_bc, "badge_icon": v_bi,
+                "device":         device,
+                "exec_status":    es,
+                "config_applied": ev["config_applied"],
+                "found_lines":    ev["found_lines"],
+                "missing_lines":  ev["missing_lines"],
+                "changes_applied": ev["changes_applied"],
+                "alert_resolved": ar,
+                "ttr_seconds":    ev["ttr_seconds"],
+                "ttr_str":        ttr_str,
+                "check_at":       ev["check_at"],
+                "approved_by":    ev["approved_by"],
+            })
 
     # Overall pipeline status
     statuses = [c["status"] for c in chapters]
+    verify_ch = next((c for c in chapters if c["type"] == "verify"), {})
     if status == "awaiting_approval":
         o_status, o_label, o_color = "awaiting_approval", "Awaiting Approval", "#a855f7"
+    elif status == "rejected":
+        o_status, o_label, o_color = "rejected", "Rejected", "#9ca3af"
     elif status == "failed" or "failed" in statuses:
         o_status, o_label, o_color = "failed", "Pipeline Failed", "#ef4444"
+    elif verify_ch.get("alert_resolved") is True:
+        o_status, o_label, o_color = "resolved", "Resolved", "#22c55e"
+    elif verify_ch.get("exec_status") == "success":
+        o_status, o_label, o_color = "verifying", "Verifying…", "#3b82f6"
     elif status in ("running", "claimed", "pending"):
         o_status, o_label, o_color = "active", "In Progress", "#3b82f6"
     elif status == "complete":
@@ -884,20 +933,26 @@ def _pipeline_chronicle_context(fp: str) -> dict:
         o_status, o_label, o_color = "pending", "Starting…", "#6b7280"
 
     first = next((c for c in chapters if c["type"] == "rca"), {})
-    gate  = next((c for c in chapters if c["type"] == "approval_gate"), {})
+
+    # Detect intent-triggered pipelines
+    is_intent_triggered = fp.startswith("intent:")
+    intent_name = content.get("alertname", "").replace("intent:", "") if is_intent_triggered else ""
 
     return {
         "fp": fp,
         "chapters": chapters,
+        "verify_delay_min": max(1, settings.execution_verify_delay // 60),
         "overall": {
-            "status":         o_status,
-            "label":          o_label,
-            "color":          o_color,
-            "alertname":      first.get("alertname", ""),
-            "device":         first.get("device", ""),
-            "severity":       first.get("severity", ""),
-            "alert_resolved": gate.get("alert_resolved"),
-            "ttr_str":        gate.get("ttr_str", ""),
+            "status":               o_status,
+            "label":                o_label,
+            "color":                o_color,
+            "alertname":            first.get("alertname", ""),
+            "device":               first.get("device", ""),
+            "severity":             first.get("severity", ""),
+            "alert_resolved":       verify_ch.get("alert_resolved"),
+            "ttr_str":              verify_ch.get("ttr_str", ""),
+            "is_intent_triggered":  is_intent_triggered,
+            "intent_name":          intent_name,
         },
     }
 
@@ -942,10 +997,15 @@ def _pipeline_fingerprints() -> list[tuple[str, str]]:
     return [(fp, label) for fp, label in seen.items()]
 
 
-def _task_queue_context(status_filter: str = "", type_filter: str = "") -> dict:
+def _task_queue_context(
+    status_filter: str = "",
+    type_filter: str = "",
+    tenant_id: str = "",
+) -> dict:
     tasks = task_store.list_tasks(
         status=status_filter or None,
         type=type_filter or None,
+        tenant_id=tenant_id or None,
         limit=200,
     )
     rows = []
@@ -963,7 +1023,7 @@ def _task_queue_context(status_filter: str = "", type_filter: str = "") -> dict:
             "title":       _truncate(t.get("title") or "", 50),
             "age":         _age(t.get("created_at")),
         })
-    return {"tasks": rows, "status_filter": status_filter, "type_filter": type_filter}
+    return {"tasks": rows, "status_filter": status_filter, "type_filter": type_filter, "tenant_id": tenant_id}
 
 
 def _task_detail_context(task_id: str) -> dict:
@@ -1095,6 +1155,7 @@ def _task_detail_context(task_id: str) -> dict:
     # Build analysis summary for rca tasks in approval/execution state so
     # the reviewer sees what each stage concluded before deciding to approve.
     analysis_summary: dict = {}
+    topology_ctx: dict = {}
     if _needs_approval_ctx:
         try:
             c = json.loads(task.get("content") or "{}")
@@ -1121,6 +1182,12 @@ def _task_detail_context(task_id: str) -> dict:
                 # Gate metadata
                 "gate_reason":       c.get("reason", ""),
             }
+            # Topology context: leaf-symptom badge + blast radius
+            topology_ctx = {
+                "is_leaf_symptom":  bool(rca.get("is_leaf_symptom", False)),
+                "upstream_cause":   rca.get("upstream_cause", ""),
+                "affected_devices": rca.get("affected_devices", []),
+            }
         except Exception:
             pass
 
@@ -1139,6 +1206,7 @@ def _task_detail_context(task_id: str) -> dict:
         "config_diff":        config_diff,
         "verification":       verification,
         "analysis_summary":   analysis_summary,
+        "topology_ctx":       topology_ctx,
         "verify_delay_min":   max(1, settings.execution_verify_delay // 60),
     }
 
@@ -1308,14 +1376,15 @@ async def incident_close(request: Request, incident_id: str,
 async def partial_chronicle(request: Request, fp: str = ""):
     ctx = await run_in_threadpool(_pipeline_chronicle_context, fp)
     return templates.TemplateResponse(request, "partials/pipeline_chronicle.html", {
-        "request": request,
+        "request":          request,
+        "verify_delay_min": max(1, settings.execution_verify_delay // 60),
         **ctx,
     })
 
 
 @app.get("/partials/task-queue", response_class=HTMLResponse)
-async def partial_task_queue(request: Request, status: str = "", type: str = ""):
-    ctx = await run_in_threadpool(_task_queue_context, status, type)
+async def partial_task_queue(request: Request, status: str = "", type: str = "", tenant_id: str = ""):
+    ctx = await run_in_threadpool(_task_queue_context, status, type, tenant_id)
     return templates.TemplateResponse(request, "partials/task_queue.html", {"request": request, **ctx})
 
 
@@ -1440,6 +1509,148 @@ async def partial_activity_detail(request: Request, record_id: int):
         "request": request,
         "record":  record,
         "calls":   calls,
+    })
+
+
+# ── Policies + Intents pages ──────────────────────────────────────────────────
+
+@app.get("/policies", response_class=HTMLResponse)
+async def policies_page(request: Request):
+    return templates.TemplateResponse(request, "policies.html", {"request": request})
+
+
+@app.get("/intents", response_class=HTMLResponse)
+async def intents_page(request: Request):
+    return templates.TemplateResponse(request, "intents.html", {"request": request})
+
+
+@app.get("/partials/policy-list", response_class=HTMLResponse)
+async def partial_policy_list(request: Request, tenant_id: str = "default"):
+    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
+    return templates.TemplateResponse(request, "partials/policy_list.html", {
+        "request":  request,
+        "policies": policies,
+    })
+
+
+@app.post("/partials/policy-create", response_class=HTMLResponse)
+async def partial_policy_create(
+    request: Request,
+    name: str = Form(...),
+    fix_type: str = Form(""),
+    device_role: str = Form(""),
+    environment: str = Form(""),
+    autonomy_level: str = Form("L2"),
+    tenant_id: str = "default",
+):
+    data = {
+        "name":           name,
+        "fix_type":       fix_type,
+        "device_role":    device_role,
+        "environment":    environment,
+        "autonomy_level": autonomy_level,
+        "tenant_id":      tenant_id,
+    }
+    await run_in_threadpool(task_store.create_policy, data)
+    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
+    return templates.TemplateResponse(request, "partials/policy_list.html", {
+        "request":  request,
+        "policies": policies,
+    })
+
+
+@app.post("/partials/policy-toggle/{policy_id}", response_class=HTMLResponse)
+async def partial_policy_toggle(request: Request, policy_id: str, tenant_id: str = "default"):
+    existing = await run_in_threadpool(task_store.get_policy, policy_id)
+    if existing:
+        await run_in_threadpool(
+            task_store.update_policy, policy_id, {"enabled": 0 if existing["enabled"] else 1}
+        )
+    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
+    return templates.TemplateResponse(request, "partials/policy_list.html", {
+        "request":  request,
+        "policies": policies,
+    })
+
+
+@app.delete("/partials/policy-delete/{policy_id}", response_class=HTMLResponse)
+async def partial_policy_delete(request: Request, policy_id: str, tenant_id: str = "default"):
+    await run_in_threadpool(task_store.delete_policy, policy_id)
+    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
+    return templates.TemplateResponse(request, "partials/policy_list.html", {
+        "request":  request,
+        "policies": policies,
+    })
+
+
+@app.get("/partials/policy-performance", response_class=HTMLResponse)
+async def partial_policy_performance(request: Request, tenant_id: str = "default"):
+    stats   = await run_in_threadpool(task_store.get_policy_stats, tenant_id)
+    all_pol = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
+    names   = {p["id"]: p["name"] for p in all_pol}
+    return templates.TemplateResponse(request, "partials/policy_performance.html", {
+        "request":      request,
+        "stats":        stats,
+        "policy_names": names,
+    })
+
+
+@app.get("/partials/intent-list", response_class=HTMLResponse)
+async def partial_intent_list(request: Request, tenant_id: str = "default"):
+    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
+    return templates.TemplateResponse(request, "partials/intent_list.html", {
+        "request": request,
+        "intents": intents,
+    })
+
+
+@app.post("/partials/intent-create", response_class=HTMLResponse)
+async def partial_intent_create(
+    request: Request,
+    name: str = Form(...),
+    intent_type: str = Form(...),
+    device: str = Form(""),
+    alertname: str = Form(""),
+    description: str = Form(""),
+    tenant_id: str = "default",
+):
+    data = {
+        "name":        name,
+        "intent_type": intent_type,
+        "device":      device,
+        "alertname":   alertname,
+        "description": description,
+        "tenant_id":   tenant_id,
+    }
+    await run_in_threadpool(task_store.create_intent, data)
+    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
+    return templates.TemplateResponse(request, "partials/intent_list.html", {
+        "request": request,
+        "intents": intents,
+    })
+
+
+@app.post("/partials/intent-toggle/{intent_id}", response_class=HTMLResponse)
+async def partial_intent_toggle(request: Request, intent_id: str, tenant_id: str = "default"):
+    existing = await run_in_threadpool(task_store.get_intent, intent_id)
+    if existing:
+        await run_in_threadpool(
+            task_store.update_intent, intent_id, {"enabled": 0 if existing["enabled"] else 1}
+        )
+    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
+    return templates.TemplateResponse(request, "partials/intent_list.html", {
+        "request": request,
+        "intents": intents,
+    })
+
+
+@app.delete("/partials/intent-delete/{intent_id}", response_class=HTMLResponse)
+async def partial_intent_delete(request: Request, intent_id: str, tenant_id: str = "default"):
+    await run_in_threadpool(task_store.delete_intent, intent_id)
+    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
+    return templates.TemplateResponse(request, "partials/intent_list.html", {
+        "request": request,
+        "intents": intents,
     })
 
 
@@ -1573,12 +1784,13 @@ async def task_approve(
 
 
 @app.post("/tasks/{task_id}/reject", response_class=HTMLResponse)
-async def task_reject(request: Request, task_id: str):
+async def task_reject(request: Request, task_id: str, reason: str = Form("")):
     task = await run_in_threadpool(task_store.get_task, task_id)
     if not task:
         msg, ok = f"Task `{task_id}` not found.", False
     else:
-        await run_in_threadpool(task_store.reject_task, task_id, "human", "Rejected via UI")
+        rejection_reason = reason.strip() or "Rejected via UI"
+        await run_in_threadpool(task_store.reject_task, task_id, "human", rejection_reason)
         msg, ok = f"✅ Task `{task_id}` rejected.", True
     return templates.TemplateResponse(request, "partials/action_status.html", {"request": request, "msg": msg, "ok": ok})
 
@@ -1682,6 +1894,48 @@ async def schedule_cancel(request: Request, job_id: str):
         "msg":      msg,
         "ok":       ok,
         "truncate": _truncate,
+    })
+
+
+# ── Config page (Policies + Intents merged) ───────────────────────────────────
+
+@app.get("/config", response_class=HTMLResponse)
+async def config_page(request: Request):
+    return templates.TemplateResponse(request, "config.html", {"request": request})
+
+
+# ── System page (Activity + Cost merged) ──────────────────────────────────────
+
+@app.get("/system", response_class=HTMLResponse)
+async def system_page(request: Request):
+    records, summary = await asyncio.gather(
+        run_in_threadpool(store.get_recent, limit=150),
+        run_in_threadpool(store.summary),
+    )
+    return templates.TemplateResponse(request, "system.html", {
+        "request": request,
+        "records": records,
+        "summary": summary,
+        "truncate": _truncate,
+    })
+
+
+# ── Ops health KPI bar ────────────────────────────────────────────────────────
+
+@app.get("/partials/ops-health", response_class=HTMLResponse)
+async def partial_ops_health(request: Request):
+    kpis, badges = await asyncio.gather(
+        run_in_threadpool(task_store.get_kpis),
+        asyncio.gather(*[
+            _fetch_agent_health(_http_client, name, url)
+            for name, url in [("AI Agent", OPS_AGENT_URL)]
+        ]),
+    )
+    agent_online = badges[0]["label"] == "Online" if badges else False
+    return templates.TemplateResponse(request, "partials/ops_health.html", {
+        "request":      request,
+        "kpis":         kpis,
+        "agent_online": agent_online,
     })
 
 

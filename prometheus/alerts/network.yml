@@ -38,10 +38,10 @@ groups:
   - name: interface_health
     rules:
       - alert: InterfaceDown
-        # Fires when an Ethernet interface goes operationally down for any reason
-        # (including a remote-side link failure or physical issue).
+        # Fires when an Ethernet interface goes operationally down for any reason.
+        # Admin-shutdown detection is handled during RCA by querying
+        # interface_ifAdminStatus in Prometheus — no separate alert needed.
         # Excludes Loopback, Management, and Vlan interfaces to avoid noise.
-        # For admin-shutdown detection see InterfaceAdminDown below.
         expr: |
           interface_ifOperStatus{ifDescr=~"Ethernet.*"} == 2
         for: 1m
@@ -51,20 +51,6 @@ groups:
         annotations:
           summary: "Interface {{ $labels.ifDescr }} on {{ $labels.sysName }} is operationally down"
           description: "{{ $labels.ifDescr }} on {{ $labels.sysName }} ({{ $labels.agent_host }}) has been operationally down for more than 1 minute."
-
-      - alert: InterfaceAdminDown
-        # Fires when an Ethernet interface is administratively shut down.
-        # This is the expected signal from chaos experiments and config changes.
-        # ifAdminStatus values: 1=up, 2=down, 3=testing
-        expr: |
-          interface_ifAdminStatus{ifDescr=~"Ethernet.*"} == 2
-        for: 1m
-        labels:
-          severity: warning
-          category: availability
-        annotations:
-          summary: "Interface {{ $labels.ifDescr }} on {{ $labels.sysName }} has been admin-shutdown"
-          description: "{{ $labels.ifDescr }} on {{ $labels.sysName }} ({{ $labels.agent_host }}) has been administratively disabled for more than 1 minute."
 
       - alert: HighInterfaceUtilization
         expr: |

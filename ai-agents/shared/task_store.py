@@ -25,7 +25,7 @@ import os
 import threading
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Generator
 
 from sqlalchemy import create_engine, event as sa_event, text
@@ -130,7 +130,60 @@ def _build_ddl(dialect: str) -> list[str]:
     "CREATE INDEX IF NOT EXISTS idx_tasks_tenant    ON tasks(tenant_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_task_events_tid ON task_events(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_tid    ON task_feedback(task_id)",
-]
+    """
+    CREATE TABLE IF NOT EXISTS action_policies (
+        id                   TEXT PRIMARY KEY,
+        tenant_id            TEXT NOT NULL DEFAULT 'default',
+        name                 TEXT NOT NULL,
+        description          TEXT NOT NULL DEFAULT '',
+        alertname            TEXT NOT NULL DEFAULT '',
+        fix_type             TEXT NOT NULL DEFAULT '',
+        device_role          TEXT NOT NULL DEFAULT '',
+        environment          TEXT NOT NULL DEFAULT '',
+        min_confidence       TEXT NOT NULL DEFAULT 'low',
+        max_risk             TEXT NOT NULL DEFAULT 'high',
+        min_prior_successes  INTEGER NOT NULL DEFAULT 0,
+        autonomy_level       TEXT NOT NULL DEFAULT 'L2',
+        enabled              INTEGER NOT NULL DEFAULT 1,
+        created_at           TEXT NOT NULL,
+        updated_at           TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_policies_tenant ON action_policies(tenant_id, enabled)",
+    """
+    CREATE TABLE IF NOT EXISTS standing_intents (
+        id                TEXT PRIMARY KEY,
+        tenant_id         TEXT NOT NULL DEFAULT 'default',
+        name              TEXT NOT NULL,
+        description       TEXT NOT NULL DEFAULT '',
+        intent_type       TEXT NOT NULL,
+        device            TEXT NOT NULL DEFAULT '',
+        device_role       TEXT NOT NULL DEFAULT '',
+        alertname         TEXT NOT NULL DEFAULT '',
+        metric_query      TEXT NOT NULL DEFAULT '',
+        threshold         TEXT NOT NULL DEFAULT '',
+        action            TEXT NOT NULL DEFAULT '',
+        schedule          TEXT NOT NULL DEFAULT '',
+        enabled           INTEGER NOT NULL DEFAULT 1,
+        created_at        TEXT NOT NULL,
+        last_triggered_at TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_intents_tenant ON standing_intents(tenant_id, enabled)",
+    f"""
+    CREATE TABLE IF NOT EXISTS policy_performance (
+        id             {serial},
+        policy_id      TEXT,
+        fix_type       TEXT NOT NULL,
+        device_role    TEXT NOT NULL DEFAULT '',
+        tenant_id      TEXT NOT NULL DEFAULT 'default',
+        alert_resolved INTEGER,
+        ttr_seconds    INTEGER,
+        created_at     TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_perf_policy ON policy_performance(policy_id, created_at)",
+    ]
 
 # Safe migrations — IGNORE errors so they are idempotent on existing DBs.
 _MIGRATIONS = [
@@ -397,9 +450,10 @@ class TaskStore:
             )
             conn.execute(
                 text("INSERT INTO task_events (task_id,timestamp,agent,event_type,detail) "
-                     "VALUES (:task_id,:ts,:agent,:event_type,NULL)"),
+                     "VALUES (:task_id,:ts,:agent,:event_type,:detail)"),
                 {"task_id": task_id, "ts": ts, "agent": agent,
-                 "event_type": "approval_requested"},
+                 "event_type": "approval_requested",
+                 "detail": json.dumps({"requested_by": agent, "timestamp": ts})},
             )
         # Dispatch notifications outside the lock so a slow webhook never
         # blocks other writers. Import lazily to avoid circular imports.
@@ -471,6 +525,15 @@ class TaskStore:
                 {"task_id": task_id, "ts": ts, "agent": agent,
                  "event_type": event_type, "detail": detail_str},
             )
+
+    def get_task_events(self, task_id: str) -> list[dict]:
+        """Return all events for a task ordered chronologically."""
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                text("SELECT * FROM task_events WHERE task_id=:tid ORDER BY id"),
+                {"tid": task_id},
+            ).fetchall()
+        return [_row_to_dict(r) for r in rows]
 
     # ── feedback ──────────────────────────────────────────────────────────────
 
@@ -657,7 +720,7 @@ class TaskStore:
                 text("""
                     SELECT * FROM tasks
                     WHERE type='rca'
-                      AND status NOT IN ('failed','rejected','complete')
+                      AND status NOT IN ('failed','rejected')
                       AND (content LIKE :pat1 OR content LIKE :pat2)
                       AND created_at >= :cutoff
                     ORDER BY created_at DESC LIMIT 1
@@ -965,6 +1028,228 @@ class TaskStore:
                     "detail":     json.dumps({"resolution": resolution}) if resolution else None,
                 },
             )
+
+    # ── action_policies ───────────────────────────────────────────────────────
+
+    def list_policies(self, tenant_id: str = "default") -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                text("SELECT * FROM action_policies WHERE tenant_id=:t ORDER BY created_at DESC"),
+                {"t": tenant_id},
+            ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+    def create_policy(self, data: dict) -> dict:
+        ts = _now()
+        row = {
+            "id":                  _short_id("pol"),
+            "tenant_id":           data.get("tenant_id", "default"),
+            "name":                data["name"],
+            "description":         data.get("description", ""),
+            "alertname":           data.get("alertname", ""),
+            "fix_type":            data.get("fix_type", ""),
+            "device_role":         data.get("device_role", ""),
+            "environment":         data.get("environment", ""),
+            "min_confidence":      data.get("min_confidence", "low"),
+            "max_risk":            data.get("max_risk", "high"),
+            "min_prior_successes": data.get("min_prior_successes", 0),
+            "autonomy_level":      data.get("autonomy_level", "L2"),
+            "enabled":             int(data.get("enabled", True)),
+            "created_at":          ts,
+            "updated_at":          ts,
+        }
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                text("""INSERT INTO action_policies
+                    (id,tenant_id,name,description,alertname,fix_type,device_role,environment,
+                     min_confidence,max_risk,min_prior_successes,autonomy_level,enabled,
+                     created_at,updated_at)
+                    VALUES
+                    (:id,:tenant_id,:name,:description,:alertname,:fix_type,:device_role,:environment,
+                     :min_confidence,:max_risk,:min_prior_successes,:autonomy_level,:enabled,
+                     :created_at,:updated_at)"""),
+                row,
+            )
+        return row
+
+    def update_policy(self, policy_id: str, data: dict) -> dict | None:
+        ts = _now()
+        allowed = {
+            "name", "description", "alertname", "fix_type", "device_role", "environment",
+            "min_confidence", "max_risk", "min_prior_successes", "autonomy_level", "enabled",
+        }
+        sets = ", ".join(f"{k}=:{k}" for k in data if k in allowed)
+        if not sets:
+            return self.get_policy(policy_id)
+        params = {k: v for k, v in data.items() if k in allowed}
+        params["updated_at"] = ts
+        params["id"] = policy_id
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                text(f"UPDATE action_policies SET {sets}, updated_at=:updated_at WHERE id=:id"),
+                params,
+            )
+        return self.get_policy(policy_id)
+
+    def get_policy(self, policy_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                text("SELECT * FROM action_policies WHERE id=:id"), {"id": policy_id}
+            ).fetchone()
+        return _row_to_dict(row) if row else None
+
+    def delete_policy(self, policy_id: str) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(text("DELETE FROM action_policies WHERE id=:id"), {"id": policy_id})
+
+    # ── standing_intents ──────────────────────────────────────────────────────
+
+    def list_intents(self, tenant_id: str = "default") -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                text("SELECT * FROM standing_intents WHERE tenant_id=:t ORDER BY created_at DESC"),
+                {"t": tenant_id},
+            ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+    def create_intent(self, data: dict) -> dict:
+        ts = _now()
+        row = {
+            "id":               _short_id("int"),
+            "tenant_id":        data.get("tenant_id", "default"),
+            "name":             data["name"],
+            "description":      data.get("description", ""),
+            "intent_type":      data["intent_type"],
+            "device":           data.get("device", ""),
+            "device_role":      data.get("device_role", ""),
+            "alertname":        data.get("alertname", ""),
+            "metric_query":     data.get("metric_query", ""),
+            "threshold":        data.get("threshold", ""),
+            "action":           data.get("action", ""),
+            "schedule":         data.get("schedule", ""),
+            "enabled":          int(data.get("enabled", True)),
+            "created_at":       ts,
+            "last_triggered_at": None,
+        }
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                text("""INSERT INTO standing_intents
+                    (id,tenant_id,name,description,intent_type,device,device_role,alertname,
+                     metric_query,threshold,action,schedule,enabled,created_at,last_triggered_at)
+                    VALUES
+                    (:id,:tenant_id,:name,:description,:intent_type,:device,:device_role,:alertname,
+                     :metric_query,:threshold,:action,:schedule,:enabled,:created_at,:last_triggered_at)"""),
+                row,
+            )
+        return row
+
+    def update_intent(self, intent_id: str, data: dict) -> dict | None:
+        allowed = {
+            "name", "description", "intent_type", "device", "device_role", "alertname",
+            "metric_query", "threshold", "action", "schedule", "enabled",
+        }
+        sets = ", ".join(f"{k}=:{k}" for k in data if k in allowed)
+        if not sets:
+            return self.get_intent(intent_id)
+        params = {k: v for k, v in data.items() if k in allowed}
+        params["id"] = intent_id
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                text(f"UPDATE standing_intents SET {sets} WHERE id=:id"), params
+            )
+        return self.get_intent(intent_id)
+
+    def get_intent(self, intent_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                text("SELECT * FROM standing_intents WHERE id=:id"), {"id": intent_id}
+            ).fetchone()
+        return _row_to_dict(row) if row else None
+
+    def delete_intent(self, intent_id: str) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(text("DELETE FROM standing_intents WHERE id=:id"), {"id": intent_id})
+
+    def get_matching_intents(
+        self,
+        device: str = "",
+        alertname: str = "",
+        tenant_id: str = "default",
+    ) -> list[dict]:
+        """Return enabled intents that match device and/or alertname."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                text("""SELECT * FROM standing_intents
+                    WHERE tenant_id=:t AND enabled=1
+                      AND (device='' OR device=:device)
+                      AND (alertname='' OR alertname=:alertname)
+                    ORDER BY created_at ASC"""),
+                {"t": tenant_id, "device": device, "alertname": alertname},
+            ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+    def touch_intent(self, intent_id: str) -> None:
+        """Update last_triggered_at to now."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                text("UPDATE standing_intents SET last_triggered_at=:ts WHERE id=:id"),
+                {"ts": _now(), "id": intent_id},
+            )
+
+    # ── policy_performance ────────────────────────────────────────────────────
+
+    def record_policy_outcome(
+        self,
+        *,
+        policy_id: str | None,
+        fix_type: str,
+        device_role: str = "",
+        tenant_id: str = "default",
+        alert_resolved: bool | None,
+        ttr_seconds: int | None = None,
+    ) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                text("""INSERT INTO policy_performance
+                    (policy_id,fix_type,device_role,tenant_id,alert_resolved,ttr_seconds,created_at)
+                    VALUES (:policy_id,:fix_type,:device_role,:tenant_id,:alert_resolved,:ttr,:ts)"""),
+                {
+                    "policy_id":      policy_id,
+                    "fix_type":       fix_type,
+                    "device_role":    device_role,
+                    "tenant_id":      tenant_id,
+                    "alert_resolved": int(alert_resolved) if alert_resolved is not None else None,
+                    "ttr":            ttr_seconds,
+                    "ts":             _now(),
+                },
+            )
+
+    def get_policy_performance(self, policy_id: str, limit: int = 50) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                text("""SELECT * FROM policy_performance WHERE policy_id=:id
+                    ORDER BY created_at DESC LIMIT :lim"""),
+                {"id": policy_id, "lim": limit},
+            ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+    def get_policy_stats(self, tenant_id: str = "default") -> list[dict]:
+        """Aggregate accuracy and avg TTR per policy for the last 30 days."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        with self._connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT policy_id,
+                           COUNT(*) as total,
+                           SUM(alert_resolved) as resolved,
+                           AVG(ttr_seconds) as avg_ttr
+                    FROM policy_performance
+                    WHERE tenant_id=:t AND created_at >= :cutoff
+                    GROUP BY policy_id
+                """),
+                {"t": tenant_id, "cutoff": cutoff},
+            ).fetchall()
+        return [_row_to_dict(r) for r in rows]
 
     def clear_all_tasks(self) -> int:
         with self._lock, self._connect() as conn:

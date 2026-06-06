@@ -663,3 +663,83 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; 
   vertical-align: middle;
   animation: pulse 1.5s ease-in-out infinite;
 }
+
+/* ── Onboarding / help callout ───────────────────────── */
+.help-callout {
+  background: #0c1e38;
+  border: 1px solid #1d4ed8;
+  border-left: 4px solid #3b82f6;
+  border-radius: 8px;
+  padding: 14px 18px;
+  font-size: 0.85em;
+  color: var(--text-sub);
+  margin-bottom: 18px;
+  line-height: 1.55;
+}
+.help-callout strong { color: var(--text); }
+.help-callout p { margin: 6px 0 0; }
+
+/* ── Autonomy level gauge strip ──────────────────────── */
+.autonomy-gauge {
+  display: flex;
+  gap: 3px;
+  margin: 8px 0 4px;
+}
+.autonomy-gauge .gauge-level {
+  flex: 1;
+  height: 30px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7em;
+  font-weight: 700;
+  cursor: default;
+  transition: opacity 0.15s, transform 0.15s;
+  opacity: 0.55;
+}
+.autonomy-gauge .gauge-level:hover {
+  opacity: 1;
+  transform: scaleY(1.08);
+}
+.autonomy-gauge .gauge-level.active { opacity: 1; }
+
+/* ── Ops health KPI bar ──────────────────────────────── */
+.ops-health-bar {
+  display: flex;
+  gap: 0;
+  flex-wrap: wrap;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.ops-health-kpi {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 10px 20px;
+  border-right: 1px solid var(--border);
+  min-width: 110px;
+  flex: 1;
+}
+.ops-health-kpi:last-child { border-right: none; }
+.ops-health-kpi .kpi-value {
+  font-size: 1.35em;
+  font-weight: 700;
+  line-height: 1;
+}
+.ops-health-kpi .kpi-label {
+  font-size: 0.72em;
+  color: var(--text-sub);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+/* ── Section title spacing helper ────────────────────── */
+.mt-20 { margin-top: 20px; }
+.mt-24 { margin-top: 24px; }

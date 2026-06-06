@@ -36,6 +36,10 @@ from shared.task_store import TaskStore
 from shared.rate_limiter import RateLimiter, BudgetExceededError
 from shared.status_tracker import StatusCallbackHandler
 from shared.tools import OPS_TOOLS
+from shared.policy_registry import PolicyRegistry
+from shared.intent_registry import IntentRegistry
+from shared.topology_correlator import TopologyCorrelator
+from shared.learning_engine import LearningEngine
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +98,11 @@ class IncidentState(TypedDict):
     fingerprint: str
     event:       dict
 
+    # Topology context (injected by alert_poller or check_intents)
+    blast_radius:    list
+    is_leaf_symptom: bool
+    intent_match:    str | None   # intent ID if a standing intent fired
+
     # Single task ID for the entire pipeline
     rca_task_id: str | None
 
@@ -134,11 +143,25 @@ class IncidentWorkflow:
         self._rl    = rate_limiter
         self._sh    = status_handler
         self._stop  = threading.Event()
+        # Limit concurrent LLM-heavy pipeline runs to prevent TPM stampede.
+        # Each incident workflow can use ~6-10K tokens; cap at 2 concurrent.
+        self._pipeline_sem = threading.Semaphore(2)
 
         self._llm = get_llm(temperature=0.1)
 
         from ops_agent.chaos_tools import CHAOS_TOOLS as _CHAOS
         self._all_tools = OPS_TOOLS + _CHAOS
+
+        # CLANO framework components
+        self._policy_registry  = PolicyRegistry(task_store)
+        self._intent_registry  = IntentRegistry(task_store)
+        self._topology         = TopologyCorrelator(
+            settings.nautobot_url,
+            settings.nautobot_token,
+            cache_ttl=settings.topology_cache_ttl,
+            blast_radius_hops=settings.topology_blast_radius_hops,
+        )
+        self._learning_engine  = LearningEngine(self._policy_registry, task_store)
 
         self._graph = self._build_graph()
 
@@ -147,14 +170,25 @@ class IncidentWorkflow:
     def _build_graph(self):
         builder = StateGraph(IncidentState)
 
+        builder.add_node("check_intents",        self._node_check_intents)
         builder.add_node("investigate",          self._node_investigate)
         builder.add_node("propose_fix",          self._node_propose_fix)
         builder.add_node("validate",             self._node_validate)
         builder.add_node("create_approval_gate", self._node_create_approval_gate)
         builder.add_node("create_low_conf_gate", self._node_create_low_conf_gate)
 
-        builder.set_entry_point("investigate")
+        builder.set_entry_point("check_intents")
 
+        builder.add_conditional_edges(
+            "check_intents",
+            self._route_after_intent_check,
+            {
+                "no_action":   END,
+                "investigate": "investigate",
+                # escalate_human from suppress→escalate goes straight to gate
+                "escalate":    "create_low_conf_gate",
+            },
+        )
         builder.add_conditional_edges(
             "investigate",
             self._route_after_rca,
@@ -182,6 +216,15 @@ class IncidentWorkflow:
     # ── routing ───────────────────────────────────────────────────────────────
 
     @staticmethod
+    def _route_after_intent_check(state: IncidentState) -> str:
+        decision = state.get("pipeline_decision")
+        if decision == "no_action":
+            return "no_action"
+        if decision == "escalate_human":
+            return "escalate"
+        return "investigate"
+
+    @staticmethod
     def _route_after_rca(state: IncidentState) -> str:
         return state.get("pipeline_decision") or "no_action"
 
@@ -199,6 +242,83 @@ class IncidentWorkflow:
             checkpointer=MemorySaver(),
             prompt=SYSTEM_PROMPT,
         ), {"configurable": {"thread_id": session_id}, "callbacks": [self._sh]}
+
+    # ── node: check_intents ───────────────────────────────────────────────────
+
+    def _node_check_intents(self, state: IncidentState) -> dict:
+        """
+        Pre-investigation gate: check standing intents before running the LLM.
+        suppress intents → no_action (skip investigation entirely)
+        escalate intents → create low-confidence gate immediately
+        No match         → continue to investigate
+        """
+        device    = state["device"]
+        alertname = state["alertname"]
+        tenant_id = state["tenant_id"]
+
+        # Topology correlation: enrich state with blast_radius and is_leaf_symptom
+        blast_radius    = []
+        is_leaf_symptom = False
+        try:
+            blast_radius = self._topology.get_blast_radius(device)
+            # Check if this device is downstream of an already-active RCA
+            existing_rca_devices: list[str] = []
+            active_rcas = self._ts.list_tasks(type="rca", status="running", limit=20)
+            for t in active_rcas:
+                try:
+                    c = json.loads(t.get("content") or "{}")
+                    d = c.get("device", "")
+                    if d and d != device:
+                        existing_rca_devices.append(d)
+                except Exception:
+                    pass
+            if existing_rca_devices:
+                root = self._topology.find_root_cause(
+                    alert_device=device,
+                    existing_rca_devices=existing_rca_devices,
+                )
+                if root:
+                    is_leaf_symptom = True
+                    logger.info(
+                        "Workflow: %s identified as downstream symptom of root %s",
+                        device, root,
+                    )
+        except Exception:
+            logger.debug("Workflow: topology enrichment failed for %s — skipping", device)
+
+        # Standing intent check
+        matches = self._intent_registry.matching(device, alertname, tenant_id)
+        for m in matches:
+            self._ts.touch_intent(m.intent_id)
+            if m.intent_type == "suppress":
+                logger.info(
+                    "Workflow: intent '%s' suppressed investigation for %s/%s",
+                    m.intent_id, device, alertname,
+                )
+                return {
+                    "pipeline_decision": "no_action",
+                    "intent_match":      m.intent_id,
+                    "blast_radius":      blast_radius,
+                    "is_leaf_symptom":   is_leaf_symptom,
+                }
+            if m.intent_type == "escalate":
+                logger.info(
+                    "Workflow: intent '%s' escalated %s/%s",
+                    m.intent_id, device, alertname,
+                )
+                return {
+                    "pipeline_decision": "escalate_human",
+                    "intent_match":      m.intent_id,
+                    "blast_radius":      blast_radius,
+                    "is_leaf_symptom":   is_leaf_symptom,
+                }
+
+        return {
+            "pipeline_decision": None,
+            "intent_match":      None,
+            "blast_radius":      blast_radius,
+            "is_leaf_symptom":   is_leaf_symptom,
+        }
 
     # ── node: investigate ─────────────────────────────────────────────────────
 
@@ -218,6 +338,22 @@ class IncidentWorkflow:
             f"to find the hostname, or search_nautobot('{device}') to resolve it."
             if device and device.replace(".", "").isdigit() else ""
         )
+
+        blast_radius    = state.get("blast_radius", [])
+        is_leaf_symptom = state.get("is_leaf_symptom", False)
+        topology_hint   = ""
+        if is_leaf_symptom:
+            topology_hint = (
+                "\n\nIMPORTANT: Topology analysis indicates this alert may be a DOWNSTREAM SYMPTOM "
+                "of an upstream failure. Check get_topology() and any active alerts on connected "
+                "upstream devices before concluding this device is the root cause. "
+                "If the root cause is an upstream device, set AFFECTED to that device."
+            )
+        elif blast_radius:
+            topology_hint = (
+                f"\n\nBlast radius: the following devices may also be affected if this "
+                f"device is the root cause: {', '.join(blast_radius[:5])}."
+            )
 
         admin_shutdown_rule = (
             "\n\nCRITICAL RULE — Admin-shutdown vs physical failure:\n"
@@ -242,6 +378,7 @@ class IncidentWorkflow:
             f"  Fingerprint: {fp}\n\n"
             f"Focus: {focus}"
             + admin_shutdown_rule
+            + topology_hint
             + (f"\n\n{device_hint}" if device_hint else "")
             + f"\n\nUse your full toolkit in this order:\n"
             f"1. get_active_alerts() — confirm what is currently firing\n"
@@ -298,13 +435,16 @@ class IncidentWorkflow:
                                        {"stage": "rca", "detail": "structured output parsing failed — fields may be empty"})
 
                 rca_data = {
-                    "response":     response,
-                    "tool_calls":   len(tool_calls),
-                    "diagnosis":    rca.diagnosis,
-                    "affected":     rca.affected,
-                    "action":       rca.action,
-                    "confidence":   rca.confidence,
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "response":         response,
+                    "tool_calls":       len(tool_calls),
+                    "diagnosis":        rca.diagnosis,
+                    "affected":         rca.affected,
+                    "action":           rca.action,
+                    "confidence":       rca.confidence,
+                    "affected_devices": rca.affected_devices or ([device] + blast_radius),
+                    "upstream_cause":   rca.upstream_cause,
+                    "is_leaf_symptom":  is_leaf_symptom,
+                    "completed_at":     datetime.now(timezone.utc).isoformat(),
                 }
                 self._ts.complete_task(task_id, AGENT, rca_data)
                 self._ts.add_event(task_id, AGENT, "rca_complete", rca_data)
@@ -337,10 +477,30 @@ class IncidentWorkflow:
                                    wait_s, task_id)
                     time.sleep(wait_s)
                     continue
-                self._ts.fail_task(task_id, AGENT, str(exc)[:500])
-                logger.exception("Workflow: investigate node failed task=%s", task_id)
+                # Escalate to human rather than silently failing — a failed
+                # investigate means the operator should be notified so they
+                # can investigate manually.
+                err_msg = str(exc)[:300]
+                self._ts.add_event(task_id, AGENT, "investigate_failed",
+                                   {"error": err_msg, "will_escalate": True})
+                logger.exception("Workflow: investigate node failed task=%s — escalating to human", task_id)
                 self._sh.clear_context()
-                return {"rca_task_id": task_id, "pipeline_decision": "no_action", "error": str(exc)[:300]}
+                fallback_rca = {
+                    "diagnosis":   f"Investigation failed: {err_msg}",
+                    "affected":    device,
+                    "action":      "Manual investigation required.",
+                    "confidence":  "low",
+                    "affected_devices": [device] if device else [],
+                    "upstream_cause": "",
+                    "is_leaf_symptom": is_leaf_symptom,
+                    "response": "",
+                }
+                return {
+                    "rca_task_id":       task_id,
+                    "rca":               fallback_rca,
+                    "pipeline_decision": "low_confidence_escalate",
+                    "error":             err_msg,
+                }
 
         self._sh.clear_context()
         return {"rca_task_id": task_id, "pipeline_decision": "no_action"}
@@ -467,16 +627,23 @@ class IncidentWorkflow:
 
                 # Final failure — synthesise escalate_human fix so the pipeline always
                 # reaches a human-reviewable approval gate rather than dying silently.
-                self._ts.add_event(task_id, AGENT, "fix_proposal_failed", {"error": str(exc)[:500]})
+                # Pre-populate commands from the RCA's action field so the operator
+                # doesn't have to guess what to type at the approval gate.
+                self._ts.add_event(task_id, AGENT, "fix_proposal_failed",
+                                   {"error": str(exc)[:500], "rca_action_used": bool(action)})
                 logger.error("Workflow: propose_fix failed task=%s (attempt %d): %s",
                              task_id, attempt + 1, exc)
                 fallback_fix = {
                     "fix_type":    "escalate_human",
                     "device":      affected_device,
-                    "commands":    "none",
+                    "commands":    action or "none",  # carry forward RCA action as hint
                     "risk":        "unknown",
                     "confidence":  "low",
                     "reason": (
+                        f"Fix generation failed ({type(exc).__name__}). "
+                        f"RCA suggests: {action[:200] if action else diagnosis[:200]}. "
+                        "Verify and approve the pre-populated commands, or enter new ones."
+                        if action else
                         f"Fix generation failed ({type(exc).__name__}). "
                         f"RCA: {diagnosis[:200]}. "
                         "Please enter the fix commands manually in the operator field."
@@ -603,12 +770,35 @@ class IncidentWorkflow:
         risk     = fix.get("risk", "medium").lower()
         confidence = fix.get("confidence", "low").lower()
 
-        auto = (
-            not do_not_auto
-            and risk == "low"
-            and confidence == "high"
-            and self._ts.count_successful_executions(device, fix_type) >= 2
+        # Look up device role for policy matching
+        device_role = ""
+        try:
+            resp = httpx.get(
+                f"{settings.nautobot_url}/api/dcim/devices/",
+                params={"name": device, "limit": 1},
+                headers={"Authorization": f"Token {settings.nautobot_token}"},
+                timeout=5,
+            )
+            if resp.ok:
+                results = resp.json().get("results", [])
+                if results:
+                    device_role = ((results[0].get("role") or results[0].get("device_role") or {})
+                                  .get("slug", "")).lower()
+        except Exception:
+            pass
+
+        prior_success_count = self._ts.count_successful_executions(device, fix_type)
+        policy_decision = self._policy_registry.query(
+            fix_type=fix_type,
+            device_role=device_role,
+            environment=settings.environment,
+            confidence=confidence,
+            risk=risk,
+            prior_success_count=prior_success_count,
+            alertname=state["alertname"],
+            tenant_id=state["tenant_id"],
         )
+        auto = policy_decision.allow_execution and not do_not_auto
 
         # Store full approval context into the task content so the UI can display it
         approval_content = {
@@ -620,8 +810,11 @@ class IncidentWorkflow:
             "chaos_notes":         val.get("notes", ""),
             "commands":            fix.get("commands", "none"),
             "device":              device,
+            "device_role":         device_role,
             "config_diff":         fix.get("config_diff", ""),
             "do_not_auto_execute": do_not_auto,
+            "policy_id":           policy_decision.policy_id,
+            "autonomy_level":      policy_decision.autonomy_level,
             "reason": (
                 "Device in maintenance window — auto-execution suppressed."
                 if do_not_auto
@@ -639,13 +832,27 @@ class IncidentWorkflow:
             if auto:
                 self._ts.add_event(
                     task_id, AGENT, "auto_approved",
-                    {"reason": f"risk={risk}, confidence={confidence}, 2+ prior successful executions"},
+                    {
+                        "reason": policy_decision.reason,
+                        "policy_id": policy_decision.policy_id,
+                        "autonomy_level": policy_decision.autonomy_level,
+                    },
                 )
                 self._ts.approve_task(task_id, "system")
-                logger.info("Workflow: AUTO-APPROVED task=%s device=%s", task_id, device)
+                logger.info("Workflow: AUTO-APPROVED task=%s device=%s level=%s",
+                            task_id, device, policy_decision.autonomy_level)
             else:
+                self._ts.add_event(
+                    task_id, AGENT, "approval_policy",
+                    {
+                        "policy_id":      policy_decision.policy_id,
+                        "autonomy_level": policy_decision.autonomy_level,
+                        "reason":         policy_decision.reason,
+                    },
+                )
                 self._ts.request_approval(task_id, AGENT)
-                logger.info("Workflow: approval requested task=%s device=%s", task_id, device)
+                logger.info("Workflow: approval requested task=%s device=%s level=%s",
+                            task_id, device, policy_decision.autonomy_level)
 
             return {"pipeline_decision": "complete"}
 
@@ -741,13 +948,17 @@ class IncidentWorkflow:
             "session_id":         f"wf-{fp[:12]}",
             "tenant_id":          settings.agent_tenant_id,
             "error":              None,
+            "blast_radius":       [],
+            "is_leaf_symptom":    False,
+            "intent_match":       None,
         }
 
-        try:
-            self._graph.invoke(initial)
-            logger.info("Workflow: Phase 1 complete fingerprint=%s", fp[:12])
-        except Exception as exc:
-            logger.exception("Workflow: Phase 1 failed fingerprint=%s: %s", fp[:12], exc)
+        with self._pipeline_sem:
+            try:
+                self._graph.invoke(initial)
+                logger.info("Workflow: Phase 1 complete fingerprint=%s", fp[:12])
+            except Exception as exc:
+                logger.exception("Workflow: Phase 1 failed fingerprint=%s: %s", fp[:12], exc)
 
     def resume_execution(self, task_id: str, approved_by: str, operator_commands: str = "") -> None:
         """
@@ -780,7 +991,9 @@ class IncidentWorkflow:
             pass
 
         fix_proposal = content.get("fix_proposal", {})
-        device   = fix_proposal.get("device") or content.get("device", "unknown")
+        _raw_device  = fix_proposal.get("device") or content.get("device", "unknown")
+        # Strip interface-qualified names like "Ethernet1 on spine2" → "spine2"
+        device   = _raw_device.split(" on ")[-1].strip() if " on " in _raw_device else _raw_device
         commands = fix_proposal.get("commands") or content.get("commands", "none")
         fix_type = fix_proposal.get("fix_type", "config_change")
 
@@ -885,6 +1098,7 @@ class IncidentWorkflow:
             t = threading.Thread(
                 target=_verify_resolution,
                 args=(task_id, rca_info, self._ts, self._stop),
+                kwargs={"learning_engine": self._learning_engine},
                 daemon=True,
             )
             t.start()
@@ -1063,18 +1277,33 @@ def _get_rca_info(task_store: TaskStore, fingerprint: str) -> dict:
         if not tasks:
             return {}
         content = json.loads(tasks[0].get("content") or "{}")
-        return {
+        info = {
             "alertname":  content.get("alertname", ""),
             "device":     content.get("device", ""),
             "instance":   content.get("instance", ""),
             "created_at": tasks[0].get("created_at"),
+            "fix_type":   "",
+            "device_role": "",
         }
+        # Pull fix_type and device_role from fix_proposal event if available
+        task_id = tasks[0].get("id", "")
+        if task_id:
+            for ev in task_store.get_task_events(task_id):
+                if ev.get("event_type") == "fix_proposed":
+                    detail = ev.get("detail") or {}
+                    if isinstance(detail, str):
+                        detail = json.loads(detail)
+                    info["fix_type"]    = detail.get("fix_type", "")
+                    info["device_role"] = detail.get("device_role", "")
+                    break
+        return info
     except Exception:
         return {}
 
 
 def _verify_resolution(
-    task_id: str, rca_info: dict, task_store: TaskStore, stop: threading.Event
+    task_id: str, rca_info: dict, task_store: TaskStore, stop: threading.Event,
+    learning_engine=None,
 ) -> None:
     if stop.wait(VERIFY_DELAY):
         return
@@ -1118,3 +1347,28 @@ def _verify_resolution(
     )
     logger.info("Workflow: verification task=%s alert_resolved=%s ttr=%ds",
                 task_id, resolved, ttr_s)
+
+    if learning_engine is not None:
+        # Extract policy_id from the auto_approved or approval_requested event
+        policy_id  = None
+        fix_type   = rca_info.get("fix_type", "")
+        device_role = rca_info.get("device_role", "")
+        try:
+            events = task_store.get_task_events(task_id)
+            for ev in events:
+                if ev.get("event_type") in ("auto_approved", "approval_policy"):
+                    detail = ev.get("detail") or {}
+                    if isinstance(detail, str):
+                        detail = json.loads(detail)
+                    policy_id = detail.get("policy_id")
+                    if policy_id:
+                        break
+        except Exception:
+            pass
+        learning_engine.record_outcome(
+            policy_id=policy_id,
+            fix_type=fix_type,
+            device_role=device_role,
+            alert_resolved=resolved,
+            ttr_seconds=ttr_s,
+        )
