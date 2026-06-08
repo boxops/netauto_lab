@@ -98,6 +98,9 @@ class Settings(BaseSettings):
 
     # Autonomy policy — seed built-in default policies on startup if the table is empty.
     policy_auto_seed: bool = True
+    # Days before a promoted autonomy level expires and requires re-validation (Fix 3).
+    # Set to 0 to disable TTL (not recommended for production).
+    policy_promotion_ttl_days: int = 90
 
     # Standing intent registry — proactive health monitoring independent of alerts.
     intent_check_enabled: bool = True

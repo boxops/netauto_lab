@@ -196,6 +196,18 @@ _MIGRATIONS = [
     "ALTER TABLE action_policies ADD COLUMN conditions    TEXT",
     "ALTER TABLE action_policies ADD COLUMN rca_template  TEXT",
     "ALTER TABLE action_policies ADD COLUMN fix_template  TEXT",
+    # Fix 1: promotable flag — wildcard catch-all policies must not auto-promote
+    "ALTER TABLE action_policies ADD COLUMN promotable INTEGER NOT NULL DEFAULT 1",
+    # Mark existing catch-all policies (empty alertname + device_role) as non-promotable
+    "UPDATE action_policies SET promotable = 0 WHERE alertname = '' AND device_role = '' AND fix_type IN ('config_change', 'escalate_human', '')",
+    # Reset any catch-all that was incorrectly promoted above L2
+    "UPDATE action_policies SET autonomy_level = 'L2' WHERE promotable = 0 AND fix_type = 'config_change' AND autonomy_level NOT IN ('L0','L1','L2')",
+    # Fix 2: fast-path outcome counters — track programmatic resolution accuracy separately
+    "ALTER TABLE action_policies ADD COLUMN fast_path_success_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE action_policies ADD COLUMN fast_path_failure_count INTEGER NOT NULL DEFAULT 0",
+    # Fix 3: promotion TTL — autonomy level expires after N days to require re-validation
+    "ALTER TABLE action_policies ADD COLUMN autonomy_level_promoted_at TEXT",
+    "ALTER TABLE action_policies ADD COLUMN autonomy_level_expires_at  TEXT",
 ]
 
 _VALID_STATUSES = frozenset({
@@ -1081,6 +1093,7 @@ class TaskStore:
             "min_prior_successes": data.get("min_prior_successes", 0),
             "autonomy_level":      data.get("autonomy_level", "L2"),
             "enabled":             int(data.get("enabled", True)),
+            "promotable":          int(bool(data.get("promotable", True))),
             "conditions":          _json_or_none("conditions"),
             "rca_template":        _json_or_none("rca_template"),
             "fix_template":        _json_or_none("fix_template"),
@@ -1091,11 +1104,11 @@ class TaskStore:
             conn.execute(
                 text("""INSERT INTO action_policies
                     (id,tenant_id,name,description,alertname,fix_type,device_role,environment,
-                     min_confidence,max_risk,min_prior_successes,autonomy_level,enabled,
+                     min_confidence,max_risk,min_prior_successes,autonomy_level,enabled,promotable,
                      conditions,rca_template,fix_template,created_at,updated_at)
                     VALUES
                     (:id,:tenant_id,:name,:description,:alertname,:fix_type,:device_role,:environment,
-                     :min_confidence,:max_risk,:min_prior_successes,:autonomy_level,:enabled,
+                     :min_confidence,:max_risk,:min_prior_successes,:autonomy_level,:enabled,:promotable,
                      :conditions,:rca_template,:fix_template,:created_at,:updated_at)"""),
                 row,
             )
@@ -1106,7 +1119,8 @@ class TaskStore:
         allowed = {
             "name", "description", "alertname", "fix_type", "device_role", "environment",
             "min_confidence", "max_risk", "min_prior_successes", "autonomy_level", "enabled",
-            "conditions", "rca_template", "fix_template",
+            "promotable", "conditions", "rca_template", "fix_template",
+            "autonomy_level_promoted_at", "autonomy_level_expires_at",
         }
         sets = ", ".join(f"{k}=:{k}" for k in data if k in allowed)
         if not sets:
@@ -1131,6 +1145,14 @@ class TaskStore:
     def delete_policy(self, policy_id: str) -> None:
         with self._lock, self._connect() as conn:
             conn.execute(text("DELETE FROM action_policies WHERE id=:id"), {"id": policy_id})
+
+    def increment_fast_path_outcome(self, policy_id: str, success: bool) -> None:
+        col = "fast_path_success_count" if success else "fast_path_failure_count"
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                text(f"UPDATE action_policies SET {col} = {col} + 1 WHERE id = :id"),
+                {"id": policy_id},
+            )
 
     # ── standing_intents ──────────────────────────────────────────────────────
 

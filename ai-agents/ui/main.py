@@ -1554,6 +1554,7 @@ async def partial_policy_list(request: Request, tenant_id: str = "default"):
     return templates.TemplateResponse(request, "partials/policy_list.html", {
         "request":  request,
         "policies": policies,
+        "now_iso":  datetime.now(timezone.utc).isoformat(),
     })
 
 
@@ -1565,6 +1566,7 @@ async def partial_policy_create(
     device_role: str = Form(""),
     environment: str = Form(""),
     autonomy_level: str = Form("L2"),
+    promotable: str = Form(""),
     conditions: str = Form(""),
     rca_template: str = Form(""),
     fix_template: str = Form(""),
@@ -1576,6 +1578,7 @@ async def partial_policy_create(
         "device_role":    device_role,
         "environment":    environment,
         "autonomy_level": autonomy_level,
+        "promotable":     bool(promotable),  # checkbox: "1" when checked, "" when unchecked
         "tenant_id":      tenant_id,
         "conditions":   conditions   or None,
         "rca_template": rca_template or None,
@@ -1586,6 +1589,7 @@ async def partial_policy_create(
     return templates.TemplateResponse(request, "partials/policy_list.html", {
         "request":  request,
         "policies": policies,
+        "now_iso":  datetime.now(timezone.utc).isoformat(),
     })
 
 
@@ -1600,6 +1604,7 @@ async def partial_policy_toggle(request: Request, policy_id: str, tenant_id: str
     return templates.TemplateResponse(request, "partials/policy_list.html", {
         "request":  request,
         "policies": policies,
+        "now_iso":  datetime.now(timezone.utc).isoformat(),
     })
 
 
@@ -1610,6 +1615,7 @@ async def partial_policy_delete(request: Request, policy_id: str, tenant_id: str
     return templates.TemplateResponse(request, "partials/policy_list.html", {
         "request":  request,
         "policies": policies,
+        "now_iso":  datetime.now(timezone.utc).isoformat(),
     })
 
 

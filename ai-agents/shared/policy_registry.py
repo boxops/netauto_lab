@@ -15,8 +15,9 @@ Matching priority (most specific wins):
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+from shared.config import settings
 from shared.pipeline_models import AutonomyDecision, _LEVEL_ORDER, autonomy_level_index
 import shared.metrics as _metrics
 
@@ -59,16 +60,16 @@ _DEFAULT_SEED: list[dict] = [
          alertname="InterfaceDown", fix_type="config_change", device_role="",
          environment="production", min_confidence="high", max_risk="medium",
          min_prior_successes=0, autonomy_level="L3"),
-    # Generic config change — always L2 (supervised)
+    # Generic config change — always L2 (supervised); non-promotable catch-all
     dict(name="Config change — default L2",
          alertname="", fix_type="config_change", device_role="",
          environment="", min_confidence="low", max_risk="high",
-         min_prior_successes=0, autonomy_level="L2"),
-    # Escalate to human — never auto-execute
+         min_prior_successes=0, autonomy_level="L2", promotable=False),
+    # Escalate to human — never auto-execute; non-promotable catch-all
     dict(name="Escalate human — always L1",
          alertname="", fix_type="escalate_human", device_role="",
          environment="", min_confidence="low", max_risk="high",
-         min_prior_successes=0, autonomy_level="L1"),
+         min_prior_successes=0, autonomy_level="L1", promotable=False),
 ]
 
 
@@ -117,8 +118,32 @@ class PolicyRegistry:
             _metrics.record_policy_decision("default", "L2", "approval_requested")
             return _DEFAULT_DECISION
 
-        level   = candidate["autonomy_level"]
-        idx     = autonomy_level_index(level)
+        level = candidate["autonomy_level"]
+        idx   = autonomy_level_index(level)
+
+        # Fix 3: check promotion TTL — expired level treated as L2
+        expires_at = candidate.get("autonomy_level_expires_at")
+        if expires_at and idx >= 4:
+            try:
+                exp_dt = datetime.fromisoformat(expires_at)
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > exp_dt:
+                    logger.warning(
+                        "Policy %s autonomy level %s has expired — treating as L2",
+                        candidate["id"], level,
+                    )
+                    _metrics.record_policy_decision(candidate["id"], level, "expired")
+                    return AutonomyDecision(
+                        autonomy_level="L2",
+                        requires_approval=True,
+                        allow_execution=False,
+                        policy_id=candidate["id"],
+                        reason=f"Policy '{candidate['name']}' autonomy level expired — re-validation required.",
+                    )
+            except (ValueError, TypeError):
+                pass
+
         outcome = "auto_approved" if idx >= 4 else "approval_requested"
         _metrics.record_policy_decision(candidate["id"], level, outcome)
         return AutonomyDecision(
@@ -130,20 +155,33 @@ class PolicyRegistry:
         )
 
     def promote(self, policy_id: str) -> str | None:
-        """Increment the autonomy level by one step. Never promotes above L4 automatically."""
+        """Increment the autonomy level by one step. Never promotes above L4 automatically.
+        Non-promotable policies (catch-alls) are silently skipped."""
         policy = self._store.get_policy(policy_id)
         if not policy:
             return None
+        # Fix 1: respect non-promotable flag on wildcard catch-all policies
+        if not policy.get("promotable", 1):
+            logger.debug("Policy %s is non-promotable — skipping promotion", policy_id)
+            return policy["autonomy_level"]
         current_idx = autonomy_level_index(policy["autonomy_level"])
         if current_idx >= 4:  # cap at L4 — L5 requires explicit operator action
             return policy["autonomy_level"]
         new_level = _LEVEL_ORDER[current_idx + 1]
-        self._store.update_policy(policy_id, {"autonomy_level": new_level})
-        logger.info("Policy %s promoted: %s → %s", policy_id, policy["autonomy_level"], new_level)
+        # Fix 3: record promotion timestamp and TTL expiry
+        now     = datetime.now(timezone.utc)
+        expires = now + timedelta(days=getattr(settings, "policy_promotion_ttl_days", 90))
+        self._store.update_policy(policy_id, {
+            "autonomy_level":            new_level,
+            "autonomy_level_promoted_at": now.isoformat(),
+            "autonomy_level_expires_at":  expires.isoformat(),
+        })
+        logger.info("Policy %s promoted: %s → %s (expires %s)", policy_id, policy["autonomy_level"], new_level, expires.date())
         return new_level
 
     def demote(self, policy_id: str) -> str | None:
-        """Decrement the autonomy level by one step. Never demotes below L1."""
+        """Decrement the autonomy level by one step. Never demotes below L1.
+        Clears promotion timestamps — re-promotion re-starts the TTL clock."""
         policy = self._store.get_policy(policy_id)
         if not policy:
             return None
@@ -151,7 +189,11 @@ class PolicyRegistry:
         if current_idx <= 1:
             return policy["autonomy_level"]
         new_level = _LEVEL_ORDER[current_idx - 1]
-        self._store.update_policy(policy_id, {"autonomy_level": new_level})
+        self._store.update_policy(policy_id, {
+            "autonomy_level":             new_level,
+            "autonomy_level_promoted_at": None,
+            "autonomy_level_expires_at":  None,
+        })
         logger.info("Policy %s demoted: %s → %s", policy_id, policy["autonomy_level"], new_level)
         return new_level
 
@@ -175,21 +217,30 @@ class PolicyRegistry:
         self,
         alertname: str,
         tenant_id: str = "default",
+        device_role: str = "",
     ) -> list[dict]:
         """
-        Return enabled policies that have `conditions` defined and whose
-        alertname filter matches the given alertname (or is a wildcard).
-        Ordered by specificity: alertname-specific policies first, then wildcards.
+        Return enabled policies that have `conditions` defined and match the
+        given alertname (or wildcard) and device_role (or wildcard).
+        Ordered by specificity: most-specific (both alertname + device_role set) first.
         Used by _node_policy_fast_path before invoking the AI investigation.
         """
         all_policies = self._store.list_policies(tenant_id=tenant_id)
-        fast_path = [
-            p for p in all_policies
-            if p.get("enabled") and p.get("conditions")
-            and (not p.get("alertname") or p["alertname"] == alertname)
-        ]
-        # More-specific policies (alertname set) first
-        fast_path.sort(key=lambda p: (0 if p.get("alertname") else 1))
+        fast_path = []
+        for p in all_policies:
+            if not (p.get("enabled") and p.get("conditions")):
+                continue
+            # alertname: empty = wildcard
+            if p.get("alertname") and p["alertname"] != alertname:
+                continue
+            # device_role: empty = wildcard; if policy specifies a role it must match
+            if p.get("device_role") and device_role and p["device_role"] != device_role:
+                continue
+            fast_path.append(p)
+        # Higher specificity first: both set (score 2) > alertname only (1) > wildcard (0)
+        fast_path.sort(key=lambda p: (
+            -(int(bool(p.get("alertname"))) + int(bool(p.get("device_role"))))
+        ))
         return fast_path
 
     # ── private helpers ───────────────────────────────────────────────────────

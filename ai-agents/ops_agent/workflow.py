@@ -279,10 +279,30 @@ class IncidentWorkflow:
         alertname = state["alertname"]
         tenant_id = state["tenant_id"]
         task_id   = state.get("rca_task_id")
+        device    = state.get("device", "")
+
+        # Look up device_role for policy specificity filtering. Uses depth=1 to get
+        # the role name — Nautobot 2.x dropped the legacy slug field.
+        device_role = ""
+        try:
+            resp = httpx.get(
+                f"{settings.nautobot_url}/api/dcim/devices/",
+                params={"name": device, "limit": 1, "depth": 1},
+                headers={"Authorization": f"Token {settings.nautobot_token}"},
+                timeout=5,
+            )
+            if resp.ok:
+                results = resp.json().get("results", [])
+                if results:
+                    role_obj = (results[0].get("role") or results[0].get("device_role") or {})
+                    device_role = (role_obj.get("name") or role_obj.get("slug") or "").lower()
+        except Exception:
+            pass
 
         candidates = self._policy_registry.get_fast_path_policies(
             alertname=alertname,
             tenant_id=tenant_id,
+            device_role=device_role,
         )
 
         if not candidates:
@@ -294,20 +314,49 @@ class IncidentWorkflow:
             if result is None:
                 continue
 
-            # Fast path matched — populate state with programmatic RCA + fix
+            # Fast path matched — create the RCA task (normally created by _node_investigate)
+            # so create_approval_gate has a valid task_id to work with.
+            if not task_id:
+                fp       = state.get("fingerprint", "")
+                device   = state.get("device", "")
+                instance = state.get("instance", "")
+                task_id = self._ts.create_task(
+                    type="rca",
+                    created_by=AGENT,
+                    assigned_to="ops_agent",
+                    title=f"{'[MAINT] ' if state['in_maintenance'] else ''}⚡ {alertname}: {device or instance}",
+                    alert_fingerprint=fp,
+                    priority=state["priority"],
+                    maintenance_window=state["in_maintenance"],
+                    do_not_auto_execute=state["do_not_auto_execute"],
+                    incident_id=state.get("incident_id"),
+                    tenant_id=tenant_id,
+                    content={
+                        "alertname": alertname,
+                        "severity":  state.get("severity", ""),
+                        "device":    device,
+                        "instance":  instance,
+                        "summary":   state.get("summary", ""),
+                        "description": state.get("description", ""),
+                        "fingerprint": fp,
+                    },
+                )["id"]
+                self._ts.claim_task(task_id, AGENT)
+                self._ts.start_task(task_id, AGENT)
+
             logger.info(
-                "Workflow: fast-path resolved via policy=%s (%s) for alertname=%s",
-                result.policy_id, result.policy_name, alertname,
+                "Workflow: fast-path resolved via policy=%s (%s) for alertname=%s task=%s",
+                result.policy_id, result.policy_name, alertname, task_id,
             )
-            if task_id:
-                self._ts.add_event(
-                    task_id, AGENT, "fast_path_resolved",
-                    {"policy_id": result.policy_id, "policy_name": result.policy_name,
-                     "conditions_matched": len(result.matched_conditions)},
-                )
+            self._ts.add_event(
+                task_id, AGENT, "fast_path_resolved",
+                {"policy_id": result.policy_id, "policy_name": result.policy_name,
+                 "conditions_matched": len(result.matched_conditions)},
+            )
             return {
                 "pipeline_decision":   "fast_path_resolved",
                 "fast_path_policy_id": result.policy_id,
+                "rca_task_id":         task_id,
                 "rca":                 result.rca,
                 "fix_proposal":        result.fix,
             }
@@ -856,20 +905,21 @@ class IncidentWorkflow:
         risk     = fix.get("risk", "medium").lower()
         confidence = fix.get("confidence", "low").lower()
 
-        # Look up device role for policy matching
+        # Look up device role for policy matching. depth=1 expands the role object
+        # so we can read the name — Nautobot 2.x dropped the legacy slug field.
         device_role = ""
         try:
             resp = httpx.get(
                 f"{settings.nautobot_url}/api/dcim/devices/",
-                params={"name": device, "limit": 1},
+                params={"name": device, "limit": 1, "depth": 1},
                 headers={"Authorization": f"Token {settings.nautobot_token}"},
                 timeout=5,
             )
             if resp.ok:
                 results = resp.json().get("results", [])
                 if results:
-                    device_role = ((results[0].get("role") or results[0].get("device_role") or {})
-                                  .get("slug", "")).lower()
+                    role_obj = (results[0].get("role") or results[0].get("device_role") or {})
+                    device_role = (role_obj.get("name") or role_obj.get("slug") or "").lower()
         except Exception:
             pass
 
@@ -1035,6 +1085,7 @@ class IncidentWorkflow:
             "fix_proposal":       None,
             "validation":         None,
             "pipeline_decision":  None,
+            "fast_path_policy_id": None,
             "in_maintenance":     in_maintenance,
             "do_not_auto_execute": in_maintenance,
             "priority":           priority,
@@ -1498,16 +1549,21 @@ def _verify_resolution(
         policy_id  = None
         fix_type   = rca_info.get("fix_type", "")
         device_role = rca_info.get("device_role", "")
+        fp_policy_id = None
         try:
             events = task_store.get_task_events(task_id)
             for ev in events:
-                if ev.get("event_type") in ("auto_approved", "approval_policy"):
+                etype = ev.get("event_type", "")
+                if etype in ("auto_approved", "approval_policy") and not policy_id:
                     detail = ev.get("detail") or {}
                     if isinstance(detail, str):
-                        detail = json.loads(detail)
+                        detail = json.loads(detail) if detail else {}
                     policy_id = detail.get("policy_id")
-                    if policy_id:
-                        break
+                if etype == "fast_path_resolved" and not fp_policy_id:
+                    detail = ev.get("detail") or {}
+                    if isinstance(detail, str):
+                        detail = json.loads(detail) if detail else {}
+                    fp_policy_id = detail.get("policy_id")
         except Exception:
             pass
         learning_engine.record_outcome(
@@ -1517,3 +1573,10 @@ def _verify_resolution(
             alert_resolved=resolved,
             ttr_seconds=ttr_s,
         )
+        # Fix 2: track fast-path policy outcomes independently of gate policy
+        if fp_policy_id:
+            try:
+                task_store.increment_fast_path_outcome(fp_policy_id, success=resolved)
+                logger.info("Workflow: fast-path outcome policy=%s resolved=%s", fp_policy_id, resolved)
+            except Exception:
+                pass

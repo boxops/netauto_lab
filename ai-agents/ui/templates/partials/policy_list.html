@@ -25,8 +25,19 @@
     <td style="padding:7px 10px; font-weight:500">
       {{ p.name }}
       {% if p.conditions %}
-        <span title="Programmatic fast path enabled"
-              style="font-size:0.75em; margin-left:5px; vertical-align:middle">⚡</span>
+        {# Fix 2: show fast-path outcome counters when at least one outcome recorded #}
+        {% set fp_total = (p.fast_path_success_count or 0) + (p.fast_path_failure_count or 0) %}
+        {% if fp_total > 0 %}
+          <span title="Fast-path outcomes: {{ p.fast_path_success_count or 0 }} success / {{ p.fast_path_failure_count or 0 }} failure"
+                style="font-size:0.75em; margin-left:5px; vertical-align:middle">⚡</span>
+          <span style="font-size:0.72em; color:var(--muted); margin-left:2px">
+            <span style="color:#22c55e">{{ p.fast_path_success_count or 0 }}✓</span>
+            <span style="color:#ef4444">{{ p.fast_path_failure_count or 0 }}✗</span>
+          </span>
+        {% else %}
+          <span title="Programmatic fast path enabled"
+                style="font-size:0.75em; margin-left:5px; vertical-align:middle">⚡</span>
+        {% endif %}
       {% endif %}
     </td>
     <td style="padding:7px 10px; color:var(--muted)">{{ p.alertname or '—' }}</td>
@@ -38,6 +49,21 @@
              border-color:{{ level_color }}55; font-size:0.78em; font-weight:700">
         {{ p.autonomy_level }}
       </span>
+      {# Fix 1: lock badge for non-promotable policies #}
+      {% if not p.promotable %}
+        <span title="Promotion locked — LearningEngine will not auto-promote this policy"
+              style="font-size:0.75em; margin-left:4px; vertical-align:middle; color:var(--muted)">🔒</span>
+      {% endif %}
+      {# Fix 3: expiry indicator — now_iso provided by route as current UTC timestamp string #}
+      {% if p.autonomy_level_expires_at %}
+        {% if p.autonomy_level_expires_at < now_iso %}
+          <span title="Autonomy level expired — will be treated as L2 until re-validated"
+                style="font-size:0.72em; margin-left:4px; color:#ef4444; font-weight:600">EXPIRED</span>
+        {% else %}
+          <span title="Autonomy level expires {{ p.autonomy_level_expires_at[:10] }}"
+                style="font-size:0.72em; margin-left:4px; color:var(--muted)">· exp {{ p.autonomy_level_expires_at[:10] }}</span>
+        {% endif %}
+      {% endif %}
     </td>
     <td style="padding:7px 10px">
       {% if p.enabled %}

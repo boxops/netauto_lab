@@ -271,14 +271,28 @@ class PolicyResolver:
     # ── utilities ─────────────────────────────────────────────────────────────
 
     def _build_context(self, alert: dict, policy: dict) -> dict:
-        """Extract template variables from the alert event dict."""
-        labels = alert.get("labels", alert)  # alert may be the full event or just labels
+        """Extract template variables from the alert event dict.
+
+        The event dict passed from the workflow has several possible shapes:
+          1. Flat Prometheus labels dict: {"sysName": ..., "ifDescr": ...}
+          2. AlertPoller task content:    {"device": ..., "alert": {"labels": {...}}}
+          3. Alertmanager alert envelope: {"labels": {"sysName": ..., "ifDescr": ...}}
+        Try each layer in order so all shapes work.
+        """
+        # Layer 1: direct top-level "labels" key (Alertmanager envelope)
+        labels = alert.get("labels")
+        # Layer 2: nested alert.labels (AlertPoller task-content shape)
+        if not labels:
+            labels = alert.get("alert", {}).get("labels")
+        # Layer 3: the dict itself is already the flat labels
+        if not labels:
+            labels = alert
         ctx = {
-            "device":    labels.get("sysName") or labels.get("device") or "",
-            "interface": labels.get("ifDescr") or labels.get("interface") or "",
-            "alertname": labels.get("alertname", ""),
-            "severity":  labels.get("severity", ""),
-            "instance":  labels.get("instance", ""),
+            "device":    labels.get("sysName") or labels.get("device") or alert.get("device", ""),
+            "interface": labels.get("ifDescr") or labels.get("interface") or alert.get("interface", ""),
+            "alertname": labels.get("alertname") or alert.get("alertname", ""),
+            "severity":  labels.get("severity")  or alert.get("severity", ""),
+            "instance":  labels.get("instance")  or alert.get("instance", ""),
             "device_ip": "",
         }
         # Resolve primary IP for metric queries
@@ -301,14 +315,11 @@ class PolicyResolver:
 
     @staticmethod
     def _fmt(template: str, ctx: dict) -> str:
-        """Safe str.format_map — leaves unknown keys as-is."""
-        class _Safe(dict):
-            def __missing__(self, key: str) -> str:
-                return "{" + key + "}"
-        try:
-            return template.format_map(_Safe(ctx))
-        except Exception:
-            return template
+        """Replace {key} placeholders. Safe for strings with other {braces} (e.g. PromQL selectors)."""
+        result = template
+        for key, value in ctx.items():
+            result = result.replace(f"{{{key}}}", str(value))
+        return result
 
     @staticmethod
     def _dig(data: dict | list, field_path: str) -> object:
