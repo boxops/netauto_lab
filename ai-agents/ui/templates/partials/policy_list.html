@@ -22,7 +22,13 @@
   }.get(p.autonomy_level, '#6b7280') %}
   <tr style="border-bottom:1px solid var(--border)"
       id="policy-row-{{ p.id }}">
-    <td style="padding:7px 10px; font-weight:500">{{ p.name }}</td>
+    <td style="padding:7px 10px; font-weight:500">
+      {{ p.name }}
+      {% if p.conditions %}
+        <span title="Programmatic fast path enabled"
+              style="font-size:0.75em; margin-left:5px; vertical-align:middle">⚡</span>
+      {% endif %}
+    </td>
     <td style="padding:7px 10px; color:var(--muted)">{{ p.alertname or '—' }}</td>
     <td style="padding:7px 10px; color:var(--muted)">{{ p.fix_type or 'any' }}</td>
     <td style="padding:7px 10px; color:var(--muted)">{{ p.device_role or 'any' }}</td>

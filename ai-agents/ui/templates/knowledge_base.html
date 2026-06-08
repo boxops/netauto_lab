@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% set active_tab = "kb" %}
+{% block title %}Knowledge Base — Clano{% endblock %}
+
+{% block content %}
+
+<div class="section">
+  <div class="section-title">📚 Knowledge Base</div>
+  <p class="muted" style="font-size:0.82em; margin-bottom:12px">
+    Past incidents and proven resolutions. The AI agent consults this automatically
+    before investigating any alert. Add entries manually for recurring issues or
+    common runbook steps.
+  </p>
+
+  {# ── Search bar ────────────────────────────────────────────────────────── #}
+  <div style="display:flex; gap:8px; align-items:center; margin-bottom:14px; flex-wrap:wrap">
+    <input id="kb-search"
+           type="search"
+           name="q"
+           placeholder="Search by symptom, alert type, or keyword…"
+           autocomplete="off"
+           style="flex:1; min-width:220px; padding:6px 10px; background:var(--bg-card);
+                  border:1px solid var(--border); border-radius:4px; color:var(--text-main);
+                  font-size:0.88em"
+           hx-get="/partials/kb-search"
+           hx-trigger="keyup changed delay:300ms, search"
+           hx-target="#kb-results"
+           hx-swap="innerHTML"
+           hx-include="#kb-search">
+    <span id="kb-count" class="muted" style="font-size:0.82em; white-space:nowrap">
+      {{ total }} entr{{ "y" if total == 1 else "ies" }}
+    </span>
+  </div>
+
+  {# ── Results table ─────────────────────────────────────────────────────── #}
+  <div id="kb-results">
+    {% include "partials/kb_results.html" %}
+  </div>
+</div>
+
+<hr class="divider" />
+
+{# ── Add entry form ────────────────────────────────────────────────────────── #}
+<div class="section">
+  <div class="section-title" style="cursor:pointer" onclick="toggleKBForm()">
+    ➕ Add Entry <span id="kb-form-toggle" style="font-size:0.75em; color:var(--text-sub)">(expand)</span>
+  </div>
+  <div id="kb-add-form" style="display:none; margin-top:10px">
+    <form hx-post="/partials/kb-entry"
+          hx-target="#kb-results"
+          hx-swap="innerHTML"
+          hx-on::after-request="this.reset(); document.getElementById('kb-count').textContent=''; htmx.ajax('GET','/partials/kb-search',{target:'#kb-results',swap:'innerHTML'})"
+          style="display:grid; gap:10px; max-width:680px">
+      <label style="font-size:0.85em; color:var(--text-sub)">
+        Symptom (what was observed) *
+        <textarea name="symptom" required rows="2"
+                  style="width:100%; margin-top:4px; padding:6px; background:var(--bg-card);
+                         border:1px solid var(--border); border-radius:4px; color:var(--text-main);
+                         font-size:0.88em; resize:vertical"
+                  placeholder="e.g. InterfaceAdminDown on spine2/Ethernet1"></textarea>
+      </label>
+      <label style="font-size:0.85em; color:var(--text-sub)">
+        Root cause *
+        <textarea name="root_cause" required rows="2"
+                  style="width:100%; margin-top:4px; padding:6px; background:var(--bg-card);
+                         border:1px solid var(--border); border-radius:4px; color:var(--text-main);
+                         font-size:0.88em; resize:vertical"
+                  placeholder="e.g. Admin-shutdown applied without a maintenance window record"></textarea>
+      </label>
+      <label style="font-size:0.85em; color:var(--text-sub)">
+        Resolution *
+        <textarea name="resolution" required rows="2"
+                  style="width:100%; margin-top:4px; padding:6px; background:var(--bg-card);
+                         border:1px solid var(--border); border-radius:4px; color:var(--text-main);
+                         font-size:0.88em; resize:vertical"
+                  placeholder="e.g. Ran 'no shutdown' on Ethernet1 via Nautobot job"></textarea>
+      </label>
+      <div style="display:flex; gap:10px; flex-wrap:wrap">
+        <label style="font-size:0.85em; color:var(--text-sub); flex:1; min-width:140px">
+          Alert type
+          <input name="alert_type" type="text"
+                 style="width:100%; margin-top:4px; padding:6px; background:var(--bg-card);
+                        border:1px solid var(--border); border-radius:4px; color:var(--text-main);
+                        font-size:0.88em"
+                 placeholder="e.g. InterfaceAdminDown">
+        </label>
+        <label style="font-size:0.85em; color:var(--text-sub); flex:1; min-width:140px">
+          Device type
+          <input name="device_type" type="text"
+                 style="width:100%; margin-top:4px; padding:6px; background:var(--bg-card);
+                        border:1px solid var(--border); border-radius:4px; color:var(--text-main);
+                        font-size:0.88em"
+                 placeholder="e.g. spine, leaf">
+        </label>
+      </div>
+      <div>
+        <button type="submit" class="btn btn-primary btn-sm">Save entry</button>
+        <button type="button" class="btn btn-secondary btn-sm"
+                onclick="document.getElementById('kb-add-form').style.display='none';
+                         document.getElementById('kb-form-toggle').textContent='(expand)'">
+          Cancel
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function toggleKBForm() {
+  var f = document.getElementById('kb-add-form');
+  var t = document.getElementById('kb-form-toggle');
+  if (f.style.display === 'none') {
+    f.style.display = 'block';
+    t.textContent = '(collapse)';
+  } else {
+    f.style.display = 'none';
+    t.textContent = '(expand)';
+  }
+}
+</script>
+{% endblock %}

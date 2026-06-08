@@ -258,7 +258,7 @@ async def alertmanager_webhook(request: Request):
     accepted = 0
     skipped  = 0
 
-    for alert in payload.get("alerts", []):
+    for i, alert in enumerate(payload.get("alerts", [])):
         labels      = alert.get("labels", {})
         annotations = alert.get("annotations", {})
         alert_status = alert.get("status", batch_status)
@@ -276,7 +276,12 @@ async def alertmanager_webhook(request: Request):
             "labels":       labels,
         }
 
-        if poller.push_alert(event):
+        # Stagger concurrent alerts by INTER_ALERT_DELAY so the late-topology
+        # check in alert_poller has time to see the first RCA task before the
+        # second alert's investigation starts. This prevents spurious independent
+        # investigations when spine + leaf alerts arrive in the same webhook batch.
+        stagger = i * 20  # seconds (matches INTER_ALERT_DELAY in alert_poller.py)
+        if poller.push_alert(event, start_delay=stagger):
             accepted += 1
         else:
             skipped += 1
@@ -321,11 +326,10 @@ async def workflow_resume(task_id: str, req: ResumeRequest = None):
 
     operator_commands = req.operator_commands.strip()
 
-    # Add the approved event before starting execution so resume_execution
-    # can find it when checking for human authorisation.
-    task_store.approve_task(task_id, "human")
-
     def _run():
+        # Approve and execute in the same thread so the SQLite WAL commit is
+        # visible to resume_execution's get_task read in the same connection.
+        task_store.approve_task(task_id, "human")
         _workflow.resume_execution(task_id, "human", operator_commands=operator_commands)
 
     threading.Thread(target=_run, daemon=True, name=f"resume-{task_id}").start()

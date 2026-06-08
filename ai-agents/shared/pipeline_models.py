@@ -157,6 +157,9 @@ class ActionPolicy(BaseModel):
     created_at: str = ""
     updated_at: str = ""
     description: str = ""
+    conditions:   str | None = None   # JSON array of condition objects
+    rca_template: str | None = None   # JSON object
+    fix_template: str | None = None   # JSON object
 
 
 @dataclass

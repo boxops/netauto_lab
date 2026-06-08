@@ -21,32 +21,47 @@ The closed-loop pipeline is the autonomous incident-response system built into t
                              │ creates RCA task
                              ▼
   ┌──────────────────────────────────────────────────────────────────────┐
-  │  Stage 1 — RCA  (ai-agent)                                           │
-  │  Correlates alerts, metrics, and syslogs into a root cause summary  │
-  └──────────────────────────┬───────────────────────────────────────────┘
-                             │ creates fix_proposal task
-                             ▼
+  │  ⚡ Policy Fast Path  (ai-agent — no LLM)                            │
+  │  · Checks for Autonomy Policies with programmatic conditions         │
+  │  · Runs live checks: Prometheus metrics / show commands / Nautobot   │
+  │  · If ALL conditions pass → generates RCA + fix from templates       │
+  │    (seconds, zero LLM calls) → goes straight to Approval Gate        │
+  │  · If any condition fails → falls through to AI investigation below  │
+  └──────────┬────────────────────────────┬────────────────────────────┘
+             │ no matching fast-path       │ fast-path resolved
+             ▼                            │
+  ┌──────────────────────────────────┐    │
+  │  Stage 1 — RCA  (ai-agent)       │    │
+  │  Correlates alerts, metrics, and │    │
+  │  syslogs into a root cause       │    │
+  │  summary                         │    │
+  └──────────┬───────────────────────┘    │
+             │ creates fix_proposal task   │
+             ▼                            │
+  ┌──────────────────────────────────┐    │
+  │  Stage 2 — Fix Proposal          │    │
+  │  (ai-agent)                      │    │
+  │  Checks runbook library first,   │    │
+  │  then generates specific         │    │
+  │  remediation with config diff    │    │
+  └────┬──────────────────────┬──────┘    │
+       │ risk = low/medium    │ risk=high  │
+       ▼                      │ or escalate│
+  ┌──────────────┐            │           │
+  │  Stage 3     │            │           │
+  │  Validation  │            │           │
+  │  (ai-agent)  │            │           │
+  │  Blast-radius│            │           │
+  │  + topology  │            │           │
+  │  check       │            │           │
+  └────┬─────────┘            │           │
+       │ correct/partial      │           │
+       ▼                      ▼           ▼
   ┌──────────────────────────────────────────────────────────────────────┐
-  │  Stage 2 — Fix Proposal  (ai-agent)                                  │
-  │  Checks runbook library first, then generates specific remediation   │
-  │  Produces a config diff showing before/after                         │
-  └────────┬──────────────────────────────────────────────┬──────────────┘
-           │ risk = low / medium                          │ risk = high
-           │ creates validation task                      │ or FIX_TYPE = escalate_human
-           ▼                                              │
-  ┌─────────────────────────────────┐                    │
-  │  Stage 3 — Validation           │                    │
-  │  (ai-agent)                     │                    │
-  │  Blast-radius check, topology   │                    │
-  │  analysis, read-only device     │                    │
-  │  inspection                     │                    │
-  └────────┬────────────────────────┘                    │
-           │ verdict = correct / partial                  │
-           │ creates approval_gate task                   │
-           ▼                                              ▼
-  ┌──────────────────────────────────────────────────────────────────────┐
-  │  Stage 4 — Approval Gate  (human)                                    │
-  │  · Human reviews commands, config diff, and validation verdict       │
+  │  Stage 4 — Approval Gate  (human or auto)                            │
+  │  · PolicyRegistry determines autonomy level (L0–L5)                  │
+  │  · L4/L5: gate auto-approved when confidence/risk thresholds met     │
+  │  · L0–L3: human reviews commands, config diff, validation verdict    │
   │  · Optional: approval webhook fires for out-of-band notification     │
   │  · Optional: fix applied to lab device first (LAB_VALIDATION_ENABLED)│
   │  · Execution with check_mode=False on approval                       │
@@ -225,7 +240,7 @@ Whether the approval gate requires human intervention is determined by the **Pol
 | L4 | Auto-approve | Gate auto-approved when policy thresholds met (confidence, risk, prior successes) |
 | L5 | Autonomous | Agent executes and notifies; requires explicit operator configuration |
 
-The default policy (when no match found) is **L2 — Supervised**. Seven seed policies are loaded on first startup covering common BGP and interface scenarios. Policies are managed in the **⚙️ Config** tab of the Clano UI or via the `action_policies` database table.
+The default policy (when no match found) is **L2 — Supervised**. Policies are managed in the **⚙️ Config** tab of the Clano UI or via the `action_policies` database table. Policies can also carry **programmatic conditions** (⚡) that resolve the alert before this stage is even reached — see the fast-path description in the Overview diagram and [`docs/policy-autonomy.md`](policy-autonomy.md).
 
 The **LearningEngine** automatically adjusts policy levels based on execution outcomes:
 - After `N` consecutive successful resolutions (`alert_resolved=True`), the policy is promoted one level (default `N=3`, capped at L4).
@@ -537,6 +552,7 @@ Append-only event log. Key event types:
 | `alert_correlated`      | rca               | `alertname`, `fingerprint`, `severity`                                                  |
 | `approval_requested`    | approval_gate     | —                                                                                       |
 | `approved`              | approval_gate     | —                                                                                       |
+| `fast_path_resolved`    | rca               | `policy_id`, `policy_name`, `conditions_matched` (recorded when ⚡ fast path fires)      |
 | `auto_approved`         | approval_gate     | `reason`, `autonomy_level` (L0–L5), `policy_id`                                         |
 | `approval_policy`       | approval_gate     | `autonomy_level`, `policy_id`, `reason` (recorded when human approves a policy-gated task) |
 | `execution_started`     | approval_gate     | `device`, `commands`                                                                    |
@@ -561,7 +577,9 @@ Token counts and estimated USD cost per agent session. Read by the Cost Monitor 
 
 ### `action_policies`
 
-One row per autonomy policy. Fields: `id`, `tenant_id`, `name`, `alertname`, `fix_type`, `device_role`, `environment`, `min_confidence`, `max_risk`, `min_prior_successes`, `autonomy_level` (L0–L5), `enabled`, `created_at`.
+One row per autonomy policy. Core fields: `id`, `tenant_id`, `name`, `alertname`, `fix_type`, `device_role`, `environment`, `min_confidence`, `max_risk`, `min_prior_successes`, `autonomy_level` (L0–L5), `enabled`, `created_at`.
+
+Fast-path fields (nullable, backward-compatible): `conditions` (JSON array), `rca_template` (JSON object), `fix_template` (JSON object). When `conditions` is set the policy participates in the programmatic fast path before any AI investigation.
 
 Empty string in `alertname`, `fix_type`, `device_role`, or `environment` acts as a wildcard that matches any value. See [`docs/policy-autonomy.md`](policy-autonomy.md).
 

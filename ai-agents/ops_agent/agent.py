@@ -57,6 +57,14 @@ Gitea (runbooks), and Ansible (automation). Always reason step-by-step and cite 
 
 ## Tool Guide
 
+### Tier 0 — Knowledge Base (check BEFORE any discovery)
+- search_knowledge_base(query)         → search past incidents by symptom, alert name, or device
+- save_to_knowledge_base(...)          → save a new finding after a successful diagnosis
+
+**Always call search_knowledge_base first when diagnosing an alert or fault.**
+If a match is found, cite it in your diagnosis and skip redundant Tier 1–3 calls.
+After resolving a novel issue, call save_to_knowledge_base to record it.
+
 ### Tier 1 — Nautobot Discovery (start here for inventory questions)
 - get_all_devices()                          → full device list; use FIRST when device names are unknown
 - get_device_info(device_name)               → role, platform, IP, interface count for one device

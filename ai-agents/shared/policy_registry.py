@@ -171,6 +171,27 @@ class PolicyRegistry:
         logger.info("PolicyRegistry: seeded %d default policies for tenant=%s", count, tenant_id)
         return count
 
+    def get_fast_path_policies(
+        self,
+        alertname: str,
+        tenant_id: str = "default",
+    ) -> list[dict]:
+        """
+        Return enabled policies that have `conditions` defined and whose
+        alertname filter matches the given alertname (or is a wildcard).
+        Ordered by specificity: alertname-specific policies first, then wildcards.
+        Used by _node_policy_fast_path before invoking the AI investigation.
+        """
+        all_policies = self._store.list_policies(tenant_id=tenant_id)
+        fast_path = [
+            p for p in all_policies
+            if p.get("enabled") and p.get("conditions")
+            and (not p.get("alertname") or p["alertname"] == alertname)
+        ]
+        # More-specific policies (alertname set) first
+        fast_path.sort(key=lambda p: (0 if p.get("alertname") else 1))
+        return fast_path
+
     # ── private helpers ───────────────────────────────────────────────────────
 
     def _find_best_match(

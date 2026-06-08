@@ -108,16 +108,18 @@ class AlertPoller:
 
     def _seed_seen_from_store(self) -> None:
         """
-        Pre-populate _seen from tasks that are already in progress or complete.
-        Skips failed/rejected tasks so their fingerprints remain eligible for
-        retry if the alert is still firing.
+        Pre-populate _seen from tasks that are ACTIVELY being investigated.
+        Only seeds pending/claimed/running — tasks in awaiting_approval or
+        complete are NOT seeded so that if the same alert resolves and re-fires,
+        the fingerprint is eligible for a fresh investigation rather than being
+        permanently blocked by a stale gate task.
         """
         try:
             tasks = self._task_store.list_tasks(type="rca", limit=1000)
             seeded = 0
             for task in tasks:
                 fp = task.get("alert_fingerprint") or ""
-                if fp and task.get("status") not in ("failed", "rejected"):
+                if fp and task.get("status") in ("pending", "claimed", "running"):
                     self._seen[fp] = f"{fp}:firing"
                     seeded += 1
             logger.info("AlertPoller: seeded %d fingerprints from TaskStore", seeded)
@@ -137,10 +139,14 @@ class AlertPoller:
     def stop(self) -> None:
         self._stop.set()
 
-    def push_alert(self, event: dict) -> bool:
+    def push_alert(self, event: dict, start_delay: float = 0) -> bool:
         """
         Process a single alert event synchronously in a background thread.
         Called by the /webhook/alert endpoint for immediate, zero-polling ingestion.
+
+        start_delay: seconds to sleep before calling _investigate. Used by the webhook
+        handler to stagger concurrent alerts so the late-topology check in _run_workflow
+        can find an upstream RCA created by the first alert's investigation.
 
         Returns True if the alert was accepted for investigation, False if
         it was deduplicated, filtered, or the budget was exceeded.
@@ -152,6 +158,8 @@ class AlertPoller:
             return False
 
         def _run():
+            if start_delay:
+                time.sleep(start_delay)
             try:
                 self._investigate(work)
             except Exception:
@@ -358,10 +366,16 @@ class AlertPoller:
             # Include all non-terminal statuses so we catch tasks that moved
             # from "running" to "complete"/"awaiting_approval" before the 3s
             # sleep elapsed (common when alerts arrive simultaneously).
+            # Limit to tasks created within the correlation window so stale
+            # tasks from previous incidents don't pollute cascade detection.
+            window = settings.topology_correlation_window
             recent_rcas: list[dict] = []
             for st in ("pending", "claimed", "running", "complete", "awaiting_approval"):
                 recent_rcas.extend(
-                    self._task_store.list_tasks(type="rca", status=st, limit=20)
+                    self._task_store.list_tasks(
+                        type="rca", status=st, limit=20,
+                        created_after_minutes=window,
+                    )
                 )
             active_rcas = recent_rcas
             existing_rca_devices: list[str] = []
@@ -369,7 +383,16 @@ class AlertPoller:
                 try:
                     import json as _json
                     c = _json.loads(t.get("content") or "{}")
-                    d = c.get("device", "")
+                    # Content shape varies depending on pipeline stage:
+                    # initial/rca: top-level "device"
+                    # low-conf gate: "device" + nested "rca.affected_device"
+                    # approval gate: top-level "device"
+                    d = (
+                        c.get("device")
+                        or c.get("rca", {}).get("affected_device", "")
+                        or c.get("fix_proposal", {}).get("device", "")
+                        or ""
+                    )
                     if d and d != device:
                         existing_rca_devices.append(d)
                 except Exception:

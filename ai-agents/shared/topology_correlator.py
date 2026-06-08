@@ -150,43 +150,62 @@ class TopologyCorrelator:
             logger.exception("TopologyCorrelator: failed to refresh topology graph")
 
     def _fetch_topology_graph(self) -> dict[str, set[str]]:
-        """Fetch cables from Nautobot and build an undirected adjacency graph."""
-        resp = httpx.get(
-            f"{self._url}/api/dcim/cables/",
-            headers={"Authorization": f"Token {self._token}"},
-            params={"limit": 500, "depth": 1},
-            timeout=20,
+        """Build an undirected adjacency graph of devices from Nautobot.
+
+        Nautobot v3 cables API returns termination_a/termination_b as bare
+        interface ID references (no inline device name), so we build the graph
+        via two API calls:
+          1. /dcim/devices/  → interface_id-to-device-name is not available here,
+             but device ID→name mapping is needed.
+          2. /dcim/interfaces/?has_cable=true  → each interface has device.id and
+             cable_peer (peer interface ID); join both sides on interface ID to
+             get device pairs.
+        """
+        headers = {"Authorization": f"Token {self._token}"}
+        timeout = 20
+
+        # Step 1: Build device_id → device_name map.
+        dev_resp = httpx.get(
+            f"{self._url}/api/dcim/devices/",
+            headers=headers,
+            params={"limit": 500},
+            timeout=timeout,
         )
-        resp.raise_for_status()
-        cables = resp.json().get("results", [])
+        dev_resp.raise_for_status()
+        id_to_name: dict[str, str] = {}
+        for dev in dev_resp.json().get("results", []):
+            did  = dev.get("id", "")
+            name = (dev.get("name") or dev.get("display", "")).strip()
+            if did and name:
+                id_to_name[did] = name
 
+        # Step 2: Fetch all interfaces that have a cable, build interface_id → device_name.
+        intf_resp = httpx.get(
+            f"{self._url}/api/dcim/interfaces/",
+            headers=headers,
+            params={"has_cable": "true", "limit": 1000},
+            timeout=timeout,
+        )
+        intf_resp.raise_for_status()
+        intf_to_device: dict[str, str] = {}
+        intf_to_peer: dict[str, str] = {}
+        for intf in intf_resp.json().get("results", []):
+            iid  = intf.get("id", "")
+            did  = (intf.get("device") or {}).get("id", "")
+            peer = (intf.get("cable_peer") or {}).get("id", "")
+            dev_name = id_to_name.get(did, "")
+            if iid and dev_name:
+                intf_to_device[iid] = dev_name
+            if iid and peer:
+                intf_to_peer[iid] = peer
+
+        # Step 3: Build graph — for each interface, add an edge to its cable peer.
         graph: dict[str, set[str]] = {}
-
-        for cable in cables:
-            side_a = cable.get("a_terminations", [])
-            side_b = cable.get("b_terminations", [])
-
-            devices_a = self._extract_devices(side_a)
-            devices_b = self._extract_devices(side_b)
-
-            for da in devices_a:
-                for db in devices_b:
-                    if da and db and da != db:
-                        graph.setdefault(da, set()).add(db)
-                        graph.setdefault(db, set()).add(da)
+        for iid, peer_id in intf_to_peer.items():
+            da = intf_to_device.get(iid, "")
+            db = intf_to_device.get(peer_id, "")
+            if da and db and da != db:
+                graph.setdefault(da, set()).add(db)
+                graph.setdefault(db, set()).add(da)
 
         return graph
-
-    @staticmethod
-    def _extract_devices(terminations: list[dict]) -> list[str]:
-        """Extract device names from a Nautobot cable termination list."""
-        devices = []
-        for t in terminations:
-            obj = t.get("object", {})
-            # Terminations can be Interface, FrontPort, RearPort, etc.
-            # Device name lives at obj.device.name or obj.device.display
-            device = obj.get("device", {})
-            name   = (device.get("name") or device.get("display", "")).strip()
-            if name:
-                devices.append(name)
-        return devices

@@ -1,0 +1,66 @@
+{% if entries %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th style="width:5%">#</th>
+        <th style="width:18%">Alert type</th>
+        <th style="width:28%">Symptom</th>
+        <th style="width:24%">Root cause</th>
+        <th style="width:18%">Resolution</th>
+        <th style="width:4%">Source</th>
+        <th style="width:3%"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td class="mono muted" style="font-size:0.78em">{{ e.id }}</td>
+        <td>
+          {% if e.alert_type %}
+          <span class="pill" style="background:#3b82f622; color:#60a5fa; border-color:#3b82f655;
+                                     font-size:0.78em">{{ e.alert_type }}</span>
+          {% else %}
+          <span class="muted" style="font-size:0.78em">—</span>
+          {% endif %}
+          {% if e.device_type %}
+          <span class="muted" style="font-size:0.75em; display:block; margin-top:2px">{{ e.device_type }}</span>
+          {% endif %}
+        </td>
+        <td style="font-size:0.83em">{{ e.symptom }}</td>
+        <td style="font-size:0.83em; color:var(--text-sub)">{{ e.root_cause }}</td>
+        <td style="font-size:0.83em">{{ e.resolution }}</td>
+        <td>
+          {% if e.source == 'pipeline' %}
+          <span class="pill" style="background:#10b98122; color:#34d399; border-color:#10b98155;
+                                     font-size:0.75em">auto</span>
+          {% else %}
+          <span class="pill" style="background:#6b728022; color:#9ca3af; border-color:#6b728055;
+                                     font-size:0.75em">manual</span>
+          {% endif %}
+        </td>
+        <td>
+          <button class="btn btn-secondary btn-sm"
+                  style="padding:2px 6px; font-size:0.75em; color:#ef4444; border-color:#ef444455"
+                  hx-delete="/partials/kb-entry/{{ e.id }}"
+                  hx-target="closest tr"
+                  hx-swap="outerHTML"
+                  hx-confirm="Delete this knowledge base entry?">
+            ✕
+          </button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div style="padding:24px; text-align:center; color:var(--text-sub); font-size:0.85em">
+  {% if query %}
+  No entries found for <strong>{{ query }}</strong>. Try broader keywords or add a new entry below.
+  {% else %}
+  No knowledge base entries yet. Entries are added automatically when the pipeline successfully
+  resolves an alert, or you can add them manually using the form below.
+  {% endif %}
+</div>
+{% endif %}

@@ -21,6 +21,7 @@ import httpx
 from langchain.tools import tool
 
 from shared.config import settings
+from shared.kb_store import kb_store as _kb_store
 
 
 # ── Nautobot helpers ──────────────────────────────────────────────────────────
@@ -1449,7 +1450,79 @@ _ACTION_TOOLS = [
 
 _RUNBOOK_TOOLS = [get_runbook]
 
-OPS_TOOLS = _NAUTOBOT_TOOLS + _PROMETHEUS_TOOLS + _LOKI_TOOLS + _ACTION_TOOLS + _RUNBOOK_TOOLS
+
+# ── Knowledge-base tools ──────────────────────────────────────────────────────
+
+@tool
+def search_knowledge_base(query: str) -> str:
+    """
+    Search the knowledge base for past incidents matching the given symptoms or keywords.
+
+    Call this FIRST before running discovery tools — if a matching entry exists,
+    it provides an instant diagnosis and proven resolution without burning API tokens
+    on fresh investigation.
+
+    Args:
+        query: Free-text description of the symptom, alert name, or device behaviour
+               (e.g. 'InterfaceAdminDown spine2', 'BGP peer down leaf1').
+
+    Returns:
+        Formatted list of matching entries (symptom, root cause, resolution) or a
+        message indicating no prior incidents were found.
+    """
+    entries = _kb_store.search(query, limit=5)
+    if not entries:
+        return f"No prior incidents found matching: {query!r}"
+    lines = [f"Found {len(entries)} matching knowledge base entry/entries:\n"]
+    for i, e in enumerate(entries, 1):
+        lines.append(
+            f"[{i}] Alert type: {e.get('alert_type') or 'unknown'} | "
+            f"Source: {e.get('source')} | {e['created_at']}\n"
+            f"    Symptom:    {e['symptom']}\n"
+            f"    Root cause: {e['root_cause']}\n"
+            f"    Resolution: {e['resolution']}"
+        )
+    return "\n".join(lines)
+
+
+@tool
+def save_to_knowledge_base(
+    symptom: str,
+    root_cause: str,
+    resolution: str,
+    alert_type: str = "",
+    device_type: str = "",
+) -> str:
+    """
+    Save a new incident + resolution to the knowledge base for future reference.
+
+    Call this after successfully diagnosing and resolving an issue so that the
+    same problem can be identified instantly next time.
+
+    Args:
+        symptom:     What was observed (e.g. 'InterfaceAdminDown on spine2/Ethernet1').
+        root_cause:  Why it happened (e.g. 'Admin-shutdown applied without maintenance window').
+        resolution:  How it was fixed (e.g. 'Ran no shutdown on Ethernet1').
+        alert_type:  Alert name from Prometheus if known (e.g. 'InterfaceAdminDown').
+        device_type: Class of device affected (e.g. 'spine', 'leaf').
+
+    Returns:
+        Confirmation with the assigned knowledge base entry ID.
+    """
+    entry = _kb_store.save(
+        symptom=symptom,
+        root_cause=root_cause,
+        resolution=resolution,
+        alert_type=alert_type or None,
+        device_type=device_type or None,
+        source="manual",
+    )
+    return f"Knowledge base entry #{entry['id']} saved (alert_type={entry.get('alert_type') or 'unset'})."
+
+
+_KB_TOOLS = [search_knowledge_base, save_to_knowledge_base]
+
+OPS_TOOLS = _NAUTOBOT_TOOLS + _PROMETHEUS_TOOLS + _LOKI_TOOLS + _ACTION_TOOLS + _RUNBOOK_TOOLS + _KB_TOOLS
 
 # Backward-compat alias — workflow.py imported ENG_TOOLS during the 3-agent era
 ENG_TOOLS = OPS_TOOLS

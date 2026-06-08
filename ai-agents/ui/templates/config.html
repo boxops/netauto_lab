@@ -11,11 +11,15 @@
 
 <div class="help-callout">
   <strong>What are autonomy policies?</strong><br>
-  Policies tell the AI how much independence it has for each type of network fix.
-  A BGP peer reset on a lab leaf might be set to <strong>L4 (auto-approve)</strong> after a few successful runs,
-  while the same fix on a production spine stays at <strong>L2 (human must click Approve)</strong>.
-  The <strong>Learning Engine</strong> automatically promotes or demotes a policy based on whether past fixes
-  actually resolved the alert — so the system earns autonomy incrementally rather than being granted it upfront.
+  Policies serve two roles. First, they set the <strong>autonomy level (L0–L5)</strong> — how much independence
+  the AI has when proposing and executing a fix (L2 requires your approval, L4 auto-executes after meeting
+  confidence + prior-success thresholds). Second, policies marked with <strong>⚡</strong> carry
+  <em>programmatic conditions</em>: live checks (Prometheus metrics, device show commands, or Nautobot fields)
+  that resolve a well-understood alert in <strong>seconds with zero LLM calls</strong> before the AI
+  investigation even starts. If every condition passes, the RCA and fix are generated from templates;
+  if any condition fails the pipeline falls back to the normal AI path automatically.
+  The <strong>Learning Engine</strong> automatically promotes or demotes the autonomy level based on whether
+  past fixes actually resolved the alert — so the system earns autonomy incrementally rather than being granted it upfront.
 </div>
 
 {# L0-L5 visual guide #}
@@ -112,6 +116,57 @@
       </button>
     </div>
   </div>
+
+  {# ── Programmatic fast-path (collapsed by default) ──────────────────────── #}
+  <details style="margin-top:12px">
+    <summary style="cursor:pointer; font-size:0.83em; color:var(--muted);
+                    user-select:none; list-style:none; display:flex; align-items:center; gap:6px">
+      <span style="font-size:1em">⚡</span>
+      <span style="font-weight:600; color:var(--fg)">Programmatic Fast Path</span>
+      <span style="font-size:0.78em; color:var(--muted)">(optional — skip AI for known patterns)</span>
+    </summary>
+    <div style="margin-top:10px; display:flex; flex-direction:column; gap:10px;
+                border-left:2px solid #3b82f655; padding-left:12px">
+      <div style="font-size:0.78em; color:var(--muted)">
+        Define <code>conditions</code> to resolve this alert programmatically before invoking the AI.
+        If all conditions pass, the RCA and fix are generated from templates — zero LLM calls, seconds not minutes.
+        Leave empty to use the normal AI pipeline.
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px">
+        <label style="font-size:0.78em; color:var(--muted)">
+          Conditions (JSON array)
+          <span style="font-weight:400"> — types: <code>metric</code>, <code>show_command</code>, <code>nautobot</code></span>
+        </label>
+        <textarea name="conditions" rows="3"
+                  placeholder='[{"type":"metric","query":"interface_ifOperStatus{ifDescr=\"{interface}\"}","expect":"2"}]'
+                  style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                         padding:6px 8px; color:var(--fg); font-size:0.82em; font-family:monospace;
+                         width:100%; resize:vertical; box-sizing:border-box"></textarea>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px">
+        <label style="font-size:0.78em; color:var(--muted)">
+          RCA Template (JSON)
+          <span style="font-weight:400"> — keys: <code>diagnosis</code>, <code>confidence</code>, <code>affected_device</code>, <code>upstream_cause</code></span>
+        </label>
+        <textarea name="rca_template" rows="3"
+                  placeholder='{"diagnosis":"{interface} on {device} is administratively down","confidence":"certain","affected_device":"{device}","upstream_cause":""}'
+                  style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                         padding:6px 8px; color:var(--fg); font-size:0.82em; font-family:monospace;
+                         width:100%; resize:vertical; box-sizing:border-box"></textarea>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px">
+        <label style="font-size:0.78em; color:var(--muted)">
+          Fix Template (JSON)
+          <span style="font-weight:400"> — keys: <code>commands</code>, <code>fix_type</code>, <code>risk</code>, <code>reason</code></span>
+        </label>
+        <textarea name="fix_template" rows="3"
+                  placeholder='{"fix_type":"config_change","commands":"interface {interface}\n no shutdown","risk":"low","reason":"Restore admin-down interface {interface} on {device}"}'
+                  style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                         padding:6px 8px; color:var(--fg); font-size:0.82em; font-family:monospace;
+                         width:100%; resize:vertical; box-sizing:border-box"></textarea>
+      </div>
+    </div>
+  </details>
 </form>
 
 {# Policy performance — now prominently surfaced #}

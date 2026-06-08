@@ -92,9 +92,9 @@
             hx-get="/partials/task-queue"
             hx-target="#task-queue-body"
             hx-trigger="change"
-            hx-include="#status-filter, #type-filter"
+            hx-include="#status-filter, #type-filter, #show-archived"
             hx-swap="innerHTML">
-      <option value="">All statuses</option>
+      <option value="">Active statuses</option>
       {% for s in ["pending","claimed","running","awaiting_approval","complete","failed","rejected"] %}
       <option value="{{ s }}">{{ s }}</option>
       {% endfor %}
@@ -103,17 +103,26 @@
             hx-get="/partials/task-queue"
             hx-target="#task-queue-body"
             hx-trigger="change"
-            hx-include="#status-filter, #type-filter"
+            hx-include="#status-filter, #type-filter, #show-archived"
             hx-swap="innerHTML">
       <option value="">All types</option>
       {% for t in ["rca"] %}
       <option value="{{ t }}">{{ t }}</option>
       {% endfor %}
     </select>
+    <label style="display:flex; align-items:center; gap:5px; font-size:0.83em; color:var(--text-sub); cursor:pointer; user-select:none">
+      <input type="checkbox" id="show-archived" name="show_archived" value="1"
+             hx-get="/partials/task-queue"
+             hx-target="#task-queue-body"
+             hx-trigger="change"
+             hx-include="#status-filter, #type-filter, #show-archived"
+             hx-swap="innerHTML">
+      Show archived
+    </label>
     <button class="btn btn-secondary btn-sm"
             hx-get="/partials/task-queue"
             hx-target="#task-queue-body"
-            hx-include="#status-filter, #type-filter"
+            hx-include="#status-filter, #type-filter, #show-archived"
             hx-swap="innerHTML">
       🔄 Refresh
     </button>
@@ -129,7 +138,7 @@
       </thead>
       <tbody id="task-queue-body"
              hx-get="/partials/task-queue"
-             hx-include="#status-filter, #type-filter"
+             hx-include="#status-filter, #type-filter, #show-archived"
              hx-trigger="sse-refresh"
              hx-swap="innerHTML">
         {% include "partials/task_queue.html" %}

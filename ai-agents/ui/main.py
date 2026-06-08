@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.activity_store import ActivityStore
 from shared.config import settings
+from shared.kb_store import KBStore
 from shared.task_store import TaskStore
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -413,6 +414,7 @@ templates.env.filters["from_json"] = lambda s: json.loads(s) if s else {}
 
 store      = ActivityStore()
 task_store = TaskStore()
+kb_store   = KBStore()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -985,12 +987,23 @@ def _incident_list_context(open_only: bool = True) -> dict:
     return {"incidents": rows, "open_only": open_only}
 
 
-def _pipeline_fingerprints() -> list[tuple[str, str]]:
+_TERMINAL_STATUSES = {"complete", "failed", "rejected"}
+
+
+def _pipeline_fingerprints(active_only: bool = True) -> list[tuple[str, str]]:
     tasks = task_store.list_tasks(type="rca", limit=200)
+    active_fps: set[str] = set()
+    if active_only:
+        for t in tasks:
+            fp = t.get("alert_fingerprint", "")
+            if fp and t.get("status") not in _TERMINAL_STATUSES:
+                active_fps.add(fp)
     seen: dict[str, str] = {}
     for t in tasks:
         fp = t.get("alert_fingerprint", "")
         if not fp or fp in seen:
+            continue
+        if active_only and fp not in active_fps:
             continue
         title = (t.get("title") or "").strip()
         seen[fp] = title if title else fp[:20]
@@ -1001,11 +1014,16 @@ def _task_queue_context(
     status_filter: str = "",
     type_filter: str = "",
     tenant_id: str = "",
+    show_archived: bool = False,
 ) -> dict:
+    exclude = None
+    if not show_archived and not status_filter:
+        exclude = list(_TERMINAL_STATUSES)
     tasks = task_store.list_tasks(
         status=status_filter or None,
         type=type_filter or None,
         tenant_id=tenant_id or None,
+        exclude_statuses=exclude,
         limit=200,
     )
     rows = []
@@ -1023,7 +1041,13 @@ def _task_queue_context(
             "title":       _truncate(t.get("title") or "", 50),
             "age":         _age(t.get("created_at")),
         })
-    return {"tasks": rows, "status_filter": status_filter, "type_filter": type_filter, "tenant_id": tenant_id}
+    return {
+        "tasks":         rows,
+        "status_filter": status_filter,
+        "type_filter":   type_filter,
+        "tenant_id":     tenant_id,
+        "show_archived": show_archived,
+    }
 
 
 def _task_detail_context(task_id: str) -> dict:
@@ -1383,8 +1407,8 @@ async def partial_chronicle(request: Request, fp: str = ""):
 
 
 @app.get("/partials/task-queue", response_class=HTMLResponse)
-async def partial_task_queue(request: Request, status: str = "", type: str = "", tenant_id: str = ""):
-    ctx = await run_in_threadpool(_task_queue_context, status, type, tenant_id)
+async def partial_task_queue(request: Request, status: str = "", type: str = "", tenant_id: str = "", show_archived: str = ""):
+    ctx = await run_in_threadpool(_task_queue_context, status, type, tenant_id, bool(show_archived))
     return templates.TemplateResponse(request, "partials/task_queue.html", {"request": request, **ctx})
 
 
@@ -1541,6 +1565,9 @@ async def partial_policy_create(
     device_role: str = Form(""),
     environment: str = Form(""),
     autonomy_level: str = Form("L2"),
+    conditions: str = Form(""),
+    rca_template: str = Form(""),
+    fix_template: str = Form(""),
     tenant_id: str = "default",
 ):
     data = {
@@ -1550,6 +1577,9 @@ async def partial_policy_create(
         "environment":    environment,
         "autonomy_level": autonomy_level,
         "tenant_id":      tenant_id,
+        "conditions":   conditions   or None,
+        "rca_template": rca_template or None,
+        "fix_template": fix_template or None,
     }
     await run_in_threadpool(task_store.create_policy, data)
     policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
@@ -1895,6 +1925,60 @@ async def schedule_cancel(request: Request, job_id: str):
         "ok":       ok,
         "truncate": _truncate,
     })
+
+
+# ── Knowledge Base ────────────────────────────────────────────────────────────
+
+@app.get("/knowledge-base", response_class=HTMLResponse)
+async def knowledge_base_page(request: Request):
+    entries = await run_in_threadpool(kb_store.get_all, 100)
+    total   = await run_in_threadpool(kb_store.count)
+    return templates.TemplateResponse(request, "knowledge_base.html", {
+        "request": request,
+        "entries": entries,
+        "total":   total,
+        "query":   "",
+    })
+
+
+@app.get("/partials/kb-search", response_class=HTMLResponse)
+async def partial_kb_search(request: Request, q: str = ""):
+    entries = await run_in_threadpool(kb_store.search, q, 50) if q.strip() else \
+              await run_in_threadpool(kb_store.get_all, 100)
+    return templates.TemplateResponse(request, "partials/kb_results.html", {
+        "request": request,
+        "entries": entries,
+        "query":   q,
+    })
+
+
+@app.post("/partials/kb-entry", response_class=HTMLResponse)
+async def create_kb_entry(
+    request: Request,
+    symptom:     str = Form(""),
+    root_cause:  str = Form(""),
+    resolution:  str = Form(""),
+    alert_type:  str = Form(""),
+    device_type: str = Form(""),
+):
+    if symptom.strip() and root_cause.strip() and resolution.strip():
+        await run_in_threadpool(
+            kb_store.save,
+            symptom.strip(), root_cause.strip(), resolution.strip(),
+            alert_type.strip() or None, device_type.strip() or None,
+        )
+    entries = await run_in_threadpool(kb_store.get_all, 100)
+    return templates.TemplateResponse(request, "partials/kb_results.html", {
+        "request": request,
+        "entries": entries,
+        "query":   "",
+    })
+
+
+@app.delete("/partials/kb-entry/{entry_id}", response_class=HTMLResponse)
+async def delete_kb_entry(request: Request, entry_id: int):
+    await run_in_threadpool(kb_store.delete, entry_id)
+    return HTMLResponse("")
 
 
 # ── Config page (Policies + Intents merged) ───────────────────────────────────

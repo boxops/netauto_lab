@@ -29,6 +29,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from shared.config import settings
+from shared.kb_store import kb_store as _kb_store
 from shared.llm import get_llm
 from shared.pipeline_models import RcaResult, FixProposalResult, ValidationResult, ExecutionResult
 from shared.structured_output import parse_structured
@@ -37,6 +38,7 @@ from shared.rate_limiter import RateLimiter, BudgetExceededError
 from shared.status_tracker import StatusCallbackHandler
 from shared.tools import OPS_TOOLS
 from shared.policy_registry import PolicyRegistry
+from shared.policy_resolver import PolicyResolver
 from shared.intent_registry import IntentRegistry
 from shared.topology_correlator import TopologyCorrelator
 from shared.learning_engine import LearningEngine
@@ -114,6 +116,9 @@ class IncidentState(TypedDict):
     # Routing signal
     pipeline_decision: str | None
 
+    # Set to the matched policy ID when the programmatic fast path resolves the alert
+    fast_path_policy_id: str | None
+
     # Flags
     in_maintenance:       bool
     do_not_auto_execute:  bool
@@ -154,6 +159,7 @@ class IncidentWorkflow:
 
         # CLANO framework components
         self._policy_registry  = PolicyRegistry(task_store)
+        self._policy_resolver  = PolicyResolver()
         self._intent_registry  = IntentRegistry(task_store)
         self._topology         = TopologyCorrelator(
             settings.nautobot_url,
@@ -171,6 +177,7 @@ class IncidentWorkflow:
         builder = StateGraph(IncidentState)
 
         builder.add_node("check_intents",        self._node_check_intents)
+        builder.add_node("policy_fast_path",     self._node_policy_fast_path)
         builder.add_node("investigate",          self._node_investigate)
         builder.add_node("propose_fix",          self._node_propose_fix)
         builder.add_node("validate",             self._node_validate)
@@ -183,10 +190,18 @@ class IncidentWorkflow:
             "check_intents",
             self._route_after_intent_check,
             {
-                "no_action":   END,
-                "investigate": "investigate",
+                "no_action":        END,
+                "policy_fast_path": "policy_fast_path",
                 # escalate_human from suppress→escalate goes straight to gate
-                "escalate":    "create_low_conf_gate",
+                "escalate":         "create_low_conf_gate",
+            },
+        )
+        builder.add_conditional_edges(
+            "policy_fast_path",
+            self._route_after_fast_path,
+            {
+                "fast_path_resolved": "create_approval_gate",
+                "investigate":        "investigate",
             },
         )
         builder.add_conditional_edges(
@@ -222,6 +237,12 @@ class IncidentWorkflow:
             return "no_action"
         if decision == "escalate_human":
             return "escalate"
+        return "policy_fast_path"
+
+    @staticmethod
+    def _route_after_fast_path(state: IncidentState) -> str:
+        if state.get("pipeline_decision") == "fast_path_resolved":
+            return "fast_path_resolved"
         return "investigate"
 
     @staticmethod
@@ -242,6 +263,60 @@ class IncidentWorkflow:
             checkpointer=MemorySaver(),
             prompt=SYSTEM_PROMPT,
         ), {"configurable": {"thread_id": session_id}, "callbacks": [self._sh]}
+
+    # ── node: policy_fast_path ────────────────────────────────────────────────
+
+    def _node_policy_fast_path(self, state: IncidentState) -> dict:
+        """
+        Programmatic fast path: try to resolve the alert using policies that
+        have `conditions` + `rca_template` + `fix_template` defined.
+
+        If a policy's conditions all pass the alert is resolved without any
+        LLM calls and the graph routes directly to create_approval_gate.
+        If no policy matches (or conditions fail) the graph falls through to
+        the normal AI `investigate` node.
+        """
+        alertname = state["alertname"]
+        tenant_id = state["tenant_id"]
+        task_id   = state.get("rca_task_id")
+
+        candidates = self._policy_registry.get_fast_path_policies(
+            alertname=alertname,
+            tenant_id=tenant_id,
+        )
+
+        if not candidates:
+            logger.debug("Workflow: no fast-path policies for alertname=%s", alertname)
+            return {"pipeline_decision": None, "fast_path_policy_id": None}
+
+        for policy in candidates:
+            result = self._policy_resolver.resolve(state["event"], policy)
+            if result is None:
+                continue
+
+            # Fast path matched — populate state with programmatic RCA + fix
+            logger.info(
+                "Workflow: fast-path resolved via policy=%s (%s) for alertname=%s",
+                result.policy_id, result.policy_name, alertname,
+            )
+            if task_id:
+                self._ts.add_event(
+                    task_id, AGENT, "fast_path_resolved",
+                    {"policy_id": result.policy_id, "policy_name": result.policy_name,
+                     "conditions_matched": len(result.matched_conditions)},
+                )
+            return {
+                "pipeline_decision":   "fast_path_resolved",
+                "fast_path_policy_id": result.policy_id,
+                "rca":                 result.rca,
+                "fix_proposal":        result.fix,
+            }
+
+        logger.info(
+            "Workflow: fast-path candidates found but none matched for alertname=%s — falling back to AI",
+            alertname,
+        )
+        return {"pipeline_decision": None, "fast_path_policy_id": None}
 
     # ── node: check_intents ───────────────────────────────────────────────────
 
@@ -485,10 +560,21 @@ class IncidentWorkflow:
                                    {"error": err_msg, "will_escalate": True})
                 logger.exception("Workflow: investigate node failed task=%s — escalating to human", task_id)
                 self._sh.clear_context()
+                # Include the original alert details so human reviewers have context
+                # even when AI investigation fails (e.g. rate-limit errors).
+                diag_prefix = (
+                    f"[AUTO-INVESTIGATION FAILED] {alertname} on {device or instance or 'unknown'}.\n"
+                    f"Summary: {summary or 'N/A'}\n"
+                    f"Failure reason: {err_msg[:200]}"
+                )
                 fallback_rca = {
-                    "diagnosis":   f"Investigation failed: {err_msg}",
+                    "diagnosis":   diag_prefix,
                     "affected":    device,
-                    "action":      "Manual investigation required.",
+                    "action":      (
+                        f"Manual investigation required. "
+                        f"Alert: {alertname} on {device or instance}. "
+                        f"Summary: {summary}"
+                    ),
                     "confidence":  "low",
                     "affected_devices": [device] if device else [],
                     "upstream_cause": "",
@@ -874,6 +960,8 @@ class IncidentWorkflow:
                 "alertname":         alertname,
                 "alert":             state["event"],
                 "escalation_reason": "low_confidence_rca",
+                "device":            device,
+                "severity":          severity,
                 "rca": {
                     "diagnosis":          rca.get("diagnosis", ""),
                     "affected_device":    device,
@@ -881,9 +969,14 @@ class IncidentWorkflow:
                     "confidence":         rca.get("confidence", "low"),
                 },
                 "reason": (
-                    f"Ops Agent has low confidence in its diagnosis for {alertname} "
-                    f"on {device}. Automated remediation skipped. "
-                    "Please investigate manually."
+                    f"Automated investigation failed for {alertname} on {device}. "
+                    f"Automated remediation skipped. Please investigate manually."
+                    if rca.get("diagnosis", "").startswith("[AUTO-INVESTIGATION FAILED]")
+                    else (
+                        f"Ops Agent has low confidence in its diagnosis for {alertname} "
+                        f"on {device}. Automated remediation skipped. "
+                        "Please investigate manually."
+                    )
                 ),
             }
             self._ts.update_task_content(task_id, gate_content)
@@ -1093,6 +1186,12 @@ class IncidentWorkflow:
             logger.info("Workflow: execution complete task=%s status=%s",
                         task_id, execution.execution_status)
 
+            if execution.execution_status == "success":
+                try:
+                    _auto_save_kb(task, content, execution, self._ts)
+                except Exception:
+                    logger.exception("Workflow: KB auto-save failed for task=%s — non-fatal", task_id)
+
             fp       = task.get("alert_fingerprint", "")
             rca_info = _get_rca_info(self._ts, fp)
             t = threading.Thread(
@@ -1267,6 +1366,52 @@ def _verify_config_applied(task_id: str, device: str, commands: str) -> dict:
         }
     except Exception as exc:
         return {"config_applied": None, "error": str(exc)[:200]}
+
+
+def _auto_save_kb(gate_task: dict, gate_content: dict, execution, task_store: TaskStore) -> None:
+    """
+    Persist a KB entry after a successful pipeline execution.
+    Extracts symptom/root_cause from the parent rca task and resolution from the gate.
+    """
+    fix_proposal = gate_content.get("fix_proposal") or {}
+    alertname    = gate_content.get("alertname", "")
+    device       = fix_proposal.get("device") or gate_content.get("device", "")
+    commands     = fix_proposal.get("commands", "")
+    changes      = execution.changes_applied or ""
+
+    # Pull diagnosis from the linked rca task
+    fp = gate_task.get("alert_fingerprint", "")
+    diagnosis = ""
+    device_role = ""
+    if fp:
+        rcas = task_store.list_tasks(type="rca", alert_fingerprint=fp, limit=1)
+        if rcas:
+            rca_result = rcas[0].get("result") or "{}"
+            try:
+                r = json.loads(rca_result) if isinstance(rca_result, str) else rca_result
+                diagnosis = r.get("diagnosis", "")
+                if not alertname:
+                    alertname = json.loads(rcas[0].get("content") or "{}").get("alertname", "")
+                device_role = r.get("device_role", "")
+            except Exception:
+                pass
+
+    symptom    = f"{alertname} on {device}" if (alertname and device) else (alertname or device or "unknown")
+    root_cause = diagnosis or fix_proposal.get("diagnosis", "") or "See pipeline task"
+    resolution = changes or (f"Applied: {commands}" if commands and commands != "none" else "Escalated to human")
+
+    if not (symptom and root_cause and resolution):
+        return
+
+    _kb_store.save(
+        symptom=symptom,
+        root_cause=root_cause,
+        resolution=resolution,
+        alert_type=alertname or None,
+        device_type=device_role or None,
+        source="pipeline",
+        task_id=gate_task.get("id"),
+    )
 
 
 def _get_rca_info(task_store: TaskStore, fingerprint: str) -> dict:

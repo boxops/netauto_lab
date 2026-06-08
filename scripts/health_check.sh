@@ -121,8 +121,6 @@ else
   check_container "promtail"           "promtail"
   check_container "gitea"              "gitea"
   check_container "rabbitmq"           "rabbitmq"
-  check_container "ai-ops-agent"       "ai-ops-agent"
-  check_container "ai-eng-agent"       "ai-eng-agent"
 fi
 
 echo ""

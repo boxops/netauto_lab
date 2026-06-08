@@ -192,6 +192,10 @@ _MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN do_not_auto_execute INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN incident_id TEXT",
     "ALTER TABLE tasks ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'",
+    # Fast-path programmatic resolution fields (nullable — backward compatible)
+    "ALTER TABLE action_policies ADD COLUMN conditions    TEXT",
+    "ALTER TABLE action_policies ADD COLUMN rca_template  TEXT",
+    "ALTER TABLE action_policies ADD COLUMN fix_template  TEXT",
 ]
 
 _VALID_STATUSES = frozenset({
@@ -619,6 +623,8 @@ class TaskStore:
         limit: int = 100,
         priority_filter: set[str] | None = None,
         tenant_id: str | None = None,
+        exclude_statuses: list[str] | None = None,
+        created_after_minutes: int | None = None,
     ) -> list[dict]:
         clauses: list[str] = []
         params:  dict[str, Any] = {}
@@ -643,6 +649,16 @@ class TaskStore:
             clauses.append(f"priority IN ({placeholders})")
             for i, p in enumerate(sorted(priority_filter)):
                 params[f"pf{i}"] = p
+        if exclude_statuses:
+            placeholders = ", ".join(f":ex{i}" for i, _ in enumerate(exclude_statuses))
+            clauses.append(f"status NOT IN ({placeholders})")
+            for i, s in enumerate(exclude_statuses):
+                params[f"ex{i}"] = s
+        if created_after_minutes is not None:
+            from datetime import timedelta
+            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=created_after_minutes))
+            clauses.append("created_at >= :created_after")
+            params["created_after"] = cutoff.strftime("%Y-%m-%d %H:%M:%S UTC")
 
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         params["limit"] = limit
@@ -720,7 +736,7 @@ class TaskStore:
                 text("""
                     SELECT * FROM tasks
                     WHERE type='rca'
-                      AND status NOT IN ('failed','rejected')
+                      AND status NOT IN ('failed','rejected','complete')
                       AND (content LIKE :pat1 OR content LIKE :pat2)
                       AND created_at >= :cutoff
                     ORDER BY created_at DESC LIMIT 1
@@ -817,12 +833,17 @@ class TaskStore:
         return results
 
     def get_active_task_for_fingerprint(self, fingerprint: str) -> dict | None:
+        """Return a task that is ACTIVELY being investigated for this fingerprint.
+        Only returns pending/claimed/running tasks — awaiting_approval and complete
+        tasks are intentionally excluded so that an alert that resolved and re-fired
+        gets a fresh investigation rather than being silently deduplicated against a
+        stale gate task from a previous alert cycle."""
         with self._connect() as conn:
             row = conn.execute(
                 text("""
                     SELECT * FROM tasks
                     WHERE alert_fingerprint = :fp
-                      AND status NOT IN ('failed','rejected')
+                      AND status IN ('pending','claimed','running')
                     ORDER BY created_at DESC LIMIT 1
                 """),
                 {"fp": fingerprint},
@@ -1041,6 +1062,11 @@ class TaskStore:
 
     def create_policy(self, data: dict) -> dict:
         ts = _now()
+        # Normalise empty strings to None for nullable JSON fields
+        def _json_or_none(key: str) -> str | None:
+            v = data.get(key)
+            return v if v else None
+
         row = {
             "id":                  _short_id("pol"),
             "tenant_id":           data.get("tenant_id", "default"),
@@ -1055,6 +1081,9 @@ class TaskStore:
             "min_prior_successes": data.get("min_prior_successes", 0),
             "autonomy_level":      data.get("autonomy_level", "L2"),
             "enabled":             int(data.get("enabled", True)),
+            "conditions":          _json_or_none("conditions"),
+            "rca_template":        _json_or_none("rca_template"),
+            "fix_template":        _json_or_none("fix_template"),
             "created_at":          ts,
             "updated_at":          ts,
         }
@@ -1063,11 +1092,11 @@ class TaskStore:
                 text("""INSERT INTO action_policies
                     (id,tenant_id,name,description,alertname,fix_type,device_role,environment,
                      min_confidence,max_risk,min_prior_successes,autonomy_level,enabled,
-                     created_at,updated_at)
+                     conditions,rca_template,fix_template,created_at,updated_at)
                     VALUES
                     (:id,:tenant_id,:name,:description,:alertname,:fix_type,:device_role,:environment,
                      :min_confidence,:max_risk,:min_prior_successes,:autonomy_level,:enabled,
-                     :created_at,:updated_at)"""),
+                     :conditions,:rca_template,:fix_template,:created_at,:updated_at)"""),
                 row,
             )
         return row
@@ -1077,6 +1106,7 @@ class TaskStore:
         allowed = {
             "name", "description", "alertname", "fix_type", "device_role", "environment",
             "min_confidence", "max_risk", "min_prior_successes", "autonomy_level", "enabled",
+            "conditions", "rca_template", "fix_template",
         }
         sets = ", ".join(f"{k}=:{k}" for k in data if k in allowed)
         if not sets:
