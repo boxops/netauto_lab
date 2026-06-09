@@ -7,7 +7,8 @@
   Standing intents let you declare persistent network expectations. A <strong>suppress</strong>
   intent skips investigation for known-flapping links; <strong>escalate</strong> forces human
   approval regardless of risk; <strong>monitor</strong> proactively fires on Prometheus threshold
-  breaches even without an active alert.
+  breaches even without an active alert; <strong>chaos_schedule</strong> runs a chaos scenario
+  on a cron schedule (requires <code>CHAOS_TOOLS_ENABLED=true</code>).
 </p>
 
 {# ── Intent table ──────────────────────────────────────────────────────────── #}
@@ -34,7 +35,8 @@
     </div>
     <div style="display:flex; flex-direction:column; gap:4px; min-width:110px">
       <label style="font-size:0.78em; color:var(--muted)">Intent type</label>
-      <select name="intent_type" required
+      <select name="intent_type" required id="intent-type-select"
+              onchange="_onIntentTypeChange(this)"
               style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
                      padding:6px 8px; color:var(--fg); font-size:0.85em">
         <option value="suppress">suppress</option>
@@ -67,5 +69,89 @@
       </button>
     </div>
   </div>
+
+  {# ── Monitor-specific fields ───────────────────────────────────────────── #}
+  <div id="intent-monitor-section" style="display:none; margin-top:12px;
+       border-top:1px solid var(--border); padding-top:12px">
+    <div style="font-size:0.72em; font-weight:600; color:#3b82f6; text-transform:uppercase;
+                letter-spacing:.06em; margin-bottom:8px">Monitor settings</div>
+    <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end">
+      <div style="display:flex; flex-direction:column; gap:4px; flex:3; min-width:200px">
+        <label style="font-size:0.78em; color:var(--muted)">Prometheus query</label>
+        <input name="metric_query" placeholder='up{job="telegraf"}'
+               style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                      padding:6px 8px; color:var(--fg); font-size:0.84em; font-family:monospace; width:100%">
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:80px">
+        <label style="font-size:0.78em; color:var(--muted)">Operator</label>
+        <select name="threshold_op"
+                style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                       padding:6px 8px; color:var(--fg); font-size:0.85em">
+          <option value="&lt;">&lt;</option>
+          <option value="&lt;=">&lt;=</option>
+          <option value="&gt;">&gt;</option>
+          <option value="&gt;=">&gt;=</option>
+          <option value="==">=​=</option>
+          <option value="!=">!=</option>
+        </select>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:80px">
+        <label style="font-size:0.78em; color:var(--muted)">Value</label>
+        <input name="threshold_val" placeholder="1" type="number" step="any"
+               style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                      padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
+      </div>
+    </div>
+  </div>
+
+  {# ── Chaos-schedule-specific fields ───────────────────────────────────── #}
+  <div id="intent-chaos-section" style="display:none; margin-top:12px;
+       border-top:1px solid var(--border); padding-top:12px">
+    <div style="font-size:0.72em; font-weight:600; color:#8b5cf6; text-transform:uppercase;
+                letter-spacing:.06em; margin-bottom:8px">Chaos schedule settings</div>
+    <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end">
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:180px">
+        <label style="font-size:0.78em; color:var(--muted)">Cron expression</label>
+        <input name="schedule" placeholder="*/30 * * * *"
+               style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                      padding:6px 8px; color:var(--fg); font-size:0.84em; font-family:monospace; width:100%">
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; flex:3; min-width:220px">
+        <label style="font-size:0.78em; color:var(--muted)">Chaos scenario (sent to agent)</label>
+        <textarea name="action" rows="2"
+                  placeholder="Simulate BGP flap on leaf1 — run flap_bgp_neighbor check_mode=True"
+                  style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                         padding:6px 8px; color:var(--fg); font-size:0.84em; width:100%;
+                         resize:vertical; box-sizing:border-box"></textarea>
+      </div>
+    </div>
+  </div>
+
+  {# Hidden combined threshold field, assembled by JS before submit #}
+  <input type="hidden" name="threshold" id="intent-threshold-hidden">
 </form>
+
+<script>
+function _onIntentTypeChange(sel) {
+  var t = sel ? sel.value : document.getElementById('intent-type-select').value;
+  document.getElementById('intent-monitor-section').style.display  = (t === 'monitor')         ? '' : 'none';
+  document.getElementById('intent-chaos-section').style.display    = (t === 'chaos_schedule')  ? '' : 'none';
+}
+document.addEventListener('DOMContentLoaded', function() {
+  _onIntentTypeChange(null);
+  var form = document.querySelector('form[hx-post="/partials/intent-create"]');
+  if (form) {
+    form.addEventListener('htmx:configRequest', function(e) {
+      var op  = form.querySelector('[name=threshold_op]');
+      var val = form.querySelector('[name=threshold_val]');
+      var hidden = document.getElementById('intent-threshold-hidden');
+      if (op && val && op.value && val.value !== '') {
+        hidden.value = op.value + ' ' + val.value;
+      } else {
+        hidden.value = '';
+      }
+    });
+  }
+});
+</script>
 {% endblock %}

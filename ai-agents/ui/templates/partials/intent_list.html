@@ -25,6 +25,19 @@
       {% if i.description %}
         <div class="muted" style="font-size:0.8em; font-weight:normal">{{ i.description }}</div>
       {% endif %}
+      {% if i.intent_type == 'monitor' and i.metric_query %}
+        <div style="font-size:0.76em; color:var(--muted); font-family:monospace; margin-top:2px">
+          {{ i.metric_query }}
+          {% if i.threshold %}<span style="color:#3b82f6"> {{ i.threshold }}</span>{% endif %}
+        </div>
+      {% elif i.intent_type == 'chaos_schedule' %}
+        {% if i.schedule %}
+          <div style="font-size:0.76em; color:var(--muted); font-family:monospace; margin-top:2px">
+            <span style="color:#8b5cf6">{{ i.schedule }}</span>
+            {% if i.action %} — {{ i.action[:60] }}{% if i.action|length > 60 %}…{% endif %}{% endif %}
+          </div>
+        {% endif %}
+      {% endif %}
     </td>
     <td style="padding:7px 10px">
       <span class="pill" style="background:{{ type_color }}22; color:{{ type_color }};
@@ -44,13 +57,20 @@
         <span style="color:var(--muted); font-size:0.82em">disabled</span>
       {% endif %}
     </td>
-    <td style="padding:7px 10px">
+    <td style="padding:7px 10px; white-space:nowrap">
       <button class="btn btn-sm btn-secondary"
               hx-post="/partials/intent-toggle/{{ i.id }}"
               hx-target="#intent-list"
               hx-swap="innerHTML"
               style="font-size:0.78em; padding:3px 10px">
         {{ 'Disable' if i.enabled else 'Enable' }}
+      </button>
+      <button class="btn btn-sm btn-secondary"
+              hx-get="/partials/intent-edit/{{ i.id }}"
+              hx-target="#intent-row-{{ i.id }}"
+              hx-swap="outerHTML"
+              style="font-size:0.78em; padding:3px 10px; margin-left:4px">
+        Edit
       </button>
       <button class="btn btn-sm"
               style="font-size:0.78em; padding:3px 10px; background:var(--bg3);

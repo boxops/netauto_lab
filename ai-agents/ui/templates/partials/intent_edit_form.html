@@ -1,0 +1,117 @@
+{% set type_color = {
+  'suppress': '#ef4444', 'escalate': '#f97316',
+  'monitor': '#3b82f6', 'chaos_schedule': '#8b5cf6'
+}.get(intent.intent_type, '#6b7280') %}
+
+<tr id="intent-row-{{ intent.id }}">
+  <td colspan="7" style="padding:14px 10px; background:var(--bg2); border-bottom:1px solid var(--border)">
+    <form hx-post="/partials/intent-edit/{{ intent.id }}"
+          hx-target="#intent-list"
+          hx-swap="innerHTML"
+          style="display:flex; flex-direction:column; gap:14px">
+
+      {# ── Header ──────────────────────────────────────────────────────────── #}
+      <div style="display:flex; align-items:center; gap:10px">
+        <div style="font-size:0.72em; font-weight:600; color:var(--muted); text-transform:uppercase;
+                    letter-spacing:.06em">Edit Intent</div>
+        <span class="pill" style="background:{{ type_color }}22; color:{{ type_color }};
+               border-color:{{ type_color }}55; font-size:0.75em">
+          {{ intent.intent_type }}
+        </span>
+      </div>
+
+      {# ── Common fields ────────────────────────────────────────────────────── #}
+      <div style="display:flex; gap:10px; flex-wrap:wrap">
+        <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:150px">
+          <label style="font-size:0.76em; color:var(--muted)">Name</label>
+          <input name="name" value="{{ intent.name }}" required
+                 style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                        padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px; min-width:120px">
+          <label style="font-size:0.76em; color:var(--muted)">Device (empty = any)</label>
+          <input name="device" value="{{ intent.device or '' }}" placeholder="leaf1"
+                 style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                        padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px; min-width:140px">
+          <label style="font-size:0.76em; color:var(--muted)">Alert name (empty = any)</label>
+          <input name="alertname" value="{{ intent.alertname or '' }}" placeholder="InterfaceDown"
+                 style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                        padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:150px">
+          <label style="font-size:0.76em; color:var(--muted)">Description</label>
+          <input name="description" value="{{ intent.description or '' }}" placeholder="Optional description"
+                 style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                        padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+        </div>
+      </div>
+
+      {# ── Monitor-specific ─────────────────────────────────────────────────── #}
+      {% if intent.intent_type == 'monitor' %}
+      <div style="border-top:1px solid var(--border); padding-top:12px">
+        <div style="font-size:0.72em; font-weight:600; color:#3b82f6; text-transform:uppercase;
+                    letter-spacing:.06em; margin-bottom:8px">Monitor settings</div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end">
+          <div style="display:flex; flex-direction:column; gap:4px; flex:3; min-width:200px">
+            <label style="font-size:0.76em; color:var(--muted)">Prometheus query</label>
+            <input name="metric_query" value="{{ intent.metric_query or '' }}"
+                   placeholder='up{job="telegraf"}'
+                   style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                          padding:5px 8px; color:var(--fg); font-size:0.84em; font-family:monospace; width:100%">
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:180px">
+            <label style="font-size:0.76em; color:var(--muted)">Threshold (e.g. &lt; 1 or &gt;= 2)</label>
+            <input name="threshold" value="{{ intent.threshold or '' }}" placeholder="&lt; 1"
+                   style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                          padding:5px 8px; color:var(--fg); font-size:0.84em; font-family:monospace; width:100%">
+          </div>
+        </div>
+      </div>
+      {% else %}
+      <input type="hidden" name="metric_query" value="{{ intent.metric_query or '' }}">
+      <input type="hidden" name="threshold" value="{{ intent.threshold or '' }}">
+      {% endif %}
+
+      {# ── Chaos-schedule-specific ──────────────────────────────────────────── #}
+      {% if intent.intent_type == 'chaos_schedule' %}
+      <div style="border-top:1px solid var(--border); padding-top:12px">
+        <div style="font-size:0.72em; font-weight:600; color:#8b5cf6; text-transform:uppercase;
+                    letter-spacing:.06em; margin-bottom:8px">Chaos schedule settings</div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end">
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:180px">
+            <label style="font-size:0.76em; color:var(--muted)">Cron expression</label>
+            <input name="schedule" value="{{ intent.schedule or '' }}" placeholder="*/30 * * * *"
+                   style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                          padding:5px 8px; color:var(--fg); font-size:0.84em; font-family:monospace; width:100%">
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; flex:3; min-width:220px">
+            <label style="font-size:0.76em; color:var(--muted)">Chaos scenario (sent to agent)</label>
+            <textarea name="action" rows="2"
+                      placeholder="Simulate BGP flap on leaf1 — run flap_bgp_neighbor check_mode=True"
+                      style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                             padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%;
+                             resize:vertical; box-sizing:border-box">{{ intent.action or '' }}</textarea>
+          </div>
+        </div>
+      </div>
+      {% else %}
+      <input type="hidden" name="schedule" value="{{ intent.schedule or '' }}">
+      <input type="hidden" name="action" value="{{ intent.action or '' }}">
+      {% endif %}
+
+      {# ── Buttons ──────────────────────────────────────────────────────────── #}
+      <div style="display:flex; gap:8px; align-items:center">
+        <button type="submit" class="btn"
+                style="font-size:0.82em; padding:5px 16px">Save</button>
+        <button type="button" class="btn btn-secondary"
+                hx-get="/partials/intent-list"
+                hx-target="#intent-list"
+                hx-swap="innerHTML"
+                style="font-size:0.82em; padding:5px 16px">Cancel</button>
+      </div>
+
+    </form>
+  </td>
+</tr>

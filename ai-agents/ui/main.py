@@ -1868,15 +1868,23 @@ async def partial_intent_create(
     device: str = Form(""),
     alertname: str = Form(""),
     description: str = Form(""),
+    metric_query: str = Form(""),
+    threshold: str = Form(""),
+    schedule: str = Form(""),
+    action: str = Form(""),
     tenant_id: str = "default",
 ):
     data = {
-        "name":        name,
-        "intent_type": intent_type,
-        "device":      device,
-        "alertname":   alertname,
-        "description": description,
-        "tenant_id":   tenant_id,
+        "name":         name,
+        "intent_type":  intent_type,
+        "device":       device,
+        "alertname":    alertname,
+        "description":  description,
+        "metric_query": metric_query,
+        "threshold":    threshold,
+        "schedule":     schedule,
+        "action":       action,
+        "tenant_id":    tenant_id,
     }
     await run_in_threadpool(task_store.create_intent, data)
     intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
@@ -1903,6 +1911,48 @@ async def partial_intent_toggle(request: Request, intent_id: str, tenant_id: str
 @app.delete("/partials/intent-delete/{intent_id}", response_class=HTMLResponse)
 async def partial_intent_delete(request: Request, intent_id: str, tenant_id: str = "default"):
     await run_in_threadpool(task_store.delete_intent, intent_id)
+    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
+    return templates.TemplateResponse(request, "partials/intent_list.html", {
+        "request": request,
+        "intents": intents,
+    })
+
+
+@app.get("/partials/intent-edit/{intent_id}", response_class=HTMLResponse)
+async def partial_intent_edit_form(request: Request, intent_id: str):
+    intent = await run_in_threadpool(task_store.get_intent, intent_id)
+    if not intent:
+        return HTMLResponse("Not found", status_code=404)
+    return templates.TemplateResponse(request, "partials/intent_edit_form.html", {
+        "request": request,
+        "intent": intent,
+    })
+
+
+@app.post("/partials/intent-edit/{intent_id}", response_class=HTMLResponse)
+async def partial_intent_edit_save(
+    request: Request,
+    intent_id: str,
+    name: str = Form(...),
+    description: str = Form(""),
+    device: str = Form(""),
+    alertname: str = Form(""),
+    metric_query: str = Form(""),
+    threshold: str = Form(""),
+    schedule: str = Form(""),
+    action: str = Form(""),
+    tenant_id: str = "default",
+):
+    await run_in_threadpool(task_store.update_intent, intent_id, {
+        "name":         name,
+        "description":  description,
+        "device":       device,
+        "alertname":    alertname,
+        "metric_query": metric_query,
+        "threshold":    threshold,
+        "schedule":     schedule,
+        "action":       action,
+    })
     intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
     return templates.TemplateResponse(request, "partials/intent_list.html", {
         "request": request,

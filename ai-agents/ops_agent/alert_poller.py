@@ -108,18 +108,20 @@ class AlertPoller:
 
     def _seed_seen_from_store(self) -> None:
         """
-        Pre-populate _seen from tasks that are ACTIVELY being investigated.
-        Only seeds pending/claimed/running — tasks in awaiting_approval or
-        complete are NOT seeded so that if the same alert resolves and re-fires,
-        the fingerprint is eligible for a fresh investigation rather than being
-        permanently blocked by a stale gate task.
+        Pre-populate _seen from tasks that are actively being investigated or
+        awaiting human approval.  Includes awaiting_approval so that a poller
+        reset (e.g. /poller/reset) does not re-dispatch alerts that already
+        have an open gate.  When an alert truly resolves and re-fires, the gate
+        is first auto-rejected by _auto_reject_stale_gates (clearing the
+        awaiting_approval task), so the re-fired event is still eligible for a
+        fresh investigation.
         """
         try:
             tasks = self._task_store.list_tasks(type="rca", limit=1000)
             seeded = 0
             for task in tasks:
                 fp = task.get("alert_fingerprint") or ""
-                if fp and task.get("status") in ("pending", "claimed", "running"):
+                if fp and task.get("status") in ("pending", "claimed", "running", "awaiting_approval"):
                     self._seen[fp] = f"{fp}:firing"
                     seeded += 1
             logger.info("AlertPoller: seeded %d fingerprints from TaskStore", seeded)
@@ -360,14 +362,21 @@ class AlertPoller:
 
     # ── topology-aware correlation ────────────────────────────────────────────
 
-    def _find_upstream_rca(self, device: str) -> dict | None:
+    def _find_upstream_rca(self, device: str, alertname: str = "") -> dict | None:
         """
         Return an active RCA task for the root-cause device, or None if this device
         is itself the root cause. Delegates to TopologyCorrelator for BFS-based
         root cause detection so the same graph cache is shared with the workflow.
+
+        alertname is used to guard against false upstream matches: a network-topology-
+        upstream device whose open task is for a MORE-DOWNSTREAM alert type (higher
+        priority number) cannot be the root cause of the current alert.  E.g. a
+        BGPPeerDown (p=40) on spine1 should NOT swallow an InterfaceDown (p=20) on
+        leaf1 even though spine is topologically upstream of leaf.
         """
         if not device:
             return None
+        current_priority = _ALERT_PRIORITY.get(alertname, 99) if alertname else 99
         try:
             # Include all non-terminal statuses so we catch tasks that moved
             # from "running" to "complete"/"awaiting_approval" before the 3s
@@ -383,9 +392,8 @@ class AlertPoller:
                         created_after_minutes=window,
                     )
                 )
-            active_rcas = recent_rcas
             existing_rca_devices: list[str] = []
-            for t in active_rcas:
+            for t in recent_rcas:
                 try:
                     import json as _json
                     c = _json.loads(t.get("content") or "{}")
@@ -399,8 +407,15 @@ class AlertPoller:
                         or c.get("fix_proposal", {}).get("device", "")
                         or ""
                     )
-                    if d and d != device:
-                        existing_rca_devices.append(d)
+                    if not d or d == device:
+                        continue
+                    # Skip upstream candidates whose own alert is less root-cause-ish
+                    # than the current alert (higher priority number = more downstream).
+                    task_alertname = c.get("alertname", "") or ""
+                    task_priority  = _ALERT_PRIORITY.get(task_alertname, 99)
+                    if task_priority >= current_priority:
+                        continue
+                    existing_rca_devices.append(d)
                 except Exception:
                     pass
             if not existing_rca_devices:
@@ -587,6 +602,8 @@ class AlertPoller:
 
         # Defence-in-depth: verify the TaskStore has no active task for this
         # fingerprint before creating another one.
+        # Do NOT set _seen here — if the existing task later completes or is rejected,
+        # the next poll cycle should be able to re-dispatch this alert.
         if fp:
             existing = self._task_store.get_active_task_for_fingerprint(fp)
             if existing:
@@ -594,7 +611,6 @@ class AlertPoller:
                     "AlertPoller: task %s already exists for fp=%s (status=%s) — skipping",
                     existing["id"], fp[:12], existing["status"],
                 )
-                self._seen[fp] = f"{fp}:firing"
                 return
 
         # Alert correlation: if there is already an active RCA for the same device
@@ -638,7 +654,7 @@ class AlertPoller:
         # Topology-aware correlation: if a directly connected upstream device already
         # has an active RCA, this alert is likely a downstream effect of the same root
         # cause.  Link it onto that task rather than spawning a parallel investigation.
-        upstream_rca = self._find_upstream_rca(device)
+        upstream_rca = self._find_upstream_rca(device, alertname=alertname)
         if upstream_rca:
             self._task_store.add_event(
                 upstream_rca["id"], "system", "downstream_alert",
@@ -705,7 +721,7 @@ class AlertPoller:
                     # upstream device's RCA task wasn't created yet at classify time.
                     # After a 3-second yield the upstream task is usually visible.
                     time.sleep(3)
-                    late_upstream = self._find_upstream_rca(device)
+                    late_upstream = self._find_upstream_rca(device, alertname=alertname)
                     if late_upstream:
                         self._task_store.add_event(
                             late_upstream["id"], "system", "downstream_alert",

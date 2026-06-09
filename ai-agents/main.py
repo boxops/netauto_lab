@@ -107,6 +107,7 @@ async def lifespan(app: FastAPI):
     if settings.policy_auto_seed:
         _policy_registry.seed_defaults()
     scheduler = OpsScheduler(agent)
+    _intent_evaluator._scheduler = scheduler
     poller.start()
     _metrics.start()
     if settings.intent_check_enabled:

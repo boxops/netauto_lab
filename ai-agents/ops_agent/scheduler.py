@@ -9,9 +9,10 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 if TYPE_CHECKING:
     from ops_agent.agent import OpsAgent
@@ -81,6 +82,47 @@ class OpsScheduler:
             )
             result.append(entry)
         return result
+
+    def add_cron_job(
+        self,
+        intent_id: str,
+        scenario: str,
+        cron_expr: str,
+        on_fire_fn: Callable[[bool], None],
+    ) -> None:
+        """Register a cron-triggered job for a chaos_schedule intent."""
+        def _run() -> None:
+            logger.info("Chaos intent %s firing: %s", intent_id, scenario[:80])
+            try:
+                self._agent.chat(scenario, session_id=f"intent-{intent_id}")
+                on_fire_fn(True)
+            except Exception:
+                logger.exception("Chaos intent %s failed", intent_id)
+                on_fire_fn(False)
+
+        self._scheduler.add_job(
+            _run,
+            trigger=CronTrigger.from_crontab(cron_expr, timezone="UTC"),
+            id=f"intent-{intent_id}",
+            replace_existing=True,
+        )
+        logger.info("Chaos intent %s scheduled: %s", intent_id, cron_expr)
+
+    def remove_cron_job(self, intent_id: str) -> None:
+        """Remove a cron job registered for a chaos_schedule intent."""
+        try:
+            self._scheduler.remove_job(f"intent-{intent_id}")
+            logger.info("Chaos intent %s cron job removed", intent_id)
+        except Exception:
+            pass
+
+    def list_cron_job_ids(self) -> set[str]:
+        """Return set of intent IDs that currently have active cron jobs."""
+        return {
+            j.id.removeprefix("intent-")
+            for j in self._scheduler.get_jobs()
+            if j.id.startswith("intent-")
+        }
 
     def shutdown(self) -> None:
         self._scheduler.shutdown(wait=False)

@@ -499,7 +499,13 @@ class TaskStore:
 
     def reject_task(self, task_id: str, rejected_by: str, reason: str = "") -> None:
         ts = _now()
+        incident_id: str | None = None
         with self._lock, self._connect() as conn:
+            row = conn.execute(
+                text("SELECT incident_id FROM tasks WHERE id=:id"), {"id": task_id}
+            ).fetchone()
+            if row:
+                incident_id = row[0]
             conn.execute(
                 text("UPDATE tasks SET status='rejected', completed_at=:ts WHERE id=:id"),
                 {"ts": ts, "id": task_id},
@@ -515,6 +521,42 @@ class TaskStore:
                     "detail":     json.dumps({"reason": reason}) if reason else None,
                 },
             )
+        # If this RCA belongs to an incident and all sibling RCAs are now terminal,
+        # close the incident so the alert poller can re-dispatch if the alert re-fires.
+        if incident_id:
+            self._maybe_close_incident(incident_id, ts)
+
+    def _maybe_close_incident(self, incident_id: str, ts: str) -> None:
+        """Close an incident when all its RCA tasks have reached a terminal state."""
+        _TERMINAL = ("complete", "rejected", "failed")
+        with self._lock, self._connect() as conn:
+            inc_row = conn.execute(
+                text("SELECT status FROM tasks WHERE id=:id"), {"id": incident_id}
+            ).fetchone()
+            if not inc_row or inc_row[0] in _TERMINAL:
+                return
+            rca_rows = conn.execute(
+                text("SELECT status FROM tasks WHERE incident_id=:inc AND type='rca'"),
+                {"inc": incident_id},
+            ).fetchall()
+            if not rca_rows:
+                return
+            if all(r[0] in _TERMINAL for r in rca_rows):
+                conn.execute(
+                    text("UPDATE tasks SET status='rejected', completed_at=:ts WHERE id=:id"),
+                    {"ts": ts, "id": incident_id},
+                )
+                conn.execute(
+                    text("INSERT INTO task_events (task_id,timestamp,agent,event_type,detail) "
+                         "VALUES (:task_id,:ts,:agent,:event_type,:detail)"),
+                    {
+                        "task_id":    incident_id,
+                        "ts":         ts,
+                        "agent":      "system",
+                        "event_type": "incident_closed",
+                        "detail":     json.dumps({"reason": "All RCA tasks reached terminal state"}),
+                    },
+                )
 
     # ── event logging ─────────────────────────────────────────────────────────
 

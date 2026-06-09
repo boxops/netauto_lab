@@ -75,6 +75,12 @@ class IntentRegistry:
         return [i for i in all_intents
                 if i.get("enabled", 1) and i.get("intent_type") == "monitor"]
 
+    def get_chaos_schedule_intents(self, tenant_id: str = "default") -> list[dict]:
+        """Return all enabled chaos_schedule intents for the evaluator."""
+        all_intents = self._store.list_intents(tenant_id=tenant_id)
+        return [i for i in all_intents
+                if i.get("enabled", 1) and i.get("intent_type") == "chaos_schedule"]
+
 
 class IntentEvaluator:
     """
@@ -93,6 +99,7 @@ class IntentEvaluator:
         prometheus_url: str,
         evaluation_interval: int = 300,
         tenant_id: str = "default",
+        scheduler=None,
     ) -> None:
         self._registry    = intent_registry
         self._store       = task_store
@@ -100,6 +107,7 @@ class IntentEvaluator:
         self._prom_url    = prometheus_url.rstrip("/")
         self._interval    = evaluation_interval
         self._tenant_id   = tenant_id
+        self._scheduler   = scheduler
         self._thread: threading.Thread | None = None
         self._stop        = threading.Event()
 
@@ -133,6 +141,32 @@ class IntentEvaluator:
                 self._evaluate_one(intent)
             except Exception:
                 logger.exception("IntentEvaluator: failed to evaluate intent %s", intent["id"])
+        if self._scheduler is not None:
+            try:
+                self._sync_chaos_jobs()
+            except Exception:
+                logger.exception("IntentEvaluator: chaos job sync failed")
+
+    def _sync_chaos_jobs(self) -> None:
+        """Register/remove APScheduler cron jobs to match enabled chaos_schedule intents."""
+        intents = self._registry.get_chaos_schedule_intents(tenant_id=self._tenant_id)
+        wanted  = {i["id"] for i in intents}
+        current = self._scheduler.list_cron_job_ids()
+
+        for intent in intents:
+            iid = intent["id"]
+            if not intent.get("schedule") or not intent.get("action"):
+                continue
+            if iid not in current:
+                def _on_fire(success: bool, _id: str = iid) -> None:
+                    if success:
+                        self._store.touch_intent(_id)
+                self._scheduler.add_cron_job(
+                    iid, intent["action"], intent["schedule"], _on_fire
+                )
+
+        for iid in current - wanted:
+            self._scheduler.remove_cron_job(iid)
 
     def _evaluate_one(self, intent: dict) -> None:
         """Query Prometheus and create an RCA task if the threshold is breached."""

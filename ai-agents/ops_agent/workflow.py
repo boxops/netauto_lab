@@ -31,7 +31,7 @@ from langgraph.prebuilt import create_react_agent
 from shared.config import settings
 from shared.kb_store import kb_store as _kb_store
 from shared.llm import get_llm
-from shared.pipeline_models import RcaResult, FixProposalResult, ValidationResult, ExecutionResult
+from shared.pipeline_models import RcaResult, FixProposalResult, ValidationResult, ExecutionResult, AutonomyDecision, autonomy_level_index
 from shared.structured_output import parse_structured
 from shared.task_store import TaskStore
 from shared.rate_limiter import RateLimiter, BudgetExceededError
@@ -297,7 +297,7 @@ class IncidentWorkflow:
                 headers={"Authorization": f"Token {settings.nautobot_token}"},
                 timeout=5,
             )
-            if resp.ok:
+            if resp.is_success:
                 results = resp.json().get("results", [])
                 if results:
                     role_obj = (results[0].get("role") or results[0].get("device_role") or {})
@@ -972,7 +972,7 @@ class IncidentWorkflow:
                 headers={"Authorization": f"Token {settings.nautobot_token}"},
                 timeout=5,
             )
-            if resp.ok:
+            if resp.is_success:
                 results = resp.json().get("results", [])
                 if results:
                     role_obj = (results[0].get("role") or results[0].get("device_role") or {})
@@ -981,16 +981,38 @@ class IncidentWorkflow:
             pass
 
         prior_success_count = self._ts.count_successful_executions(device, fix_type)
-        policy_decision = self._policy_registry.query(
-            fix_type=fix_type,
-            device_role=device_role,
-            environment=settings.environment,
-            confidence=confidence,
-            risk=risk,
-            prior_success_count=prior_success_count,
-            alertname=state["alertname"],
-            tenant_id=state["tenant_id"],
-        )
+
+        # If the alert was resolved by the programmatic fast path, use that policy's
+        # autonomy level directly — it already encodes the operator's intent and has
+        # already been matched by its own conditions.  Only fall back to a fresh query
+        # when the AI pipeline produced the fix (no fast_path_policy_id in state).
+        fast_path_policy_id = state.get("fast_path_policy_id")
+        if fast_path_policy_id:
+            fp_policy = self._ts.get_policy(fast_path_policy_id)
+        else:
+            fp_policy = None
+
+        if fp_policy:
+            level = fp_policy["autonomy_level"]
+            idx   = autonomy_level_index(level)
+            policy_decision = AutonomyDecision(
+                autonomy_level=level,
+                requires_approval=idx <= 3,
+                allow_execution=idx >= 4,
+                policy_id=fp_policy["id"],
+                reason=f"Fast-path policy '{fp_policy['name']}' governs this gate ({level}).",
+            )
+        else:
+            policy_decision = self._policy_registry.query(
+                fix_type=fix_type,
+                device_role=device_role,
+                environment=settings.environment,
+                confidence=confidence,
+                risk=risk,
+                prior_success_count=prior_success_count,
+                alertname=state["alertname"],
+                tenant_id=state["tenant_id"],
+            )
         auto = policy_decision.allow_execution and not do_not_auto
 
         # Store full approval context into the task content so the UI can display it
@@ -1034,6 +1056,15 @@ class IncidentWorkflow:
                 self._ts.approve_task(task_id, "system")
                 logger.info("Workflow: AUTO-APPROVED task=%s device=%s level=%s",
                             task_id, device, policy_decision.autonomy_level)
+                # Immediately launch Phase 2 execution in a background thread.
+                # Human-approved tasks go through POST /workflow/resume; auto-approved
+                # tasks skip that HTTP round-trip and call resume_execution directly.
+                threading.Thread(
+                    target=self.resume_execution,
+                    args=(task_id, "system", ""),
+                    daemon=True,
+                    name=f"auto-execute-{task_id}",
+                ).start()
             else:
                 self._ts.add_event(
                     task_id, AGENT, "approval_policy",

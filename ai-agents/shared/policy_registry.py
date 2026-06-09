@@ -24,7 +24,7 @@ import shared.metrics as _metrics
 
 logger = logging.getLogger(__name__)
 
-_CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+_CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2, "certain": 2}
 _RISK_RANK       = {"low": 0, "medium": 1, "high": 2}
 
 _DEFAULT_DECISION = AutonomyDecision(
