@@ -1396,6 +1396,15 @@ async def incident_close(request: Request, incident_id: str,
 
 
 
+@app.get("/partials/live-feed", response_class=HTMLResponse)
+async def partial_live_feed(request: Request, tenant_id: str = "default"):
+    events = await run_in_threadpool(task_store.get_recent_pipeline_events, 20, tenant_id)
+    return templates.TemplateResponse(request, "partials/live_feed.html", {
+        "request": request,
+        "events":  events,
+    })
+
+
 @app.get("/partials/chronicle", response_class=HTMLResponse)
 async def partial_chronicle(request: Request, fp: str = ""):
     ctx = await run_in_threadpool(_pipeline_chronicle_context, fp)
@@ -1616,6 +1625,115 @@ async def partial_policy_delete(request: Request, policy_id: str, tenant_id: str
         "request":  request,
         "policies": policies,
         "now_iso":  datetime.now(timezone.utc).isoformat(),
+    })
+
+
+@app.get("/partials/policy-edit/{policy_id}", response_class=HTMLResponse)
+async def partial_policy_edit_form(request: Request, policy_id: str):
+    policy = await run_in_threadpool(task_store.get_policy, policy_id)
+    if not policy:
+        return HTMLResponse(f"<span class='muted'>Policy {policy_id} not found.</span>")
+    return templates.TemplateResponse(request, "partials/policy_edit_form.html", {
+        "request": request,
+        "policy":  policy,
+    })
+
+
+@app.post("/partials/policy-edit/{policy_id}", response_class=HTMLResponse)
+async def partial_policy_edit_save(
+    request: Request,
+    policy_id: str,
+    autonomy_level:  str = Form("L2"),
+    min_confidence:  str = Form("low"),
+    max_risk:        str = Form("high"),
+    description:     str = Form(""),
+    conditions:      str = Form(""),
+    rca_template:    str = Form(""),
+    fix_template:    str = Form(""),
+    tenant_id:       str = "default",
+):
+    for field_name, field_val in [
+        ("conditions",   conditions),
+        ("rca_template", rca_template),
+        ("fix_template", fix_template),
+    ]:
+        if field_val.strip():
+            try:
+                json.loads(field_val)
+            except json.JSONDecodeError as exc:
+                return templates.TemplateResponse(request, "partials/action_status.html", {
+                    "request": request,
+                    "msg":     f"Invalid JSON in {field_name}: {exc}",
+                    "ok":      False,
+                })
+    updates = {
+        "autonomy_level": autonomy_level,
+        "min_confidence": min_confidence,
+        "max_risk":       max_risk,
+        "description":    description,
+        "conditions":     conditions.strip()   or None,
+        "rca_template":   rca_template.strip() or None,
+        "fix_template":   fix_template.strip() or None,
+    }
+    await run_in_threadpool(task_store.update_policy, policy_id, updates)
+    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
+    return templates.TemplateResponse(request, "partials/policy_list.html", {
+        "request":  request,
+        "policies": policies,
+        "now_iso":  datetime.now(timezone.utc).isoformat(),
+    })
+
+
+@app.post("/partials/policy-simulate", response_class=HTMLResponse)
+async def partial_policy_simulate(
+    request: Request,
+    alertname:   str = Form(""),
+    device_role: str = Form(""),
+    environment: str = Form(""),
+    fix_type:    str = Form("config_change"),
+    confidence:  str = Form("high"),
+    risk:        str = Form("low"),
+    tenant_id:   str = "default",
+):
+    from shared.policy_registry import PolicyRegistry
+    registry = PolicyRegistry(task_store)
+
+    gate_decision = await run_in_threadpool(
+        registry.query,
+        fix_type=fix_type,
+        device_role=device_role,
+        environment=environment,
+        confidence=confidence,
+        risk=risk,
+        alertname=alertname,
+        tenant_id=tenant_id,
+    )
+    fast_path_candidates = await run_in_threadpool(
+        registry.get_fast_path_policies,
+        alertname, tenant_id, device_role,
+    )
+    # Parse conditions JSON for display (don't execute)
+    for p in fast_path_candidates:
+        try:
+            p["conditions_parsed"] = json.loads(p["conditions"]) if p.get("conditions") else []
+        except Exception:
+            p["conditions_parsed"] = []
+
+    level_colors = {
+        "L0": "#ef4444", "L1": "#f97316", "L2": "#eab308",
+        "L3": "#22c55e", "L4": "#3b82f6", "L5": "#8b5cf6",
+    }
+    return templates.TemplateResponse(request, "partials/policy_simulate_result.html", {
+        "request":              request,
+        "alertname":            alertname,
+        "device_role":          device_role,
+        "environment":          environment,
+        "fix_type":             fix_type,
+        "confidence":           confidence,
+        "risk":                 risk,
+        "gate_decision":        gate_decision,
+        "fast_path_candidates": fast_path_candidates,
+        "level_colors":         level_colors,
     })
 
 

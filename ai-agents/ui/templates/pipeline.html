@@ -44,6 +44,19 @@
 
 <hr class="divider" />
 
+{# ── Live Activity Feed ───────────────────────────────────────────────────── #}
+<div class="section">
+  <div class="section-title" style="margin-bottom:8px">⚡ Live Activity</div>
+  <div id="live-feed"
+       hx-get="/partials/live-feed"
+       hx-trigger="load, sse:tasks-changed, every 3s"
+       hx-swap="outerHTML">
+    <div class="muted" style="font-size:0.82em">Loading activity…</div>
+  </div>
+</div>
+
+<hr class="divider" />
+
 {# ── Alert Processing Pipeline ────────────────────────────────────────────── #}
 <div class="section">
   <div class="section-title">🌐 Alert Processing Pipeline</div>

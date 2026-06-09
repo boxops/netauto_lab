@@ -14,6 +14,7 @@ Matching priority (most specific wins):
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -35,6 +36,79 @@ _DEFAULT_DECISION = AutonomyDecision(
 )
 
 _DEFAULT_SEED: list[dict] = [
+    # ── Fast-path entries (programmatic resolution — zero LLM calls) ──────────
+    # InterfaceAdminDown: confirm via Prometheus ifAdminStatus==2, then restore.
+    # Double-braces around PromQL label selectors so _fmt() only substitutes
+    # {device} and {interface}, leaving {{sysName=...}} intact as valid PromQL.
+    dict(
+        name="InterfaceAdminDown fast path — any device",
+        alertname="InterfaceAdminDown",
+        fix_type="config_change",
+        device_role="",       # wildcard: leaf and spine
+        environment="",       # wildcard: lab and production
+        min_confidence="high",
+        max_risk="low",
+        min_prior_successes=0,
+        autonomy_level="L3",  # human gate on first deploy; promotable to L4
+        conditions=json.dumps([
+            {
+                "type": "metric",
+                "query": 'interface_ifAdminStatus{{ifDescr="{interface}",sysName="{device}"}}',
+                "expect": "2",
+            }
+        ]),
+        rca_template=json.dumps({
+            "diagnosis": "Interface {interface} on {device} is administratively shut down (ifAdminStatus=2). No planned maintenance event found in task history.",
+            "confidence": "high",
+            "affected_device": "{device}",
+            "action": "no shutdown",
+            "upstream_cause": "",
+            "is_leaf_symptom": False,
+        }),
+        fix_template=json.dumps({
+            "fix_type": "config_change",
+            "commands": "interface {interface}\n no shutdown",
+            "risk": "low",
+            "confidence": "high",
+            "reason": "Programmatic fast path: interface {interface} on {device} is admin-down with no maintenance context. Restoring with 'no shutdown'.",
+        }),
+    ),
+    # BGPPeerDown lab leaf: confirm session is not Established, soft-clear.
+    # expect_ne="6" means "session must NOT be in state 6 (Established)".
+    dict(
+        name="BGPPeerDown fast path — lab leaf",
+        alertname="BGPPeerDown",
+        fix_type="runbook",
+        device_role="leaf",
+        environment="lab",
+        min_confidence="high",
+        max_risk="low",
+        min_prior_successes=0,
+        autonomy_level="L4",  # auto-execute in lab after conditions pass
+        conditions=json.dumps([
+            {
+                "type": "metric",
+                "query": 'bgp_peer_bgpPeerState{{sysName="{device}"}}',
+                "expect_ne": "6",
+            }
+        ]),
+        rca_template=json.dumps({
+            "diagnosis": "BGP session on {device} is not in Established state (confirmed via Prometheus bgpPeerState). Session reset required.",
+            "confidence": "high",
+            "affected_device": "{device}",
+            "action": "clear bgp neighbor",
+            "upstream_cause": "",
+            "is_leaf_symptom": False,
+        }),
+        fix_template=json.dumps({
+            "fix_type": "runbook",
+            "commands": "clear ip bgp * soft",
+            "risk": "low",
+            "confidence": "high",
+            "reason": "Programmatic fast path: BGP session on {device} confirmed non-established. Soft-clear to re-establish.",
+        }),
+    ),
+    # ── Post-hoc gate policies (autonomy decision after AI investigation) ─────
     # BGP peer reset — leaf nodes in lab → L4 (auto-approve after 2 successes)
     dict(name="BGP peer reset — lab leaf → L4",
          alertname="BGPPeerDown", fix_type="runbook", device_role="leaf",
@@ -200,18 +274,36 @@ class PolicyRegistry:
     def seed_defaults(self, tenant_id: str = "default") -> int:
         """
         Insert built-in default policies if the table is empty for this tenant.
+        For existing deployments, backfills fast-path fields (conditions/templates)
+        onto seed policies that were created before fast-path entries existed.
         Idempotent — safe to call on every startup.
         Returns number of policies inserted (0 if already seeded).
         """
         existing = self._store.list_policies(tenant_id=tenant_id)
-        if existing:
-            return 0
-        count = 0
+        if not existing:
+            count = 0
+            for seed in _DEFAULT_SEED:
+                self._store.create_policy({**seed, "tenant_id": tenant_id})
+                count += 1
+            logger.info("PolicyRegistry: seeded %d default policies for tenant=%s", count, tenant_id)
+            return count
+        self._backfill_fast_path_fields(existing, tenant_id)
+        return 0
+
+    def _backfill_fast_path_fields(self, existing: list[dict], tenant_id: str) -> None:
+        """Populate conditions/templates on existing seed policies that lack them."""
+        by_name = {p["name"]: p for p in existing}
         for seed in _DEFAULT_SEED:
-            self._store.create_policy({**seed, "tenant_id": tenant_id})
-            count += 1
-        logger.info("PolicyRegistry: seeded %d default policies for tenant=%s", count, tenant_id)
-        return count
+            if not (seed.get("conditions") or seed.get("rca_template")):
+                continue
+            match = by_name.get(seed["name"])
+            if match and not match.get("conditions"):
+                self._store.update_policy(match["id"], {
+                    "conditions":   seed["conditions"],
+                    "rca_template": seed["rca_template"],
+                    "fix_template": seed["fix_template"],
+                })
+                logger.info("PolicyRegistry: backfilled fast-path fields for '%s'", seed["name"])
 
     def get_fast_path_policies(
         self,

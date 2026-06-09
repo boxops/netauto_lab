@@ -551,6 +551,72 @@ class TaskStore:
             ).fetchall()
         return [_row_to_dict(r) for r in rows]
 
+    # Event types surfaced in the live feed on the home page.
+    _FEED_EVENT_TYPES: frozenset[str] = frozenset({
+        "fast_path_resolved",
+        "rca_complete",
+        "auto_approved",
+        "approval_requested",
+        "execution_complete",
+        "execution_verified",
+        "no_ai_skipped",
+    })
+
+    def get_recent_pipeline_events(
+        self,
+        limit: int = 20,
+        tenant_id: str = "default",
+    ) -> list[dict]:
+        """
+        Return the most recent pipeline-significant events across all tasks,
+        enriched with device and alertname from the parent task's content JSON.
+        Used by the live event feed on the home page.
+        """
+        et_list = sorted(self._FEED_EVENT_TYPES)
+        placeholders = ", ".join(f":et{i}" for i in range(len(et_list)))
+        params: dict = {f"et{i}": et for i, et in enumerate(et_list)}
+        params["tenant_id"] = tenant_id
+        params["limit"]     = limit
+
+        sql = text(f"""
+            SELECT te.id, te.task_id, te.timestamp, te.agent, te.event_type, te.detail,
+                   t.content
+            FROM task_events te
+            JOIN tasks t ON t.id = te.task_id
+            WHERE te.event_type IN ({placeholders})
+              AND t.tenant_id = :tenant_id
+            ORDER BY te.id DESC
+            LIMIT :limit
+        """)
+
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+
+        results = []
+        for r in rows:
+            try:
+                content = json.loads(r[6] or "{}")
+            except Exception:
+                content = {}
+            device    = content.get("device") or (content.get("fix_proposal") or {}).get("device", "")
+            alertname = content.get("alertname", "")
+            detail: dict = {}
+            try:
+                detail = json.loads(r[5] or "{}") if r[5] else {}
+            except Exception:
+                pass
+            results.append({
+                "id":         r[0],
+                "task_id":    r[1],
+                "timestamp":  r[2],
+                "agent":      r[3],
+                "event_type": r[4],
+                "detail":     detail,
+                "device":     device,
+                "alertname":  alertname,
+            })
+        return results
+
     # ── feedback ──────────────────────────────────────────────────────────────
 
     def add_feedback(

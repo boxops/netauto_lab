@@ -1,0 +1,101 @@
+<tr id="policy-row-{{ policy.id }}">
+  <td colspan="8" style="padding:14px 10px; background:var(--bg2); border-bottom:1px solid var(--border)">
+    <form hx-post="/partials/policy-edit/{{ policy.id }}"
+          hx-target="#policy-list"
+          hx-swap="innerHTML"
+          style="display:flex; flex-direction:column; gap:12px">
+
+      {# Row 1: autonomy level + thresholds #}
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end">
+        <div style="display:flex; flex-direction:column; gap:4px">
+          <label style="font-size:0.76em; color:var(--muted)">Autonomy level</label>
+          <select name="autonomy_level"
+                  style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
+                         color:var(--fg); padding:4px 8px; font-size:0.84em">
+            {% for lvl in ["L0","L1","L2","L3","L4","L5"] %}
+            <option value="{{ lvl }}" {% if lvl == policy.autonomy_level %}selected{% endif %}>{{ lvl }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px">
+          <label style="font-size:0.76em; color:var(--muted)">Min confidence</label>
+          <select name="min_confidence"
+                  style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
+                         color:var(--fg); padding:4px 8px; font-size:0.84em">
+            {% for c in ["low","medium","high"] %}
+            <option value="{{ c }}" {% if c == (policy.min_confidence or 'low') %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px">
+          <label style="font-size:0.76em; color:var(--muted)">Max risk</label>
+          <select name="max_risk"
+                  style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
+                         color:var(--fg); padding:4px 8px; font-size:0.84em">
+            {% for r in ["low","medium","high"] %}
+            <option value="{{ r }}" {% if r == (policy.max_risk or 'high') %}selected{% endif %}>{{ r }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div style="flex:1; min-width:200px; display:flex; flex-direction:column; gap:4px">
+          <label style="font-size:0.76em; color:var(--muted)">Description</label>
+          <input name="description"
+                 value="{{ policy.description or '' }}"
+                 placeholder="Optional description"
+                 style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
+                        color:var(--fg); padding:4px 8px; font-size:0.84em; width:100%">
+        </div>
+      </div>
+
+      {# Row 2: JSON fields (programmatic fast path) #}
+      <details style="border:1px solid var(--border); border-radius:6px; padding:10px">
+        <summary style="font-size:0.8em; color:var(--muted); cursor:pointer; user-select:none">
+          Programmatic fast path
+          {% if policy.conditions %}
+            <span style="color:#6366f1; font-size:0.9em; margin-left:6px">⚡ enabled</span>
+          {% endif %}
+        </summary>
+        <div style="display:flex; flex-direction:column; gap:10px; margin-top:10px">
+          <div>
+            <label style="font-size:0.76em; color:var(--muted)">
+              Conditions (JSON array — leave empty to disable fast path)
+            </label>
+            <textarea name="conditions" rows="3"
+                      placeholder='[{"type":"metric","query":"interface_ifAdminStatus{{sysName=\"{device}\"}}","expect":"2"}]'
+                      style="width:100%; background:var(--bg3); border:1px solid var(--border);
+                             border-radius:5px; color:var(--fg); padding:6px 8px;
+                             font-size:0.8em; font-family:monospace; resize:vertical">{{ policy.conditions or '' }}</textarea>
+          </div>
+          <div>
+            <label style="font-size:0.76em; color:var(--muted)">RCA template (JSON object)</label>
+            <textarea name="rca_template" rows="4"
+                      placeholder='{"diagnosis":"{interface} on {device} is admin-down","confidence":"high","affected_device":"{device}","action":"no shutdown","upstream_cause":"","is_leaf_symptom":false}'
+                      style="width:100%; background:var(--bg3); border:1px solid var(--border);
+                             border-radius:5px; color:var(--fg); padding:6px 8px;
+                             font-size:0.8em; font-family:monospace; resize:vertical">{{ policy.rca_template or '' }}</textarea>
+          </div>
+          <div>
+            <label style="font-size:0.76em; color:var(--muted)">Fix template (JSON object)</label>
+            <textarea name="fix_template" rows="4"
+                      placeholder='{"fix_type":"config_change","commands":"interface {interface}\n no shutdown","risk":"low","confidence":"high","reason":"Restore admin-down interface."}'
+                      style="width:100%; background:var(--bg3); border:1px solid var(--border);
+                             border-radius:5px; color:var(--fg); padding:6px 8px;
+                             font-size:0.8em; font-family:monospace; resize:vertical">{{ policy.fix_template or '' }}</textarea>
+          </div>
+        </div>
+      </details>
+
+      {# Actions #}
+      <div style="display:flex; gap:8px">
+        <button type="submit" class="btn"
+                style="font-size:0.82em; padding:5px 16px">Save</button>
+        <button type="button" class="btn btn-secondary"
+                hx-get="/partials/policy-list"
+                hx-target="#policy-list"
+                hx-swap="innerHTML"
+                style="font-size:0.82em; padding:5px 16px">Cancel</button>
+      </div>
+
+    </form>
+  </td>
+</tr>

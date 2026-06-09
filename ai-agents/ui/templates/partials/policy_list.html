@@ -80,6 +80,13 @@
               style="font-size:0.78em; padding:3px 10px">
         {{ 'Disable' if p.enabled else 'Enable' }}
       </button>
+      <button class="btn btn-sm btn-secondary"
+              hx-get="/partials/policy-edit/{{ p.id }}"
+              hx-target="#policy-row-{{ p.id }}"
+              hx-swap="outerHTML"
+              style="font-size:0.78em; padding:3px 10px; margin-left:4px">
+        Edit
+      </button>
       <button class="btn btn-sm"
               style="font-size:0.78em; padding:3px 10px; background:var(--bg3);
                      border:1px solid #ef444455; color:#ef4444; border-radius:4px; margin-left:4px"

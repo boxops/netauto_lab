@@ -252,12 +252,30 @@ class TestWorkflowFastPathRouting:
 
     def _base_state(self) -> dict:
         return {
-            "alertname": "InterfaceDown",
-            "tenant_id": "default",
-            "rca_task_id": None,
-            "event": SAMPLE_ALERT,
-            "pipeline_decision": None,
+            "alertname":          "InterfaceDown",
+            "severity":           "critical",
+            "device":             "spine2",
+            "instance":           "172.20.20.2:161",
+            "summary":            "",
+            "description":        "",
+            "fingerprint":        "fp-wf-test",
+            "tenant_id":          "default",
+            "rca_task_id":        None,
+            "event":              SAMPLE_ALERT,
+            "pipeline_decision":  None,
             "fast_path_policy_id": None,
+            "blast_radius":       [],
+            "is_leaf_symptom":    False,
+            "intent_match":       None,
+            "rca":                None,
+            "fix_proposal":       None,
+            "validation":         None,
+            "in_maintenance":     False,
+            "do_not_auto_execute": False,
+            "priority":           "high",
+            "session_id":         "sess-test",
+            "incident_id":        None,
+            "error":              None,
         }
 
     @patch("shared.policy_resolver._prometheus_instant", return_value="2")

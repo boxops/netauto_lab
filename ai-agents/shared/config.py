@@ -116,6 +116,12 @@ class Settings(BaseSettings):
     # are removed from the chaos agent's tool set entirely.
     chaos_tools_enabled: bool = False
 
+    # AI-optional mode — when False, LLM investigation is suppressed entirely.
+    # Only programmatic fast-path policies (with conditions defined) will resolve
+    # alerts. Alerts with no matching fast-path policy are placed in
+    # awaiting_approval with a no_ai_skipped event for manual review.
+    ai_enabled: bool = True
+
     # Approval webhook — POST when a task enters awaiting_approval
     approval_webhook_url: str = ""
     approval_webhook_secret: str = ""  # HMAC-SHA256 signing secret; empty = unsigned

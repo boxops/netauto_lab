@@ -178,6 +178,7 @@ class IncidentWorkflow:
 
         builder.add_node("check_intents",        self._node_check_intents)
         builder.add_node("policy_fast_path",     self._node_policy_fast_path)
+        builder.add_node("no_ai_gate",           self._node_no_ai_gate)
         builder.add_node("investigate",          self._node_investigate)
         builder.add_node("propose_fix",          self._node_propose_fix)
         builder.add_node("validate",             self._node_validate)
@@ -202,8 +203,10 @@ class IncidentWorkflow:
             {
                 "fast_path_resolved": "create_approval_gate",
                 "investigate":        "investigate",
+                "no_ai":              "no_ai_gate",
             },
         )
+        builder.add_edge("no_ai_gate", END)
         builder.add_conditional_edges(
             "investigate",
             self._route_after_rca,
@@ -239,10 +242,11 @@ class IncidentWorkflow:
             return "escalate"
         return "policy_fast_path"
 
-    @staticmethod
-    def _route_after_fast_path(state: IncidentState) -> str:
+    def _route_after_fast_path(self, state: IncidentState) -> str:
         if state.get("pipeline_decision") == "fast_path_resolved":
             return "fast_path_resolved"
+        if not settings.ai_enabled:
+            return "no_ai"
         return "investigate"
 
     @staticmethod
@@ -890,6 +894,56 @@ class IncidentWorkflow:
 
         self._sh.clear_context()
         return {"error": "validation exhausted retries"}
+
+    # ── node: no_ai_gate ─────────────────────────────────────────────────────
+
+    def _node_no_ai_gate(self, state: IncidentState) -> dict:
+        """
+        Reached when ai_enabled=False and no programmatic fast-path policy matched.
+        Creates a task in awaiting_approval so the operator can review and act manually.
+        Records a no_ai_skipped event so the alert is visible in the UI and live feed.
+        """
+        alertname = state.get("alertname", "")
+        device    = state.get("device", "") or state.get("instance", "")
+        task_id   = state.get("rca_task_id")
+
+        try:
+            if not task_id:
+                task = self._ts.create_task(
+                    type="rca",
+                    created_by=AGENT,
+                    assigned_to="ops_agent",
+                    title=f"[NO-AI] {alertname}: {device}",
+                    alert_fingerprint=state.get("fingerprint", ""),
+                    priority=state["priority"],
+                    maintenance_window=state["in_maintenance"],
+                    do_not_auto_execute=True,
+                    tenant_id=state["tenant_id"],
+                    content={
+                        "alertname": alertname,
+                        "device":    device,
+                        "instance":  state.get("instance", ""),
+                        "summary":   state.get("summary", ""),
+                        "reason":    "AI investigation suppressed (ai_enabled=False). No programmatic fast-path policy matched. Manual review required.",
+                    },
+                )
+                task_id = task["id"]
+
+            self._ts.add_event(task_id, AGENT, "no_ai_skipped", {
+                "reason":    "ai_enabled=False — LLM investigation suppressed",
+                "alertname": alertname,
+                "device":    device,
+            })
+            self._ts.request_approval(task_id, AGENT)
+            logger.warning(
+                "Workflow: AI disabled, no fast-path matched — task=%s alertname=%s device=%s",
+                task_id, alertname, device,
+            )
+            return {"rca_task_id": task_id, "pipeline_decision": "no_ai"}
+
+        except Exception as exc:
+            logger.error("Workflow: no_ai_gate failed: %s", exc)
+            return {"pipeline_decision": "no_ai", "error": str(exc)[:300]}
 
     # ── node: create_approval_gate ────────────────────────────────────────────
 

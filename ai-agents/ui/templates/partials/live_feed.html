@@ -1,0 +1,49 @@
+<div id="live-feed"
+     hx-get="/partials/live-feed"
+     hx-trigger="sse:tasks-changed, every 3s"
+     hx-swap="outerHTML">
+{% set event_colors = {
+    "fast_path_resolved": "#6366f1",
+    "rca_complete":       "#3b82f6",
+    "auto_approved":      "#22c55e",
+    "approval_requested": "#a855f7",
+    "execution_complete": "#10b981",
+    "execution_verified": "#10b981",
+    "no_ai_skipped":      "#6b7280",
+} %}
+{% if not events %}
+  <div class="muted" style="font-size:0.82em; padding:6px 0">No pipeline events yet.</div>
+{% else %}
+<div style="display:flex; flex-direction:column; gap:0">
+  {% for e in events %}
+  {% set color = event_colors.get(e.event_type, '#6b7280') %}
+  <div style="display:flex; align-items:center; gap:10px; font-size:0.8em;
+              padding:5px 0; border-bottom:1px solid var(--border)">
+    <span class="muted mono" style="min-width:56px; font-size:0.88em; white-space:nowrap">
+      {{ e.timestamp.split('T')[1][:8] if 'T' in e.timestamp else e.timestamp.split(' ')[1][:8] if ' ' in e.timestamp else e.timestamp }}
+    </span>
+    <span class="pill"
+          style="background:{{ color }}22; color:{{ color }}; border-color:{{ color }}55;
+                 font-size:0.72em; min-width:148px; text-align:center; white-space:nowrap">
+      {{ e.event_type | replace('_', ' ') }}
+    </span>
+    <span style="font-weight:500; min-width:130px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">
+      {{ e.alertname or '—' }}
+    </span>
+    <span class="muted" style="min-width:80px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">
+      {{ e.device or '—' }}
+    </span>
+    <a href="#"
+       hx-get="/partials/task/{{ e.task_id }}"
+       hx-target="#task-detail"
+       hx-swap="innerHTML"
+       class="mono"
+       style="color:var(--accent); font-size:0.78em; text-decoration:none;
+              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:200px">
+      {{ e.task_id }}
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+</div>

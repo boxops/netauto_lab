@@ -215,12 +215,17 @@ class PolicyResolver:
         return expect.lower() in output.lower()
 
     def _check_metric(self, cond: dict, ctx: dict) -> bool:
-        query  = self._fmt(cond.get("query", ""), ctx)
-        expect = self._fmt(str(cond.get("expect", "")), ctx)
+        query     = self._fmt(cond.get("query", ""), ctx)
+        expect    = self._fmt(str(cond.get("expect",    "")), ctx)
+        expect_ne = self._fmt(str(cond.get("expect_ne", "")), ctx)
         if not query:
             return False
         value = _prometheus_instant(query)
-        return value == expect
+        if expect:
+            return value == expect
+        if expect_ne:
+            return value != "" and value != expect_ne
+        return False
 
     def _check_nautobot(self, cond: dict, ctx: dict) -> bool:
         path   = self._fmt(cond.get("path", ""), ctx)

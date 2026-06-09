@@ -169,6 +169,86 @@
   </details>
 </form>
 
+{# ── Policy Simulator ─────────────────────────────────────────────────────── #}
+<div class="section-title mt-20 mb-8" style="font-size:0.85em">Policy Simulator</div>
+<p class="muted" style="font-size:0.82em; margin-bottom:10px">
+  Enter an alert scenario to see which policy would match and whether the programmatic
+  fast path would trigger. Conditions are <strong>listed but not executed</strong> — this is a dry run.
+</p>
+<form hx-post="/partials/policy-simulate"
+      hx-target="#simulate-result"
+      hx-swap="innerHTML"
+      style="background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:14px">
+  <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end">
+    <div style="display:flex; flex-direction:column; gap:4px">
+      <label style="font-size:0.76em; color:var(--muted)">Alert name</label>
+      <input name="alertname" placeholder="BGPPeerDown" list="alertname-list"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
+                    color:var(--fg); padding:4px 8px; font-size:0.84em; width:180px">
+      <datalist id="alertname-list">
+        <option value="InterfaceAdminDown">
+        <option value="InterfaceDown">
+        <option value="BGPPeerDown">
+        <option value="DeviceDown">
+        <option value="HighInterfaceUtilization">
+      </datalist>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px">
+      <label style="font-size:0.76em; color:var(--muted)">Device role</label>
+      <input name="device_role" placeholder="leaf" list="role-list"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
+                    color:var(--fg); padding:4px 8px; font-size:0.84em; width:120px">
+      <datalist id="role-list">
+        <option value="leaf"><option value="spine"><option value="border">
+      </datalist>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px">
+      <label style="font-size:0.76em; color:var(--muted)">Environment</label>
+      <input name="environment" placeholder="lab" list="env-list"
+             style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
+                    color:var(--fg); padding:4px 8px; font-size:0.84em; width:110px">
+      <datalist id="env-list">
+        <option value="lab"><option value="staging"><option value="production">
+      </datalist>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px">
+      <label style="font-size:0.76em; color:var(--muted)">Fix type</label>
+      <select name="fix_type"
+              style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
+                     color:var(--fg); padding:4px 8px; font-size:0.84em">
+        <option value="config_change">config_change</option>
+        <option value="runbook">runbook</option>
+        <option value="escalate_human">escalate_human</option>
+        <option value="no_action">no_action</option>
+      </select>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px">
+      <label style="font-size:0.76em; color:var(--muted)">Confidence</label>
+      <select name="confidence"
+              style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
+                     color:var(--fg); padding:4px 8px; font-size:0.84em">
+        <option value="high">high</option>
+        <option value="medium">medium</option>
+        <option value="low">low</option>
+      </select>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px">
+      <label style="font-size:0.76em; color:var(--muted)">Risk</label>
+      <select name="risk"
+              style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
+                     color:var(--fg); padding:4px 8px; font-size:0.84em">
+        <option value="low">low</option>
+        <option value="medium">medium</option>
+        <option value="high">high</option>
+      </select>
+    </div>
+    <button type="submit" class="btn" style="font-size:0.82em; padding:5px 16px; align-self:flex-end">
+      Simulate
+    </button>
+  </div>
+</form>
+<div id="simulate-result"></div>
+
 {# Policy performance — now prominently surfaced #}
 <div class="section-title mt-24 mb-8" style="font-size:0.85em">Policy Performance & Learning</div>
 <p class="muted" style="font-size:0.82em; margin-bottom:10px">
