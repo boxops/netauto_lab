@@ -275,6 +275,14 @@
 
         {# --- Awaiting human approval --- #}
         {% if ch.awaiting_approval %}
+
+        {% if ch.is_manual_case %}
+        <div class="chronicle-finding" style="border-left-color:#f59e0b; margin-bottom:10px">
+          <span class="finding-label" style="color:#f59e0b">Manual Investigation Required</span>
+          <span>AI assistance is disabled. No automated analysis was performed for this alert.
+            Enter the commands you want to apply below and approve to execute them, or reject to dismiss.</span>
+        </div>
+        {% else %}
         <p class="chronicle-prose">
           The AI agent has completed its analysis and is waiting for a human to review and approve this change
           before it is applied to <strong>{{ ch.device or "the device" }}</strong>.
@@ -284,6 +292,7 @@
           </span>
           {% endif %}
         </p>
+        {% endif %}
 
         {# Summary of what the AI found #}
         {% if ch.validation_verdict or ch.risk_confirmed %}
@@ -315,6 +324,29 @@
         </details>
         {% endif %}
 
+        {# Operator commands textarea (required for manual cases, optional override for AI cases) #}
+        {% if ch.is_manual_case %}
+        <div style="margin-top:12px">
+          <label style="font-size:0.8em; font-weight:600; color:var(--text-sub); display:block; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.05em">
+            Commands to apply
+          </label>
+          <textarea id="op-cmds-{{ ch.task_id }}" name="operator_commands" rows="4"
+            placeholder="interface Ethernet1&#10; no shutdown"
+            style="width:100%; max-width:520px; background:var(--bg2); border:1px solid #f59e0b;
+                   color:var(--text); border-radius:6px; padding:6px 10px; font-size:0.82em;
+                   font-family:monospace; resize:vertical; display:block"></textarea>
+        </div>
+        {% else %}
+        <details style="margin-top:10px">
+          <summary style="font-size:0.78em; color:var(--text-sub); cursor:pointer">▶ Override commands (optional)</summary>
+          <textarea id="op-cmds-{{ ch.task_id }}" name="operator_commands" rows="3"
+            placeholder="Leave empty to use the AI-proposed commands above"
+            style="width:100%; max-width:520px; background:var(--bg2); border:1px solid var(--border);
+                   color:var(--text); border-radius:6px; padding:6px 10px; font-size:0.82em;
+                   font-family:monospace; resize:vertical; display:block; margin-top:6px"></textarea>
+        </details>
+        {% endif %}
+
         {# Approve / Reject controls #}
         <div style="margin-top:14px; padding:12px 14px; background:var(--bg3); border-radius:8px; border:1px solid var(--border)">
           <div style="font-size:0.8em; font-weight:600; color:var(--text-sub); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.05em">
@@ -323,6 +355,7 @@
           <div class="flex gap-8 items-center flex-wrap">
             <button class="btn btn-primary btn-sm"
                     hx-post="/tasks/{{ ch.task_id }}/approve"
+                    hx-include="#op-cmds-{{ ch.task_id }}"
                     hx-target="#chronicle-action-{{ ch.task_id }}"
                     hx-swap="innerHTML">
               ✅ Approve &amp; Execute

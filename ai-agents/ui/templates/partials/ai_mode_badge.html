@@ -1,0 +1,29 @@
+{# AI mode toggle + agent connectivity status #}
+<span id="ai-mode-badge" style="display:flex; flex-direction:column; align-items:center; gap:6px">
+  {% if ai_enabled %}
+  <button class="btn btn-sm"
+          style="background:#22c55e22; color:#22c55e; border:1px solid #22c55e55;
+                 font-size:0.76em; padding:3px 10px; border-radius:12px; cursor:pointer"
+          hx-post="/partials/ai-mode-toggle"
+          hx-target="#ai-mode-badge"
+          hx-swap="outerHTML"
+          title="AI assistance is ON — click to disable and handle cases manually">
+    🤖 AI On
+  </button>
+  {% else %}
+  <button class="btn btn-sm"
+          style="background:#f59e0b22; color:#f59e0b; border:1px solid #f59e0b55;
+                 font-size:0.76em; padding:3px 10px; border-radius:12px; cursor:pointer"
+          hx-post="/partials/ai-mode-toggle"
+          hx-target="#ai-mode-badge"
+          hx-swap="outerHTML"
+          title="AI assistance is OFF — incoming alerts require manual investigation. Click to re-enable.">
+    ⚠️ Manual Mode
+  </button>
+  {% endif %}
+  {% if agent_online %}
+  <span style="font-size:0.74em; color:#22c55e">● Agent Online</span>
+  {% else %}
+  <span style="font-size:0.74em; color:#ef4444">● Agent Offline</span>
+  {% endif %}
+</span>

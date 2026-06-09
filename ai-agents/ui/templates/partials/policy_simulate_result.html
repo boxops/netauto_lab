@@ -1,83 +1,112 @@
-{% set level_color = level_colors.get(gate_decision.autonomy_level, '#6b7280') %}
+{% set lc = level_colors %}
 <div style="background:var(--bg2); border:1px solid var(--border); border-radius:8px;
             padding:16px; margin-top:12px">
-  <div style="font-size:0.85em; font-weight:600; margin-bottom:12px; color:var(--fg)">
-    Simulation: <span style="color:var(--accent)">{{ alertname or 'any alert' }}</span>
-    {% if device_role %} · role={{ device_role }}{% endif %}
-    {% if environment %} · env={{ environment }}{% endif %}
+
+  {# Header #}
+  <div style="font-size:0.85em; font-weight:600; margin-bottom:14px; color:var(--fg)">
+    Simulation:
+    <span style="color:var(--accent)">{{ alertname or 'any alert' }}</span>
+    {% if device_role %} · role=<span style="color:var(--fg)">{{ device_role }}</span>{% endif %}
+    {% if environment %} · env=<span style="color:var(--fg)">{{ environment }}</span>{% endif %}
+    · <span style="color:var(--muted)">{{ fix_type }}</span>
+    · confidence=<span style="color:var(--muted)">{{ confidence }}</span>
+    · risk=<span style="color:var(--muted)">{{ risk }}</span>
   </div>
 
-  {# ── Gate decision ──────────────────────────────────────────────────────── #}
-  <div style="margin-bottom:16px; padding-bottom:14px; border-bottom:1px solid var(--border)">
-    <div style="font-size:0.76em; color:var(--muted); margin-bottom:6px; text-transform:uppercase; letter-spacing:.05em">
-      Autonomy gate decision
-    </div>
-    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
-      <span class="pill"
-            style="background:{{ level_color }}22; color:{{ level_color }};
-                   border-color:{{ level_color }}55; font-weight:700; font-size:0.9em">
-        {{ gate_decision.autonomy_level }}
-      </span>
-      {% if gate_decision.allow_execution %}
-        <span style="color:#22c55e; font-size:0.82em">✓ Auto-executes (no human approval needed)</span>
-      {% else %}
-        <span style="color:#a855f7; font-size:0.82em">⏸ Requires human approval</span>
-      {% endif %}
-      {% if gate_decision.policy_id %}
-        <span class="muted" style="font-size:0.78em">policy: {{ gate_decision.policy_id }}</span>
-      {% endif %}
-    </div>
-    <div style="font-size:0.8em; color:var(--muted); margin-top:6px">{{ gate_decision.reason }}</div>
-  </div>
-
-  {# ── Fast path candidates ───────────────────────────────────────────────── #}
-  <div>
-    <div style="font-size:0.76em; color:var(--muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:.05em">
-      Programmatic fast path
-      <span style="color:var(--muted); text-transform:none; font-weight:400">
-        ({{ fast_path_candidates | length }} candidate{{ 's' if fast_path_candidates | length != 1 }})
-      </span>
-      <span style="color:#6b7280; font-weight:400"> · conditions listed, not executed</span>
-    </div>
-
-    {% if not fast_path_candidates %}
-      <div class="muted" style="font-size:0.83em">
-        No fast-path policies match this alert — LLM investigation would run
-        {% if not gate_decision.allow_execution %} followed by human approval gate{% endif %}.
+  {# ── Step 1: Fast path ──────────────────────────────────────────────────── #}
+  <div style="display:flex; gap:10px; margin-bottom:4px">
+    <div style="width:3px; background:#6366f1; border-radius:2px; flex-shrink:0"></div>
+    <div style="flex:1">
+      <div style="font-size:0.76em; font-weight:700; color:#6366f1; text-transform:uppercase;
+                  letter-spacing:.06em; margin-bottom:8px">Step 1 — Fast path
+        <span style="font-weight:400; text-transform:none; color:var(--muted); margin-left:6px">
+          checks before AI investigation · conditions listed, not executed
+        </span>
       </div>
-    {% else %}
-      {% for p in fast_path_candidates %}
-      {% set fp_level_color = level_colors.get(p.autonomy_level, '#6b7280') %}
-      <div style="border:1px solid var(--border); border-radius:6px; padding:10px;
-                  margin-bottom:8px; background:var(--bg3)">
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px">
-          <span style="font-weight:500; font-size:0.85em">{{ p.name }}</span>
-          <span class="pill"
-                style="background:{{ fp_level_color }}22; color:{{ fp_level_color }};
-                       border-color:{{ fp_level_color }}55; font-size:0.72em; font-weight:700">
-            {{ p.autonomy_level }}
-          </span>
-          <span style="color:#6366f1; font-size:0.8em">⚡ fast path</span>
-        </div>
-        <div style="font-size:0.76em; color:var(--muted); margin-bottom:4px">
-          {{ p.conditions_parsed | length }} condition{{ 's' if p.conditions_parsed | length != 1 }}:
-        </div>
-        {% for cond in p.conditions_parsed %}
-        <div style="font-family:monospace; font-size:0.77em; color:var(--fg);
-                    margin-left:10px; margin-bottom:3px; line-height:1.4">
-          <span style="color:#6b7280">[{{ cond.type }}]</span>
-          {{ cond.get('query') or cond.get('path') or cond.get('command') or '?' }}
-          {% if cond.get('expect') %}
-            <span style="color:#22c55e"> = {{ cond.expect }}</span>
-          {% elif cond.get('expect_ne') %}
-            <span style="color:#f97316"> ≠ {{ cond.expect_ne }}</span>
-          {% elif cond.get('expect_contains') %}
-            <span style="color:#3b82f6"> contains "{{ cond.expect_contains }}"</span>
+
+      {% if fast_path_candidates %}
+        {% for p in fast_path_candidates %}
+        {% set fp_color = lc.get(p.autonomy_level, '#6b7280') %}
+        <div style="border:1px solid var(--border); border-radius:6px; padding:10px;
+                    margin-bottom:8px; background:var(--bg3)">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap">
+            <span style="font-weight:500; font-size:0.85em">{{ p.name }}</span>
+            <span class="pill"
+                  style="background:{{ fp_color }}22; color:{{ fp_color }};
+                         border-color:{{ fp_color }}55; font-size:0.72em; font-weight:700">
+              {{ p.autonomy_level }}
+            </span>
+            <span style="color:#6366f1; font-size:0.78em">⚡ would fire</span>
+            {% if gate_decision.policy_id and gate_decision.policy_id == p.id %}
+            <span style="color:var(--muted); font-size:0.75em">· same policy governs the gate</span>
+            {% endif %}
+          </div>
+          {% if p.conditions_parsed %}
+          <div style="font-size:0.75em; color:var(--muted); margin-bottom:3px">
+            {{ p.conditions_parsed | length }} condition{{ 's' if p.conditions_parsed | length != 1 }}:
+          </div>
+          {% for cond in p.conditions_parsed %}
+          <div style="font-family:monospace; font-size:0.77em; color:var(--fg);
+                      margin-left:10px; margin-bottom:3px; line-height:1.5">
+            <span style="color:#6b7280">[{{ cond.type }}]</span>
+            {{ cond.get('query') or cond.get('command') or cond.get('path') or '?' }}
+            {% if cond.get('expect') %}
+              <span style="color:#22c55e"> = {{ cond.expect }}</span>
+            {% elif cond.get('expect_ne') %}
+              <span style="color:#f97316"> ≠ {{ cond.expect_ne }}</span>
+            {% elif cond.get('expect_contains') %}
+              <span style="color:#3b82f6"> contains "{{ cond.expect_contains }}"</span>
+            {% endif %}
+          </div>
+          {% endfor %}
           {% endif %}
         </div>
         {% endfor %}
-      </div>
-      {% endfor %}
+      {% else %}
+        <div style="font-size:0.83em; color:var(--muted); padding:8px 0">
+          No fast-path policy matches this scenario — pipeline continues to AI investigation.
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# Connector arrow #}
+  <div style="margin-left:6px; color:var(--muted); font-size:0.8em; margin-bottom:4px">
+    {% if fast_path_candidates %}
+      ↓ <span style="color:var(--muted)">fast path resolves → skip AI → approval gate</span>
+    {% else %}
+      ↓ <span style="color:var(--muted)">AI investigates → approval gate</span>
     {% endif %}
   </div>
+
+  {# ── Step 2: Approval gate ──────────────────────────────────────────────── #}
+  {% set gate_color = lc.get(gate_decision.autonomy_level, '#6b7280') %}
+  <div style="display:flex; gap:10px; margin-top:4px">
+    <div style="width:3px; background:{{ gate_color }}; border-radius:2px; flex-shrink:0"></div>
+    <div style="flex:1">
+      <div style="font-size:0.76em; font-weight:700; color:{{ gate_color }}; text-transform:uppercase;
+                  letter-spacing:.06em; margin-bottom:8px">Step 2 — Approval gate
+        <span style="font-weight:400; text-transform:none; color:var(--muted); margin-left:6px">
+          applies after AI (or after fast path)
+        </span>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:6px">
+        <span class="pill"
+              style="background:{{ gate_color }}22; color:{{ gate_color }};
+                     border-color:{{ gate_color }}55; font-weight:700; font-size:0.9em">
+          {{ gate_decision.autonomy_level }}
+        </span>
+        {% if gate_decision.allow_execution %}
+          <span style="color:#22c55e; font-size:0.82em">✓ Auto-executes — no human approval needed</span>
+        {% else %}
+          <span style="color:#a855f7; font-size:0.82em">⏸ Requires human approval</span>
+        {% endif %}
+        {% if gate_decision.policy_id %}
+          <span class="muted" style="font-size:0.78em">policy {{ gate_decision.policy_id }}</span>
+        {% endif %}
+      </div>
+      <div style="font-size:0.8em; color:var(--muted)">{{ gate_decision.reason }}</div>
+    </div>
+  </div>
+
 </div>

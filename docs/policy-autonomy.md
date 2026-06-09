@@ -61,7 +61,17 @@ Three condition types are supported:
 }
 ```
 
-Runs an instant PromQL query. The first scalar result value must equal `expect` (string comparison).
+Runs an instant PromQL query. The first scalar result value must equal `expect` (string comparison). Use `expect_ne` instead to assert the value does **not** equal a specific string — useful when the "bad" state is a known value (e.g. BGP peer state must not be `6` / Established):
+
+```json
+{
+  "type": "metric",
+  "query": "bgp_peer_bgpPeerState{sysName=\"{device}\"}",
+  "expect_ne": "6"
+}
+```
+
+`expect_ne` returns false when the metric value is empty (no data), so a missing metric never falsely triggers the fast path.
 
 #### `show_command` — Device CLI output
 
@@ -130,14 +140,27 @@ Unknown variables are left as-is rather than raising an error.
 
 `fix_type` must be one of `config_change`, `runbook`, or `escalate_human`.
 
+### Built-in fast-path policies
+
+Two policies are seeded by default and include programmatic conditions from first deployment:
+
+| Policy | Alert | Condition | Autonomy |
+| --- | --- | --- | --- |
+| InterfaceAdminDown fast path — any device | `InterfaceAdminDown` | `interface_ifAdminStatus == 2` | L3 |
+| BGPPeerDown fast path — lab leaf | `BGPPeerDown` (role=leaf, env=lab) | `bgp_peer_bgpPeerState ≠ 6` | L4 |
+
+These run on every matching alert with zero LLM calls. The BGP policy uses `expect_ne` because the relevant condition is "session is confirmed not-Established", which is the opposite of the good state.
+
 ### When to use the fast path
 
 The fast path is appropriate when:
 - The root cause is deterministic given a live condition check (e.g. admin-down interface)
-- The fix is a known, low-risk configuration change with no alternatives
-- The condition provides enough signal that an AI investigation would add no new information
+- The fix is a known, low-risk procedure with no meaningful alternatives
+- The condition provides sufficient signal that AI investigation would add no new information
 
-**Do not use it for:** BGP sessions (peer state can drop for many reasons), device down (physical vs. reachability ambiguous), or any scenario where the AI's diagnostic value is non-trivial.
+**Use `expect_ne` rather than `expect` when** the "bad" state is a specific known value (e.g. BGP `bgpPeerState=Idle/Active`) but you do not want to hard-code all possible bad values — asserting "not Established" is simpler and more robust.
+
+**Avoid fast paths for:** device-unreachable scenarios where physical vs. reachability is ambiguous, or any case where the cause varies enough that AI diagnosis provides real value.
 
 ---
 
@@ -181,7 +204,16 @@ The **Add Policy** form has two sections:
 1. **Core fields** — name, fix type, device role, environment, autonomy level. These control the approval gate.
 2. **⚡ Programmatic Fast Path** (collapsed by default) — JSON textareas for `conditions`, `rca_template`, and `fix_template`. Expand to add programmatic resolution to the policy.
 
-Policies with conditions set show a **⚡** badge in the Active Policies list.
+Policies with conditions set show a **⚡** badge in the Active Policies list. Click the **Edit** button on any policy row to update its autonomy level, confidence/risk thresholds, description, or fast-path JSON fields inline — without deleting and recreating the policy.
+
+### Policy Simulator
+
+The **Policy Simulator** in the Config tab lets you dry-run a hypothetical alert scenario before deploying. Enter alert name, device role, environment, fix type, confidence, and risk; the simulator returns:
+
+- The **autonomy gate decision** the PolicyRegistry would reach (level, requires_approval, allow_execution, reason).
+- All **programmatic fast-path candidates** that match the alert, with their condition list displayed (type, query, expected value) — conditions are listed but never executed.
+
+This makes it safe to test policy changes without triggering a real pipeline run. The simulator calls only the database — it makes no HTTP calls to Prometheus or Nautobot.
 
 ---
 

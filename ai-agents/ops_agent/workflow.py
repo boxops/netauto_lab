@@ -140,14 +140,16 @@ class IncidentWorkflow:
 
     def __init__(
         self,
-        task_store:     TaskStore,
-        rate_limiter:   RateLimiter,
-        status_handler: StatusCallbackHandler,
+        task_store:      TaskStore,
+        rate_limiter:    RateLimiter,
+        status_handler:  StatusCallbackHandler,
+        ai_enabled_fn=None,
     ) -> None:
         self._ts    = task_store
         self._rl    = rate_limiter
         self._sh    = status_handler
         self._stop  = threading.Event()
+        self._ai_enabled_fn = ai_enabled_fn or (lambda: settings.ai_enabled)
         # Limit concurrent LLM-heavy pipeline runs to prevent TPM stampede.
         # Each incident workflow can use ~6-10K tokens; cap at 2 concurrent.
         self._pipeline_sem = threading.Semaphore(2)
@@ -245,7 +247,7 @@ class IncidentWorkflow:
     def _route_after_fast_path(self, state: IncidentState) -> str:
         if state.get("pipeline_decision") == "fast_path_resolved":
             return "fast_path_resolved"
-        if not settings.ai_enabled:
+        if not self._ai_enabled_fn():
             return "no_ai"
         return "investigate"
 
@@ -307,6 +309,7 @@ class IncidentWorkflow:
             alertname=alertname,
             tenant_id=tenant_id,
             device_role=device_role,
+            strict_role=True,
         )
 
         if not candidates:

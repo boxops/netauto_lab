@@ -65,9 +65,13 @@
 
   {# AI Agent health #}
   <div class="ops-health-kpi">
-    <div class="kpi-value" style="font-size:1em; color:{% if agent_online %}#22c55e{% else %}#ef4444{% endif %}">
-      {% if agent_online %}● Online{% else %}● Offline{% endif %}
-    </div>
+    {% if not agent_online %}
+    <div class="kpi-value" style="font-size:1em; color:#ef4444">● Offline</div>
+    {% elif not ai_enabled %}
+    <div class="kpi-value" style="font-size:1em; color:#f59e0b">● Disabled</div>
+    {% else %}
+    <div class="kpi-value" style="font-size:1em; color:#22c55e">● Online</div>
+    {% endif %}
     <div class="kpi-label">AI Agent</div>
   </div>
 

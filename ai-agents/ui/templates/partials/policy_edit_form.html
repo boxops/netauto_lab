@@ -3,97 +3,285 @@
     <form hx-post="/partials/policy-edit/{{ policy.id }}"
           hx-target="#policy-list"
           hx-swap="innerHTML"
-          style="display:flex; flex-direction:column; gap:12px">
+          style="display:flex; flex-direction:column; gap:16px">
 
-      {# Row 1: autonomy level + thresholds #}
-      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end">
-        <div style="display:flex; flex-direction:column; gap:4px">
-          <label style="font-size:0.76em; color:var(--muted)">Autonomy level</label>
-          <select name="autonomy_level"
-                  style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
-                         color:var(--fg); padding:4px 8px; font-size:0.84em">
-            {% for lvl in ["L0","L1","L2","L3","L4","L5"] %}
-            <option value="{{ lvl }}" {% if lvl == policy.autonomy_level %}selected{% endif %}>{{ lvl }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div style="display:flex; flex-direction:column; gap:4px">
-          <label style="font-size:0.76em; color:var(--muted)">Min confidence</label>
-          <select name="min_confidence"
-                  style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
-                         color:var(--fg); padding:4px 8px; font-size:0.84em">
-            {% for c in ["low","medium","high"] %}
-            <option value="{{ c }}" {% if c == (policy.min_confidence or 'low') %}selected{% endif %}>{{ c }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div style="display:flex; flex-direction:column; gap:4px">
-          <label style="font-size:0.76em; color:var(--muted)">Max risk</label>
-          <select name="max_risk"
-                  style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
-                         color:var(--fg); padding:4px 8px; font-size:0.84em">
-            {% for r in ["low","medium","high"] %}
-            <option value="{{ r }}" {% if r == (policy.max_risk or 'high') %}selected{% endif %}>{{ r }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div style="flex:1; min-width:200px; display:flex; flex-direction:column; gap:4px">
-          <label style="font-size:0.76em; color:var(--muted)">Description</label>
-          <input name="description"
-                 value="{{ policy.description or '' }}"
-                 placeholder="Optional description"
-                 style="background:var(--bg3); border:1px solid var(--border); border-radius:5px;
-                        color:var(--fg); padding:4px 8px; font-size:0.84em; width:100%">
+      {# ── Section 1: Match ────────────────────────────────────────────────── #}
+      <div>
+        <div style="font-size:0.72em; font-weight:600; color:var(--muted); text-transform:uppercase;
+                    letter-spacing:.06em; margin-bottom:8px">1 · Match</div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap">
+          <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:150px">
+            <label style="font-size:0.76em; color:var(--muted)">Policy name</label>
+            <input name="name" value="{{ policy.name }}"
+                   style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                          padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:140px">
+            <label style="font-size:0.76em; color:var(--muted)">Alert name (empty = any)</label>
+            <input name="alertname" value="{{ policy.alertname or '' }}" placeholder="InterfaceAdminDown"
+                   style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                          padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:120px">
+            <label style="font-size:0.76em; color:var(--muted)">Fix type (empty = any)</label>
+            <input name="fix_type" value="{{ policy.fix_type or '' }}" placeholder="config_change"
+                   style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                          padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:100px">
+            <label style="font-size:0.76em; color:var(--muted)">Device role (empty = any)</label>
+            <input name="device_role" value="{{ policy.device_role or '' }}" placeholder="leaf / spine"
+                   style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                          padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:100px">
+            <label style="font-size:0.76em; color:var(--muted)">Environment (empty = any)</label>
+            <input name="environment" value="{{ policy.environment or '' }}" placeholder="lab / production"
+                   style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                          padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:180px">
+            <label style="font-size:0.76em; color:var(--muted)">Description</label>
+            <input name="description" value="{{ policy.description or '' }}" placeholder="Optional description"
+                   style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                          padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+          </div>
         </div>
       </div>
 
-      {# Row 2: JSON fields (programmatic fast path) #}
-      <details style="border:1px solid var(--border); border-radius:6px; padding:10px">
-        <summary style="font-size:0.8em; color:var(--muted); cursor:pointer; user-select:none">
-          Programmatic fast path
-          {% if policy.conditions %}
-            <span style="color:#6366f1; font-size:0.9em; margin-left:6px">⚡ enabled</span>
-          {% endif %}
-        </summary>
-        <div style="display:flex; flex-direction:column; gap:10px; margin-top:10px">
-          <div>
-            <label style="font-size:0.76em; color:var(--muted)">
-              Conditions (JSON array — leave empty to disable fast path)
-            </label>
-            <textarea name="conditions" rows="3"
-                      placeholder='[{"type":"metric","query":"interface_ifAdminStatus{{sysName=\"{device}\"}}","expect":"2"}]'
-                      style="width:100%; background:var(--bg3); border:1px solid var(--border);
-                             border-radius:5px; color:var(--fg); padding:6px 8px;
-                             font-size:0.8em; font-family:monospace; resize:vertical">{{ policy.conditions or '' }}</textarea>
+      {# ── Section 2: Fast path ────────────────────────────────────────────── #}
+      <div style="border-top:1px solid var(--border); padding-top:14px">
+        <div style="font-size:0.72em; font-weight:600; color:var(--muted); text-transform:uppercase;
+                    letter-spacing:.06em; margin-bottom:4px">2 · Fast path
+          <span style="font-weight:400; text-transform:none; color:var(--muted); margin-left:6px">
+            resolves alert before AI — leave empty to use AI investigation
+          </span>
+        </div>
+
+        {# Condition builder — pre-populated from parsed conditions #}
+        {% set cid = "edit-conditions-" ~ policy.id %}
+        <div style="margin-top:10px">
+          <div style="font-size:0.76em; color:var(--muted); margin-bottom:6px">Conditions</div>
+          <div id="{{ cid }}">
+            {% for c in conditions_parsed %}
+            {% set i = loop.index0 %}
+            <div class="condition-row"
+                 style="display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;
+                        background:var(--bg3); border:1px solid var(--border);
+                        border-radius:6px; padding:8px 10px; margin-bottom:6px">
+              <select name="c_type_{{ i }}" data-cfield="type"
+                      onchange="updateConditionType(this)"
+                      style="background:var(--bg2); border:1px solid var(--border); border-radius:4px;
+                             padding:4px 6px; color:var(--fg); font-size:0.82em">
+                <option value="metric"       {% if c.type == 'metric'       %}selected{% endif %}>metric</option>
+                <option value="show_command" {% if c.type == 'show_command' %}selected{% endif %}>show command</option>
+                <option value="nautobot"     {% if c.type == 'nautobot'     %}selected{% endif %}>nautobot</option>
+              </select>
+              <div class="cfields-metric"
+                   style="display:{% if c.type == 'metric' %}flex{% else %}none{% endif %};
+                          gap:6px; flex-wrap:wrap; flex:1; align-items:flex-end">
+                <input name="c_query_{{ i }}" data-cfield="query" value="{{ c.get('query','') }}"
+                       placeholder="PromQL query — use {device} {interface}"
+                       style="background:var(--bg2); border:1px solid var(--border); border-radius:4px;
+                              padding:4px 6px; color:var(--fg); font-size:0.82em;
+                              font-family:monospace; flex:2; min-width:200px">
+                <select name="c_match_{{ i }}" data-cfield="match"
+                        style="background:var(--bg2); border:1px solid var(--border); border-radius:4px;
+                               padding:4px 6px; color:var(--fg); font-size:0.82em">
+                  <option value="eq" {% if not c.get('expect_ne') %}selected{% endif %}>=</option>
+                  <option value="ne" {% if c.get('expect_ne')     %}selected{% endif %}>≠</option>
+                </select>
+                <input name="c_value_{{ i }}" data-cfield="value"
+                       value="{{ c.get('expect') or c.get('expect_ne','') }}"
+                       placeholder="expected value"
+                       style="background:var(--bg2); border:1px solid var(--border); border-radius:4px;
+                              padding:4px 6px; color:var(--fg); font-size:0.82em; width:90px">
+              </div>
+              <div class="cfields-show_command"
+                   style="display:{% if c.type == 'show_command' %}flex{% else %}none{% endif %};
+                          gap:6px; flex-wrap:wrap; flex:1; align-items:flex-end">
+                <input name="c_cmd_{{ i }}" data-cfield="cmd" value="{{ c.get('command','') }}"
+                       placeholder="show interfaces {interface} status"
+                       style="background:var(--bg2); border:1px solid var(--border); border-radius:4px;
+                              padding:4px 6px; color:var(--fg); font-size:0.82em;
+                              font-family:monospace; flex:2; min-width:200px">
+                <input name="c_contains_{{ i }}" data-cfield="contains" value="{{ c.get('expect_contains','') }}"
+                       placeholder="output contains…"
+                       style="background:var(--bg2); border:1px solid var(--border); border-radius:4px;
+                              padding:4px 6px; color:var(--fg); font-size:0.82em; flex:1; min-width:140px">
+              </div>
+              <div class="cfields-nautobot"
+                   style="display:{% if c.type == 'nautobot' %}flex{% else %}none{% endif %};
+                          gap:6px; flex-wrap:wrap; flex:1; align-items:flex-end">
+                <input name="c_path_{{ i }}" data-cfield="path" value="{{ c.get('path','') }}"
+                       placeholder="/api/dcim/interfaces/?name={interface}&device={device}"
+                       style="background:var(--bg2); border:1px solid var(--border); border-radius:4px;
+                              padding:4px 6px; color:var(--fg); font-size:0.82em;
+                              font-family:monospace; flex:2; min-width:200px">
+                <input name="c_field_{{ i }}" data-cfield="nbfield" value="{{ c.get('field','') }}"
+                       placeholder="results[0].enabled"
+                       style="background:var(--bg2); border:1px solid var(--border); border-radius:4px;
+                              padding:4px 6px; color:var(--fg); font-size:0.82em; min-width:130px">
+                <input name="c_nbexpect_{{ i }}" data-cfield="nbexpect" value="{{ c.get('expect','') }}"
+                       placeholder="false"
+                       style="background:var(--bg2); border:1px solid var(--border); border-radius:4px;
+                              padding:4px 6px; color:var(--fg); font-size:0.82em; width:70px">
+              </div>
+              <button type="button" onclick="removeCondition(this)"
+                      style="font-size:0.78em; color:#ef4444; background:none; border:none;
+                             cursor:pointer; padding:4px 6px; align-self:center">✕</button>
+            </div>
+            {% endfor %}
           </div>
-          <div>
-            <label style="font-size:0.76em; color:var(--muted)">RCA template (JSON object)</label>
-            <textarea name="rca_template" rows="4"
-                      placeholder='{"diagnosis":"{interface} on {device} is admin-down","confidence":"high","affected_device":"{device}","action":"no shutdown","upstream_cause":"","is_leaf_symptom":false}'
-                      style="width:100%; background:var(--bg3); border:1px solid var(--border);
-                             border-radius:5px; color:var(--fg); padding:6px 8px;
-                             font-size:0.8em; font-family:monospace; resize:vertical">{{ policy.rca_template or '' }}</textarea>
+          <input type="hidden" id="base-idx-{{ policy.id }}" value="{{ conditions_parsed | length }}">
+          <button type="button"
+                  onclick="addConditionTo('{{ cid }}', parseInt(document.getElementById('base-idx-{{ policy.id }}').value))"
+                  style="font-size:0.78em; color:#6366f1; background:none; border:none;
+                         cursor:pointer; padding:4px 0; margin-top:4px">
+            + Add condition
+          </button>
+        </div>
+
+        {# RCA template #}
+        <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap">
+          <div style="font-size:0.76em; color:var(--muted); width:100%; margin-bottom:2px">
+            RCA template <span style="font-weight:400">(what the diagnosis says)</span>
           </div>
-          <div>
-            <label style="font-size:0.76em; color:var(--muted)">Fix template (JSON object)</label>
-            <textarea name="fix_template" rows="4"
-                      placeholder='{"fix_type":"config_change","commands":"interface {interface}\n no shutdown","risk":"low","confidence":"high","reason":"Restore admin-down interface."}'
-                      style="width:100%; background:var(--bg3); border:1px solid var(--border);
-                             border-radius:5px; color:var(--fg); padding:6px 8px;
-                             font-size:0.8em; font-family:monospace; resize:vertical">{{ policy.fix_template or '' }}</textarea>
+          <div style="display:flex; flex-direction:column; gap:4px; flex:3; min-width:200px">
+            <label style="font-size:0.74em; color:var(--muted)">Diagnosis</label>
+            <input name="rca_diagnosis" value="{{ rca_parsed.get('diagnosis','') }}"
+                   placeholder="{interface} on {device} is administratively shut down"
+                   style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                          padding:5px 8px; color:var(--fg); font-size:0.83em; width:100%">
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:100px">
+            <label style="font-size:0.74em; color:var(--muted)">Confidence</label>
+            <select name="rca_confidence"
+                    style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                           padding:5px 8px; color:var(--fg); font-size:0.83em">
+              {% for c in ["high","certain","medium","low"] %}
+              <option value="{{ c }}" {% if c == rca_parsed.get('confidence','high') %}selected{% endif %}>{{ c }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:180px">
+            <label style="font-size:0.74em; color:var(--muted)">Action</label>
+            <input name="rca_action" value="{{ rca_parsed.get('action','') }}"
+                   placeholder="no shutdown"
+                   style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                          padding:5px 8px; color:var(--fg); font-size:0.83em; width:100%">
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:160px">
+            <label style="font-size:0.74em; color:var(--muted)">Upstream cause</label>
+            <input name="rca_upstream_cause" value="{{ rca_parsed.get('upstream_cause','') }}"
+                   placeholder="leave empty if this is the root device"
+                   style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                          padding:5px 8px; color:var(--fg); font-size:0.83em; width:100%">
           </div>
         </div>
-      </details>
 
-      {# Actions #}
-      <div style="display:flex; gap:8px">
-        <button type="submit" class="btn"
-                style="font-size:0.82em; padding:5px 16px">Save</button>
-        <button type="button" class="btn btn-secondary"
-                hx-get="/partials/policy-list"
-                hx-target="#policy-list"
-                hx-swap="innerHTML"
-                style="font-size:0.82em; padding:5px 16px">Cancel</button>
+        {# Fix template #}
+        <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap">
+          <div style="font-size:0.76em; color:var(--muted); width:100%; margin-bottom:2px">
+            Fix template <span style="font-weight:400">(what gets executed)</span>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:120px">
+            <label style="font-size:0.74em; color:var(--muted)">Fix type</label>
+            <select name="fix_type_val"
+                    style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                           padding:5px 8px; color:var(--fg); font-size:0.83em">
+              {% for ft in ["config_change","runbook","escalate_human","no_action"] %}
+              <option value="{{ ft }}" {% if ft == fix_parsed.get('fix_type','config_change') %}selected{% endif %}>{{ ft }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; flex:3; min-width:200px">
+            <label style="font-size:0.74em; color:var(--muted)">Commands</label>
+            <textarea name="fix_commands" rows="3"
+                      placeholder="interface {interface}&#10; no shutdown"
+                      style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                             padding:5px 8px; color:var(--fg); font-size:0.83em; font-family:monospace;
+                             width:100%; resize:vertical; box-sizing:border-box">{{ fix_parsed.get('commands','') }}</textarea>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:90px">
+            <label style="font-size:0.74em; color:var(--muted)">Risk</label>
+            <select name="fix_risk"
+                    style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                           padding:5px 8px; color:var(--fg); font-size:0.83em">
+              {% for r in ["low","medium","high"] %}
+              <option value="{{ r }}" {% if r == fix_parsed.get('risk','low') %}selected{% endif %}>{{ r }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:90px">
+            <label style="font-size:0.74em; color:var(--muted)">Confidence</label>
+            <select name="fix_confidence"
+                    style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                           padding:5px 8px; color:var(--fg); font-size:0.83em">
+              {% for c in ["high","medium","low"] %}
+              <option value="{{ c }}" {% if c == fix_parsed.get('confidence','high') %}selected{% endif %}>{{ c }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:180px">
+            <label style="font-size:0.74em; color:var(--muted)">Reason</label>
+            <input name="fix_reason" value="{{ fix_parsed.get('reason','') }}"
+                   placeholder="Restore admin-down interface {interface} on {device}"
+                   style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                          padding:5px 8px; color:var(--fg); font-size:0.83em; width:100%">
+          </div>
+        </div>
+      </div>
+
+      {# ── Section 3: Approval gate ────────────────────────────────────────── #}
+      <div style="border-top:1px solid var(--border); padding-top:14px">
+        <div style="font-size:0.72em; font-weight:600; color:var(--muted); text-transform:uppercase;
+                    letter-spacing:.06em; margin-bottom:8px">3 · Approval gate
+          <span style="font-weight:400; text-transform:none; color:var(--muted); margin-left:6px">
+            applies after AI (or after fast path)
+          </span>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end">
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:160px">
+            <label style="font-size:0.76em; color:var(--muted)">Autonomy level</label>
+            <select name="autonomy_level"
+                    style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                           padding:5px 8px; color:var(--fg); font-size:0.84em">
+              {% for lvl in ["L0","L1","L2","L3","L4","L5"] %}
+              <option value="{{ lvl }}" {% if lvl == policy.autonomy_level %}selected{% endif %}>{{ lvl }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:110px">
+            <label style="font-size:0.76em; color:var(--muted)">Min confidence</label>
+            <select name="min_confidence"
+                    style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                           padding:5px 8px; color:var(--fg); font-size:0.84em">
+              {% for c in ["low","medium","high"] %}
+              <option value="{{ c }}" {% if c == (policy.min_confidence or 'low') %}selected{% endif %}>{{ c }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:110px">
+            <label style="font-size:0.76em; color:var(--muted)">Max risk</label>
+            <select name="max_risk"
+                    style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                           padding:5px 8px; color:var(--fg); font-size:0.84em">
+              {% for r in ["high","medium","low"] %}
+              <option value="{{ r }}" {% if r == (policy.max_risk or 'high') %}selected{% endif %}>{{ r }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div style="display:flex; gap:8px; align-items:flex-end">
+            <button type="submit" class="btn"
+                    style="font-size:0.82em; padding:5px 16px">Save</button>
+            <button type="button" class="btn btn-secondary"
+                    hx-get="/partials/policy-list"
+                    hx-target="#policy-list"
+                    hx-swap="innerHTML"
+                    style="font-size:0.82em; padding:5px 16px">Cancel</button>
+          </div>
+        </div>
       </div>
 
     </form>

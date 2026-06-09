@@ -269,11 +269,11 @@ class AlertPoller:
             logger.warning("AlertPoller: failed to fetch events: %s", exc)
             return []
 
-    def _fetch_live_alerts(self) -> set[tuple[str, str]]:
+    def _fetch_live_alerts(self) -> set[tuple[str, str]] | None:
         """
         Return {(alertname, instance)} for every firing alert in Prometheus.
-        One call per poll cycle. Falls back to an empty set on error;
-        callers treat empty as "Prometheus unreachable — be permissive".
+        Returns None when Prometheus is unreachable so callers can distinguish
+        "no alerts" (empty set) from "Prometheus down" (None).
         """
         try:
             resp = httpx.get(
@@ -289,18 +289,18 @@ class AlertPoller:
             }
         except Exception as exc:
             logger.warning("AlertPoller: failed to fetch live Prometheus alerts: %s", exc)
-            return set()
+            return None  # signals unreachable — callers treat as permissive
 
     def _is_firing_in_prometheus(
-        self, event: dict, live_alerts: set[tuple[str, str]]
+        self, event: dict, live_alerts: set[tuple[str, str]] | None
     ) -> bool:
         """Check whether this event's alert is still firing, using the pre-fetched set."""
         alertname = event.get("alertname", "")
         instance  = event.get("instance", "")
         if not alertname:
             return False
-        # Empty set means Prometheus was unreachable — be conservative, allow through
-        if not live_alerts:
+        # None means Prometheus was unreachable — be conservative, allow through
+        if live_alerts is None:
             return True
         for (a_name, a_instance) in live_alerts:
             if a_name != alertname:
@@ -311,7 +311,7 @@ class AlertPoller:
         return False
 
     def _classify_event(
-        self, event: dict, live_alerts: set[tuple[str, str]]
+        self, event: dict, live_alerts: set[tuple[str, str]] | None
     ) -> dict | None:
         """Return the event if it should be investigated, None otherwise."""
         fp        = event.get("fingerprint", "")
@@ -328,6 +328,7 @@ class AlertPoller:
             self._seen.pop(fp, None)
             if fp:
                 self._try_close_incident(fp)
+                self._auto_reject_stale_gates(fp)
             return None
 
         if status != "firing":
@@ -343,6 +344,11 @@ class AlertPoller:
                 alertname, fp[:12],
             )
             self._seen[fp] = seen_key
+            # Alert resolved in Prometheus but never got a webhook resolved event.
+            # Close the incident and dismiss any stale approval gates.
+            if fp:
+                self._try_close_incident(fp)
+                self._auto_reject_stale_gates(fp)
             return None
 
         self._seen[fp] = seen_key
@@ -485,6 +491,32 @@ class AlertPoller:
         except Exception as exc:
             logger.warning(
                 "AlertPoller: failed to auto-close incident for fp=%s: %s", fp[:12], exc
+            )
+
+    def _auto_reject_stale_gates(self, fp: str) -> None:
+        """
+        When an alert resolves, reject any awaiting_approval RCA tasks for the
+        same fingerprint whose fix is no longer needed. This covers two cases:
+        - A webhook resolved event arrived via _classify_event
+        - The alert disappeared from Prometheus but no resolved webhook arrived
+          (e.g. inhibited alerts, or Alertmanager webhook delivery failures)
+        """
+        try:
+            tasks = self._task_store.list_tasks(
+                type="rca", alert_fingerprint=fp, status="awaiting_approval", limit=10,
+            )
+            for task in tasks:
+                self._task_store.reject_task(
+                    task["id"], "system",
+                    reason=f"Alert {fp[:12]} resolved — stale approval gate auto-dismissed",
+                )
+                logger.info(
+                    "AlertPoller: auto-rejected stale gate task=%s fp=%s",
+                    task["id"], fp[:12],
+                )
+        except Exception as exc:
+            logger.warning(
+                "AlertPoller: failed to auto-reject stale gates for fp=%s: %s", fp[:12], exc
             )
 
     # ── investigation ──────────────────────────────────────────────────────────

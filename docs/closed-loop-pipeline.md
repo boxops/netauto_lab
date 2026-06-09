@@ -27,8 +27,11 @@ The closed-loop pipeline is the autonomous incident-response system built into t
   │  · If ALL conditions pass → generates RCA + fix from templates       │
   │    (seconds, zero LLM calls) → goes straight to Approval Gate        │
   │  · If any condition fails → falls through to AI investigation below  │
+  │  · If AI_ENABLED=false and no match → awaiting_approval              │
+  │    (no_ai_skipped event) — human reviews without AI involvement      │
   └──────────┬────────────────────────────┬────────────────────────────┘
              │ no matching fast-path       │ fast-path resolved
+             │ (and AI_ENABLED=true)       │
              ▼                            │
   ┌──────────────────────────────────┐    │
   │  Stage 1 — RCA  (ai-agent)       │    │
@@ -375,6 +378,22 @@ The **📊 Pipeline** tab is the default landing page of the web UI at [http://l
 
 The dashboard uses **Server-Sent Events** (SSE). A single persistent connection to `/stream/tasks` pushes a notification whenever any task state changes. The pipeline visual, task queue, approval badge, and incident list all update immediately on change — no polling lag.
 
+### ⚡ Live Activity feed
+
+A compact chronological stream at the top of the Pipeline tab shows the 20 most recent significant pipeline events across **all active fingerprints** — no need to navigate to a specific alert to see what is running. Events are colour-coded by type:
+
+| Event | Badge colour |
+| --- | --- |
+| `fast_path_resolved` | green (programmatic) |
+| `rca_complete` | blue |
+| `auto_approved` | green |
+| `approval_requested` | purple |
+| `execution_complete` | teal |
+| `execution_verified` | teal |
+| `no_ai_skipped` | amber |
+
+Each row shows timestamp, event badge, alert name, device, and a click-through link to the full task detail. The feed auto-refreshes every 3 s and also on SSE `tasks-changed` events.
+
 ### Alert Processing Pipeline — Visual and Chronicle views
 
 The **Alert Processing Pipeline** section offers two views, toggled with the **📊 Visual / 📖 Chronicle** buttons in the top-right of the panel. Selecting a different alert fingerprint from the dropdown reloads whichever view is currently active.
@@ -444,6 +463,7 @@ All pipeline behaviour is controlled by environment variables in `.env`:
 | ------------------------------- | ----------------------- | ---------------------------------------------- |
 | `OPENAI_API_KEY`                | —                       | Required for OpenAI (gpt-4o)                   |
 | `OPENAI_MODEL`                  | `gpt-4o`                | Model used by the unified agent                |
+| `AI_ENABLED`                    | `true`                  | Set to `false` to disable all LLM investigation. Only programmatic fast-path policies run; unmatched alerts are placed in `awaiting_approval` with a `no_ai_skipped` event. |
 | `DAILY_BUDGET_USD`              | `5.00`                  | Hard daily spend limit across all agents       |
 | `MAX_TOKENS_PER_AGENT_PER_HOUR` | `2,000,000`             | Hourly token cap per agent                     |
 | `ACTIVITY_DB_PATH`              | `/app/data/activity.db` | SQLite path (used when `TASK_DB_URL` is empty) |
@@ -553,6 +573,7 @@ Append-only event log. Key event types:
 | `approval_requested`    | approval_gate     | —                                                                                       |
 | `approved`              | approval_gate     | —                                                                                       |
 | `fast_path_resolved`    | rca               | `policy_id`, `policy_name`, `conditions_matched` (recorded when ⚡ fast path fires)      |
+| `no_ai_skipped`         | rca               | `reason` — recorded when `AI_ENABLED=false` and no fast-path policy matches; task enters `awaiting_approval` for human review |
 | `auto_approved`         | approval_gate     | `reason`, `autonomy_level` (L0–L5), `policy_id`                                         |
 | `approval_policy`       | approval_gate     | `autonomy_level`, `policy_id`, `reason` (recorded when human approves a policy-gated task) |
 | `execution_started`     | approval_gate     | `device`, `commands`                                                                    |

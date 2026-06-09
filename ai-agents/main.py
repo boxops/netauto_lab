@@ -60,7 +60,14 @@ status_handler = StatusCallbackHandler(
 
 agent        = UnifiedAgent(rate_limiter=rate_limiter, status_handler=status_handler)
 _metrics     = ActiveTasksRefresher(task_store, agent_name=None)  # None = all tasks
-_workflow    = IncidentWorkflow(task_store, rate_limiter, status_handler)
+
+# Runtime AI-mode toggle — starts from .env, can be flipped at runtime via /ai-mode.
+_ai_enabled: bool = settings.ai_enabled
+
+def _get_ai_enabled() -> bool:
+    return _ai_enabled
+
+_workflow    = IncidentWorkflow(task_store, rate_limiter, status_handler, ai_enabled_fn=_get_ai_enabled)
 poller       = AlertPoller(agent, task_store, rate_limiter, workflow=_workflow)
 scheduler: OpsScheduler | None = None
 
@@ -492,6 +499,22 @@ async def delete_intent(intent_id: str):
     if not _intent_registry.get_intent(intent_id):
         raise HTTPException(status_code=404, detail=f"Intent {intent_id!r} not found")
     _intent_registry.delete_intent(intent_id)
+
+
+# ── AI mode toggle ────────────────────────────────────────────────────────────
+
+@app.get("/ai-mode")
+async def get_ai_mode():
+    return {"ai_enabled": _ai_enabled}
+
+
+@app.post("/ai-mode")
+async def set_ai_mode(request: Request):
+    global _ai_enabled
+    body = await request.json()
+    _ai_enabled = bool(body.get("ai_enabled", True))
+    logger.info("AI mode set to %s", _ai_enabled)
+    return {"ai_enabled": _ai_enabled}
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────

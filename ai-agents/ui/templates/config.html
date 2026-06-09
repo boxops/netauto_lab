@@ -10,16 +10,15 @@
 <div class="section-title">🤖 Autonomy Policies</div>
 
 <div class="help-callout">
-  <strong>What are autonomy policies?</strong><br>
-  Policies serve two roles. First, they set the <strong>autonomy level (L0–L5)</strong> — how much independence
-  the AI has when proposing and executing a fix (L2 requires your approval, L4 auto-executes after meeting
-  confidence + prior-success thresholds). Second, policies marked with <strong>⚡</strong> carry
-  <em>programmatic conditions</em>: live checks (Prometheus metrics, device show commands, or Nautobot fields)
-  that resolve a well-understood alert in <strong>seconds with zero LLM calls</strong> before the AI
-  investigation even starts. If every condition passes, the RCA and fix are generated from templates;
-  if any condition fails the pipeline falls back to the normal AI path automatically.
-  The <strong>Learning Engine</strong> automatically promotes or demotes the autonomy level based on whether
-  past fixes actually resolved the alert — so the system earns autonomy incrementally rather than being granted it upfront.
+  <strong>What is an autonomy policy?</strong><br>
+  Each policy governs one alert type end-to-end across two activation points:
+  <strong>(1) Fast path</strong> — if you define conditions, the pipeline checks them before calling the AI;
+  if every condition passes, the RCA and fix are generated from your templates in seconds with zero LLM calls.
+  <strong>(2) Approval gate</strong> — the autonomy level (L0–L5) controls what happens after the AI
+  (or after the fast path): L2 waits for your click, L4 auto-approves when confidence and risk thresholds are met.
+  Leave the fast-path section empty and the policy acts as a gate-only rule.
+  The <strong>Learning Engine</strong> automatically promotes or demotes the level based on whether past fixes
+  actually resolved the alert.
 </div>
 
 {# L0-L5 visual guide #}
@@ -71,103 +70,212 @@
 <form hx-post="/partials/policy-create"
       hx-target="#policy-list"
       hx-swap="innerHTML"
-      style="background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:6px">
-  <div class="flex gap-12 flex-wrap">
-    <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:160px">
-      <label style="font-size:0.78em; color:var(--muted)">Policy name</label>
-      <input name="name" required placeholder="BGP reset — lab leaf"
-             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
-                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
-    </div>
-    <div style="display:flex; flex-direction:column; gap:4px; min-width:120px">
-      <label style="font-size:0.78em; color:var(--muted)">Fix type (empty = any)</label>
-      <input name="fix_type" placeholder="runbook / config_change"
-             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
-                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
-    </div>
-    <div style="display:flex; flex-direction:column; gap:4px; min-width:100px">
-      <label style="font-size:0.78em; color:var(--muted)">Device role (empty = any)</label>
-      <input name="device_role" placeholder="leaf / spine"
-             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
-                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
-    </div>
-    <div style="display:flex; flex-direction:column; gap:4px; min-width:100px">
-      <label style="font-size:0.78em; color:var(--muted)">Environment (empty = any)</label>
-      <input name="environment" placeholder="lab / production"
-             style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
-                    padding:6px 8px; color:var(--fg); font-size:0.85em; width:100%">
-    </div>
-    <div style="display:flex; flex-direction:column; gap:4px; min-width:110px">
-      <label style="font-size:0.78em; color:var(--muted)">Autonomy level</label>
-      <select name="autonomy_level"
-              style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
-                     padding:6px 8px; color:var(--fg); font-size:0.85em">
-        <option value="L2" selected>L2 — Supervised (default)</option>
-        <option value="L0">L0 — Manual</option>
-        <option value="L1">L1 — Advisory</option>
-        <option value="L3">L3 — Human gate</option>
-        <option value="L4">L4 — Auto-approve</option>
-        <option value="L5">L5 — Autonomous</option>
-      </select>
-    </div>
-    <div style="display:flex; align-items:flex-end">
-      <button type="submit" class="btn btn-primary" style="font-size:0.85em; padding:7px 16px">
-        Add policy
-      </button>
+      style="background:var(--bg2); border:1px solid var(--border); border-radius:8px;
+             padding:16px; margin-bottom:6px; display:flex; flex-direction:column; gap:16px">
+
+  {# ── Section 1: Match ──────────────────────────────────────────────────── #}
+  <div>
+    <div style="font-size:0.72em; font-weight:600; color:var(--muted); text-transform:uppercase;
+                letter-spacing:.06em; margin-bottom:8px">1 · Match</div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap">
+      <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:150px">
+        <label style="font-size:0.76em; color:var(--muted)">Policy name <span style="color:#ef4444">*</span></label>
+        <input name="name" required placeholder="InterfaceAdminDown — lab spine"
+               style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                      padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:140px">
+        <label style="font-size:0.76em; color:var(--muted)">Alert name (empty = any)</label>
+        <input name="alertname" placeholder="InterfaceAdminDown"
+               style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                      padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:120px">
+        <label style="font-size:0.76em; color:var(--muted)">Fix type (empty = any)</label>
+        <input name="fix_type" placeholder="config_change"
+               style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                      padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:100px">
+        <label style="font-size:0.76em; color:var(--muted)">Device role (empty = any)</label>
+        <input name="device_role" placeholder="leaf / spine"
+               style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                      padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:100px">
+        <label style="font-size:0.76em; color:var(--muted)">Environment (empty = any)</label>
+        <input name="environment" placeholder="lab / production"
+               style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                      padding:5px 8px; color:var(--fg); font-size:0.84em; width:100%">
+      </div>
     </div>
   </div>
 
-  {# ── Programmatic fast-path (collapsed by default) ──────────────────────── #}
-  <details style="margin-top:12px">
-    <summary style="cursor:pointer; font-size:0.83em; color:var(--muted);
-                    user-select:none; list-style:none; display:flex; align-items:center; gap:6px">
-      <span style="font-size:1em">⚡</span>
-      <span style="font-weight:600; color:var(--fg)">Programmatic Fast Path</span>
-      <span style="font-size:0.78em; color:var(--muted)">(optional — skip AI for known patterns)</span>
-    </summary>
-    <div style="margin-top:10px; display:flex; flex-direction:column; gap:10px;
-                border-left:2px solid #3b82f655; padding-left:12px">
-      <div style="font-size:0.78em; color:var(--muted)">
-        Define <code>conditions</code> to resolve this alert programmatically before invoking the AI.
-        If all conditions pass, the RCA and fix are generated from templates — zero LLM calls, seconds not minutes.
-        Leave empty to use the normal AI pipeline.
+  {# ── Section 2: Fast path ──────────────────────────────────────────────── #}
+  <div style="border-top:1px solid var(--border); padding-top:14px">
+    <div style="font-size:0.72em; font-weight:600; color:var(--muted); text-transform:uppercase;
+                letter-spacing:.06em; margin-bottom:4px">2 · Fast path
+      <span style="font-weight:400; text-transform:none; color:var(--muted); margin-left:6px">
+        resolves alert before AI — leave empty to use AI investigation
+      </span>
+    </div>
+
+    {# Condition builder #}
+    <div style="margin-top:10px">
+      <div style="font-size:0.76em; color:var(--muted); margin-bottom:6px">Conditions</div>
+      <div id="create-conditions-container">
+        {# JS populates rows; initially empty #}
       </div>
-      <div style="display:flex; flex-direction:column; gap:4px">
-        <label style="font-size:0.78em; color:var(--muted)">
-          Conditions (JSON array)
-          <span style="font-weight:400"> — types: <code>metric</code>, <code>show_command</code>, <code>nautobot</code></span>
-        </label>
-        <textarea name="conditions" rows="3"
-                  placeholder='[{"type":"metric","query":"interface_ifOperStatus{ifDescr=\"{interface}\"}","expect":"2"}]'
-                  style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
-                         padding:6px 8px; color:var(--fg); font-size:0.82em; font-family:monospace;
-                         width:100%; resize:vertical; box-sizing:border-box"></textarea>
+      <button type="button" onclick="addConditionTo('create-conditions-container', 0)"
+              style="font-size:0.78em; color:#6366f1; background:none; border:none;
+                     cursor:pointer; padding:4px 0; margin-top:4px">
+        + Add condition
+      </button>
+    </div>
+
+    {# RCA template #}
+    <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap">
+      <div style="font-size:0.76em; color:var(--muted); width:100%; margin-bottom:2px">
+        RCA template <span style="font-weight:400">(what the diagnosis says)</span>
       </div>
-      <div style="display:flex; flex-direction:column; gap:4px">
-        <label style="font-size:0.78em; color:var(--muted)">
-          RCA Template (JSON)
-          <span style="font-weight:400"> — keys: <code>diagnosis</code>, <code>confidence</code>, <code>affected_device</code>, <code>upstream_cause</code></span>
-        </label>
-        <textarea name="rca_template" rows="3"
-                  placeholder='{"diagnosis":"{interface} on {device} is administratively down","confidence":"certain","affected_device":"{device}","upstream_cause":""}'
-                  style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
-                         padding:6px 8px; color:var(--fg); font-size:0.82em; font-family:monospace;
-                         width:100%; resize:vertical; box-sizing:border-box"></textarea>
+      <div style="display:flex; flex-direction:column; gap:4px; flex:3; min-width:200px">
+        <label style="font-size:0.74em; color:var(--muted)">Diagnosis</label>
+        <input name="rca_diagnosis" placeholder="{interface} on {device} is administratively shut down"
+               style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                      padding:5px 8px; color:var(--fg); font-size:0.83em; width:100%">
       </div>
-      <div style="display:flex; flex-direction:column; gap:4px">
-        <label style="font-size:0.78em; color:var(--muted)">
-          Fix Template (JSON)
-          <span style="font-weight:400"> — keys: <code>commands</code>, <code>fix_type</code>, <code>risk</code>, <code>reason</code></span>
-        </label>
-        <textarea name="fix_template" rows="3"
-                  placeholder='{"fix_type":"config_change","commands":"interface {interface}\n no shutdown","risk":"low","reason":"Restore admin-down interface {interface} on {device}"}'
-                  style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
-                         padding:6px 8px; color:var(--fg); font-size:0.82em; font-family:monospace;
-                         width:100%; resize:vertical; box-sizing:border-box"></textarea>
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:100px">
+        <label style="font-size:0.74em; color:var(--muted)">Confidence</label>
+        <select name="rca_confidence"
+                style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                       padding:5px 8px; color:var(--fg); font-size:0.83em">
+          <option value="high" selected>high</option>
+          <option value="certain">certain</option>
+          <option value="medium">medium</option>
+          <option value="low">low</option>
+        </select>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:180px">
+        <label style="font-size:0.74em; color:var(--muted)">Action (recommended next step)</label>
+        <input name="rca_action" placeholder="no shutdown"
+               style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                      padding:5px 8px; color:var(--fg); font-size:0.83em; width:100%">
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:160px">
+        <label style="font-size:0.74em; color:var(--muted)">Upstream cause (optional)</label>
+        <input name="rca_upstream_cause" placeholder="leave empty if this is the root device"
+               style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                      padding:5px 8px; color:var(--fg); font-size:0.83em; width:100%">
       </div>
     </div>
-  </details>
+
+    {# Fix template #}
+    <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap">
+      <div style="font-size:0.76em; color:var(--muted); width:100%; margin-bottom:2px">
+        Fix template <span style="font-weight:400">(what gets executed)</span>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:120px">
+        <label style="font-size:0.74em; color:var(--muted)">Fix type</label>
+        <select name="fix_type_val"
+                style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                       padding:5px 8px; color:var(--fg); font-size:0.83em">
+          <option value="config_change" selected>config_change</option>
+          <option value="runbook">runbook</option>
+          <option value="escalate_human">escalate_human</option>
+          <option value="no_action">no_action</option>
+        </select>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; flex:3; min-width:200px">
+        <label style="font-size:0.74em; color:var(--muted)">Commands (one per line, use {device} {interface})</label>
+        <textarea name="fix_commands" rows="3"
+                  placeholder="interface {interface}&#10; no shutdown"
+                  style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                         padding:5px 8px; color:var(--fg); font-size:0.83em; font-family:monospace;
+                         width:100%; resize:vertical; box-sizing:border-box"></textarea>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:90px">
+        <label style="font-size:0.74em; color:var(--muted)">Risk</label>
+        <select name="fix_risk"
+                style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                       padding:5px 8px; color:var(--fg); font-size:0.83em">
+          <option value="low" selected>low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+        </select>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:90px">
+        <label style="font-size:0.74em; color:var(--muted)">Confidence</label>
+        <select name="fix_confidence"
+                style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                       padding:5px 8px; color:var(--fg); font-size:0.83em">
+          <option value="high" selected>high</option>
+          <option value="medium">medium</option>
+          <option value="low">low</option>
+        </select>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; flex:2; min-width:180px">
+        <label style="font-size:0.74em; color:var(--muted)">Reason (one sentence)</label>
+        <input name="fix_reason" placeholder="Restore admin-down interface {interface} on {device}"
+               style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                      padding:5px 8px; color:var(--fg); font-size:0.83em; width:100%">
+      </div>
+    </div>
+  </div>
+
+  {# ── Section 3: Approval gate ──────────────────────────────────────────── #}
+  <div style="border-top:1px solid var(--border); padding-top:14px">
+    <div style="font-size:0.72em; font-weight:600; color:var(--muted); text-transform:uppercase;
+                letter-spacing:.06em; margin-bottom:8px">3 · Approval gate
+      <span style="font-weight:400; text-transform:none; color:var(--muted); margin-left:6px">
+        applies after AI (or after fast path)
+      </span>
+    </div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end">
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:160px">
+        <label style="font-size:0.76em; color:var(--muted)">Autonomy level</label>
+        <select name="autonomy_level"
+                style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                       padding:5px 8px; color:var(--fg); font-size:0.84em">
+          <option value="L2" selected>L2 — Supervised (default)</option>
+          <option value="L0">L0 — Manual</option>
+          <option value="L1">L1 — Advisory</option>
+          <option value="L3">L3 — Human gate</option>
+          <option value="L4">L4 — Auto-approve</option>
+          <option value="L5">L5 — Autonomous</option>
+        </select>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:110px">
+        <label style="font-size:0.76em; color:var(--muted)">Min confidence</label>
+        <select name="min_confidence"
+                style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                       padding:5px 8px; color:var(--fg); font-size:0.84em">
+          <option value="low" selected>low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+        </select>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px; min-width:110px">
+        <label style="font-size:0.76em; color:var(--muted)">Max risk</label>
+        <select name="max_risk"
+                style="background:var(--bg3); border:1px solid var(--border); border-radius:4px;
+                       padding:5px 8px; color:var(--fg); font-size:0.84em">
+          <option value="high" selected>high</option>
+          <option value="medium">medium</option>
+          <option value="low">low</option>
+        </select>
+      </div>
+      <div style="display:flex; align-items:flex-end">
+        <button type="submit" class="btn btn-primary" style="font-size:0.85em; padding:7px 18px">
+          Add policy
+        </button>
+      </div>
+    </div>
+  </div>
+
 </form>
+
+{# ── Shared condition-builder JS (used by Add Policy form and Edit form) ── #}
+{% include "partials/condition_builder_js.html" %}
 
 {# ── Policy Simulator ─────────────────────────────────────────────────────── #}
 <div class="section-title mt-20 mb-8" style="font-size:0.85em">Policy Simulator</div>
@@ -442,5 +550,30 @@
   // Set button state on load
   document.addEventListener("DOMContentLoaded", updateHelpToggleUI);
 </script>
+
+<hr class="divider" />
+
+{# ════════════════════════════════════════════════════════════════════════════
+   SECTION D — AGENT SETTINGS
+   ════════════════════════════════════════════════════════════════════════════ #}
+<div class="section-title" id="agent-settings-section">⚙️ Agent Settings</div>
+
+<div style="background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:16px 20px; max-width:520px">
+  <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap">
+    <div style="flex:1; min-width:180px">
+      <div style="font-size:0.9em; font-weight:600; color:var(--text); margin-bottom:3px">AI assistance</div>
+      <div class="muted" style="font-size:0.8em">
+        When disabled, incoming alerts are queued as manual cases — no LLM investigation or automated fix proposals are generated.
+        Operators review and enter commands directly at the approval gate.
+        This setting resets to <strong>On</strong> if the agent container restarts.
+      </div>
+    </div>
+    <div style="display:flex; flex-direction:column; align-items:center; gap:6px"
+         hx-get="/partials/ai-mode-badge"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+    </div>
+  </div>
+</div>
 
 {% endblock %}

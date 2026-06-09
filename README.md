@@ -150,6 +150,14 @@ Prometheus alert (or IntentEvaluator threshold breach)
         ▼
   ┌─── LangGraph IncidentWorkflow ──────────────────────────────────────┐
   │                                                                      │
+  │  ⚡ Programmatic Fast Path (no LLM)                                  │
+  │  PolicyResolver checks live conditions (Prometheus / Nautobot /     │
+  │  show commands). If ALL conditions pass → RCA + fix built from      │
+  │  templates in 1–3 s, zero LLM calls → skip straight to gate.       │
+  │  If ai_enabled=False and no fast path → alert placed in             │
+  │  awaiting_approval with no_ai_skipped event.                        │
+  │                │ no match / ai_enabled=True                         │
+  │                ▼                                                     │
   │  Stage 1 · RCA         Stage 2 · Fix Proposal  Stage 3 · Validate   │
   │  alerts + metrics      get_runbook() first      blast-radius check   │
   │  logs + topology       config diff generated    read-only inspection │
@@ -161,6 +169,15 @@ Prometheus alert (or IntentEvaluator threshold breach)
   │  Post-approval: execute → config verify → alert resolution check     │
   └──────────────────────────────────────────────────────────────────────┘
 ```
+
+Two alert types are **resolved programmatically by default** (no LLM required):
+
+| Alert | Condition | Autonomy |
+| --- | --- | --- |
+| `InterfaceAdminDown` | `interface_ifAdminStatus == 2` on any device | L3 (gate shown, then executes) |
+| `BGPPeerDown` (lab leaf) | `bgp_peer_bgpPeerState ≠ 6` (not Established) | L4 (auto-approved) |
+
+Additional fast-path policies can be created in the **⚙️ Config** tab.
 
 See [`docs/closed-loop-pipeline.md`](docs/closed-loop-pipeline.md) for the full reference.
 
@@ -206,10 +223,10 @@ Five-tab web interface at [http://localhost:7860](http://localhost:7860):
 
 | Tab | Contents |
 | --- | --- |
-| **📡 Operations** | Ops Health KPI bar · Alert Processing Pipeline (Visual + Chronicle) · Task Queue |
+| **📡 Operations** | Ops Health KPI bar · ⚡ Live Activity feed · Alert Processing Pipeline (Visual + Chronicle) · Task Queue |
 | **🚨 Incidents** | Incidents grouped by root cause, severity, and affected devices |
 | **💬 Assist** | Interactive chat with the unified agent |
-| **⚙️ Config** | Autonomy policies · L0–L5 gauge · Policy performance · Standing intents · UI preferences |
+| **⚙️ Config** | Autonomy policies · L0–L5 gauge · Add Policy · **Policy Simulator** (dry-run: which policy fires?) · Policy Performance · Standing intents · UI preferences |
 | **📊 System** | Cost Monitor (token usage, budget burn) · Activity Log (full audit trail) |
 
 **Pipeline Chronicle**: each alert chain renders as a human-readable vertical timeline — Intent-triggered or Alert-triggered badge, stage chapters with autonomy level, blast-radius block, runbook provenance, rejection reason capture, and a Stage 5 Verify chapter showing config confirmation and alert resolution side-by-side.

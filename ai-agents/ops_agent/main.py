@@ -30,11 +30,17 @@ agent    = OpsAgent()
 _metrics = ActiveTasksRefresher(task_store, AGENT_NAME)
 _scheduler: OpsScheduler | None = None
 
+# Runtime AI-mode toggle — starts from .env, can be flipped at runtime via /ai-mode.
+_ai_enabled: bool = settings.ai_enabled
+
+def _get_ai_enabled() -> bool:
+    return _ai_enabled
+
 # Unified LangGraph pipeline — instantiated here to share the same task_store,
 # rate_limiter, and status_handler singletons as the rest of the ops-agent.
 # Passed to AlertPoller so it can dispatch directly without a circular import.
 from ops_agent.workflow import IncidentWorkflow
-_workflow = IncidentWorkflow(task_store, rate_limiter, status_handler)
+_workflow = IncidentWorkflow(task_store, rate_limiter, status_handler, ai_enabled_fn=_get_ai_enabled)
 
 poller   = AlertPoller(agent, task_store, rate_limiter, workflow=_workflow)
 
@@ -155,7 +161,21 @@ class ScheduleRequest(BaseModel):
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "agent": "ops"}
+    return {"status": "healthy", "agent": "ai_agent", "tool_count": len(_workflow._all_tools)}
+
+
+@app.get("/ai-mode")
+async def get_ai_mode():
+    return {"ai_enabled": _ai_enabled}
+
+
+@app.post("/ai-mode")
+async def set_ai_mode(request: Request):
+    global _ai_enabled
+    body = await request.json()
+    _ai_enabled = bool(body.get("ai_enabled", True))
+    logger.info("AI mode set to %s", _ai_enabled)
+    return {"ai_enabled": _ai_enabled}
 
 
 @app.get("/metrics", include_in_schema=False)

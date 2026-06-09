@@ -310,12 +310,20 @@ class PolicyRegistry:
         alertname: str,
         tenant_id: str = "default",
         device_role: str = "",
+        strict_role: bool = False,
     ) -> list[dict]:
         """
         Return enabled policies that have `conditions` defined and match the
         given alertname (or wildcard) and device_role (or wildcard).
         Ordered by specificity: most-specific (both alertname + device_role set) first.
         Used by _node_policy_fast_path before invoking the AI investigation.
+
+        strict_role=True (workflow path): if device_role is empty (Nautobot lookup
+        failed), role-specific policies are excluded — only wildcard-role policies
+        are returned. Prevents a spine policy from matching a leaf device when the
+        role lookup times out.
+        strict_role=False (default, simulator): device_role="" is a wildcard that
+        returns all policies regardless of their device_role setting.
         """
         all_policies = self._store.list_policies(tenant_id=tenant_id)
         fast_path = []
@@ -325,9 +333,15 @@ class PolicyRegistry:
             # alertname: empty = wildcard
             if p.get("alertname") and p["alertname"] != alertname:
                 continue
-            # device_role: empty = wildcard; if policy specifies a role it must match
-            if p.get("device_role") and device_role and p["device_role"] != device_role:
-                continue
+            # device_role filtering:
+            # - strict_role=True: role-specific policy requires known + matching role
+            # - strict_role=False: empty device_role is wildcard (matches any policy)
+            if p.get("device_role"):
+                if strict_role:
+                    if p["device_role"] != device_role:
+                        continue
+                elif device_role and p["device_role"] != device_role:
+                    continue
             fast_path.append(p)
         # Higher specificity first: both set (score 2) > alertname only (1) > wildcard (0)
         fast_path.sort(key=lambda p: (

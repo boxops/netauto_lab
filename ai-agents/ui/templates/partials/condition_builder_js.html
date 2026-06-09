@@ -1,0 +1,108 @@
+<script>
+(function () {
+  // Render one empty condition row into containerId, numbering starts at baseIdx.
+  function addConditionTo(containerId, baseIdx) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    var existing = container.querySelectorAll('.condition-row').length;
+    var i = baseIdx + existing;
+    var html = [
+      '<div class="condition-row" style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;',
+      'background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:6px">',
+      '<select name="c_type_' + i + '" data-cfield="type" onchange="updateConditionType(this)"',
+      ' style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;',
+      'padding:4px 6px;color:var(--fg);font-size:0.82em">',
+      '<option value="metric">metric</option>',
+      '<option value="show_command">show command</option>',
+      '<option value="nautobot">nautobot</option>',
+      '</select>',
+
+      // metric fields (visible by default)
+      '<div class="cfields-metric" style="display:flex;gap:6px;flex-wrap:wrap;flex:1;align-items:flex-end">',
+      '<input name="c_query_' + i + '" data-cfield="query"',
+      ' placeholder="PromQL query — use {device} {interface}"',
+      ' style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;',
+      'padding:4px 6px;color:var(--fg);font-size:0.82em;font-family:monospace;flex:2;min-width:200px">',
+      '<select name="c_match_' + i + '" data-cfield="match"',
+      ' style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;',
+      'padding:4px 6px;color:var(--fg);font-size:0.82em">',
+      '<option value="eq">=</option><option value="ne">≠</option>',
+      '</select>',
+      '<input name="c_value_' + i + '" data-cfield="value" placeholder="expected value"',
+      ' style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;',
+      'padding:4px 6px;color:var(--fg);font-size:0.82em;width:90px">',
+      '</div>',
+
+      // show_command fields (hidden)
+      '<div class="cfields-show_command" style="display:none;gap:6px;flex-wrap:wrap;flex:1;align-items:flex-end">',
+      '<input name="c_cmd_' + i + '" data-cfield="cmd"',
+      ' placeholder="show interfaces {interface} status"',
+      ' style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;',
+      'padding:4px 6px;color:var(--fg);font-size:0.82em;font-family:monospace;flex:2;min-width:200px">',
+      '<input name="c_contains_' + i + '" data-cfield="contains"',
+      ' placeholder="output contains…"',
+      ' style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;',
+      'padding:4px 6px;color:var(--fg);font-size:0.82em;flex:1;min-width:140px">',
+      '</div>',
+
+      // nautobot fields (hidden)
+      '<div class="cfields-nautobot" style="display:none;gap:6px;flex-wrap:wrap;flex:1;align-items:flex-end">',
+      '<input name="c_path_' + i + '" data-cfield="path"',
+      ' placeholder="/api/dcim/interfaces/?name={interface}&device={device}"',
+      ' style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;',
+      'padding:4px 6px;color:var(--fg);font-size:0.82em;font-family:monospace;flex:2;min-width:200px">',
+      '<input name="c_field_' + i + '" data-cfield="nbfield"',
+      ' placeholder="results[0].enabled"',
+      ' style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;',
+      'padding:4px 6px;color:var(--fg);font-size:0.82em;min-width:130px">',
+      '<input name="c_nbexpect_' + i + '" data-cfield="nbexpect"',
+      ' placeholder="false"',
+      ' style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;',
+      'padding:4px 6px;color:var(--fg);font-size:0.82em;width:70px">',
+      '</div>',
+
+      '<button type="button" onclick="removeCondition(this)"',
+      ' style="font-size:0.78em;color:#ef4444;background:none;border:none;',
+      'cursor:pointer;padding:4px 6px;align-self:center">✕</button>',
+      '</div>'
+    ].join('');
+    container.insertAdjacentHTML('beforeend', html);
+  }
+
+  function removeCondition(btn) {
+    var row = btn.closest('.condition-row');
+    var container = row.parentElement;
+    row.remove();
+    reindexConditions(container);
+  }
+
+  function reindexConditions(container) {
+    var rows = container.querySelectorAll('.condition-row');
+    rows.forEach(function (row, idx) {
+      row.querySelectorAll('[data-cfield]').forEach(function (el) {
+        var field = el.dataset.cfield;
+        var prefix = {
+          type: 'c_type', query: 'c_query', match: 'c_match', value: 'c_value',
+          cmd: 'c_cmd', contains: 'c_contains',
+          path: 'c_path', nbfield: 'c_field', nbexpect: 'c_nbexpect'
+        }[field];
+        if (prefix) el.name = prefix + '_' + idx;
+      });
+    });
+  }
+
+  function updateConditionType(sel) {
+    var row = sel.closest('.condition-row');
+    var type = sel.value;
+    ['metric', 'show_command', 'nautobot'].forEach(function (t) {
+      var div = row.querySelector('.cfields-' + t);
+      if (div) div.style.display = (t === type) ? 'flex' : 'none';
+    });
+  }
+
+  // Expose to inline onclick handlers
+  window.addConditionTo    = addConditionTo;
+  window.removeCondition   = removeCondition;
+  window.updateConditionType = updateConditionType;
+}());
+</script>

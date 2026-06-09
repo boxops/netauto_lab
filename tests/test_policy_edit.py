@@ -1,9 +1,14 @@
 """
-Tests for Phase 4: policy inline editing.
+Tests for policy inline editing.
 
-Unit tests verify the TaskStore update behaviour and JSON validation logic.
+Unit tests verify the TaskStore update behaviour.
 Integration tests (marked integration) exercise the HTTP endpoints and
 require the running Docker stack (make start).
+
+Note: the edit route now uses structured form fields (c_type_N, rca_diagnosis, etc.)
+assembled by _parse_condition_rows/_parse_rca_template/_parse_fix_template.
+Raw conditions/rca_template/fix_template JSON strings are no longer accepted
+directly; see tests/test_policy_form_parsing.py for those helpers.
 
 Run unit tests only: python3 -m pytest tests/test_policy_edit.py -m unit -v
 """
@@ -95,39 +100,6 @@ class TestPolicyUpdateFields:
         assert updated["device_role"] == "spine"
 
 
-# ── Unit tests: JSON validation logic (pure Python, no HTTP) ─────────────────
-
-@pytest.mark.unit
-class TestJsonValidationLogic:
-    """
-    Test the same validation logic used in partial_policy_edit_save:
-    valid JSON strings should parse, invalid ones should raise JSONDecodeError.
-    """
-
-    def test_valid_conditions_json_parses(self):
-        conditions = '[{"type":"metric","query":"test","expect":"2"}]'
-        parsed = json.loads(conditions)
-        assert isinstance(parsed, list)
-
-    def test_valid_rca_template_parses(self):
-        rca = '{"diagnosis":"test","confidence":"high","affected_device":"{device}"}'
-        parsed = json.loads(rca)
-        assert parsed["confidence"] == "high"
-
-    def test_invalid_json_raises(self):
-        with pytest.raises(json.JSONDecodeError):
-            json.loads("not-valid-json")
-
-    def test_empty_string_is_valid_empty(self):
-        # Empty string maps to None in the update — should not be json.loads'd
-        assert "".strip() == ""
-        # In the route: conditions.strip() or None → None (no json.loads called)
-        assert ("".strip() or None) is None
-
-    def test_whitespace_only_maps_to_none(self):
-        assert ("   ".strip() or None) is None
-
-
 # ── Integration tests (require running stack) ─────────────────────────────────
 
 @pytest.mark.integration
@@ -149,11 +121,25 @@ class TestPolicyEditEndpoints:
         assert resp.status_code == 200
         assert "not found" in resp.text.lower()
 
-    def test_post_edit_rejects_invalid_conditions_json(self, session):
-        # Use a known policy id from the seeded defaults; or test without a real id
+    def test_post_edit_with_structured_fields_returns_200(self, session):
+        # POSTing structured condition fields to a non-existent policy id still
+        # returns 200 (update_policy on unknown id is a no-op) and refreshes the list.
         resp = session.post(
             f"{self._base_url()}/partials/policy-edit/fake-id",
-            data={"autonomy_level": "L2", "conditions": "not-valid-json"},
+            data={
+                "autonomy_level": "L2",
+                "min_confidence": "low",
+                "max_risk": "high",
+                "c_type_0": "metric",
+                "c_query_0": "test_metric",
+                "c_match_0": "eq",
+                "c_value_0": "1",
+                "rca_diagnosis": "test diagnosis",
+                "rca_confidence": "high",
+                "fix_commands": "no shutdown",
+                "fix_type_val": "config_change",
+                "fix_risk": "low",
+                "fix_confidence": "high",
+            },
         )
         assert resp.status_code == 200
-        assert "Invalid JSON" in resp.text

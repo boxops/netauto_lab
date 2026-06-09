@@ -671,6 +671,10 @@ def _build_chapter(task: dict, prev_completed_at: str | None) -> dict:
         es = ev["exec_status"]
         ar = ev["alert_resolved"]
 
+        # Detect manual cases (AI was disabled when the alert arrived)
+        events_list = task.get("events") or []
+        is_manual_case = any(e.get("event_type") == "no_ai_skipped" for e in events_list)
+
         if awaiting:
             label, bt, bc, bi = "AWAITING APPROVAL",  "Requires action", "#a855f7", "🟣"
         elif status == "rejected":
@@ -694,6 +698,7 @@ def _build_chapter(task: dict, prev_completed_at: str | None) -> dict:
             "risk_confirmed":     content.get("risk_confirmed", ""),
             "chaos_notes":        content.get("chaos_notes", ""),
             "awaiting_approval":  awaiting,
+            "is_manual_case":     is_manual_case,
             "do_not_auto_execute": bool(content.get("do_not_auto_execute") or task.get("do_not_auto_execute")),
             "config_diff":        content.get("config_diff") or fix.get("config_diff", ""),
             **ev,
@@ -1557,6 +1562,72 @@ async def intents_page(request: Request):
     return templates.TemplateResponse(request, "intents.html", {"request": request})
 
 
+# ── Policy form parsing helpers ───────────────────────────────────────────────
+
+def _parse_condition_rows(form_data) -> str | None:
+    """Build conditions JSON array from numbered structured form fields c_type_N etc."""
+    conditions = []
+    for i in range(20):
+        ctype = form_data.get(f"c_type_{i}")
+        if not ctype:
+            break
+        if ctype == "metric":
+            query  = form_data.get(f"c_query_{i}", "").strip()
+            match  = form_data.get(f"c_match_{i}", "eq")
+            value  = form_data.get(f"c_value_{i}", "").strip()
+            cond: dict = {"type": "metric", "query": query}
+            if match == "ne":
+                cond["expect_ne"] = value
+            else:
+                cond["expect"] = value
+        elif ctype == "show_command":
+            cond = {
+                "type":            "show_command",
+                "command":         form_data.get(f"c_cmd_{i}", "").strip(),
+                "expect_contains": form_data.get(f"c_contains_{i}", "").strip(),
+            }
+        elif ctype == "nautobot":
+            cond = {
+                "type":   "nautobot",
+                "path":   form_data.get(f"c_path_{i}", "").strip(),
+                "field":  form_data.get(f"c_field_{i}", "").strip(),
+                "expect": form_data.get(f"c_nbexpect_{i}", "").strip(),
+            }
+        else:
+            continue
+        conditions.append(cond)
+    return json.dumps(conditions) if conditions else None
+
+
+def _parse_rca_template(form_data) -> str | None:
+    """Build rca_template JSON from individual rca_* form fields."""
+    diagnosis = form_data.get("rca_diagnosis", "").strip()
+    if not diagnosis:
+        return None
+    return json.dumps({
+        "diagnosis":      diagnosis,
+        "confidence":     form_data.get("rca_confidence", "high"),
+        "action":         form_data.get("rca_action", "").strip(),
+        "affected_device": "{device}",
+        "upstream_cause": form_data.get("rca_upstream_cause", "").strip(),
+        "is_leaf_symptom": bool(form_data.get("rca_is_leaf_symptom")),
+    })
+
+
+def _parse_fix_template(form_data) -> str | None:
+    """Build fix_template JSON from individual fix_* form fields."""
+    commands = form_data.get("fix_commands", "").strip()
+    if not commands:
+        return None
+    return json.dumps({
+        "fix_type":   form_data.get("fix_type_val", "config_change"),
+        "commands":   commands,
+        "risk":       form_data.get("fix_risk", "low"),
+        "confidence": form_data.get("fix_confidence", "high"),
+        "reason":     form_data.get("fix_reason", "").strip(),
+    })
+
+
 @app.get("/partials/policy-list", response_class=HTMLResponse)
 async def partial_policy_list(request: Request, tenant_id: str = "default"):
     policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
@@ -1571,27 +1642,34 @@ async def partial_policy_list(request: Request, tenant_id: str = "default"):
 async def partial_policy_create(
     request: Request,
     name: str = Form(...),
+    alertname: str = Form(""),
     fix_type: str = Form(""),
     device_role: str = Form(""),
     environment: str = Form(""),
     autonomy_level: str = Form("L2"),
+    min_confidence: str = Form("low"),
+    max_risk: str = Form("high"),
     promotable: str = Form(""),
-    conditions: str = Form(""),
-    rca_template: str = Form(""),
-    fix_template: str = Form(""),
     tenant_id: str = "default",
 ):
+    form_data = await request.form()
+    conditions   = _parse_condition_rows(form_data)
+    rca_template = _parse_rca_template(form_data)
+    fix_template = _parse_fix_template(form_data)
     data = {
         "name":           name,
+        "alertname":      alertname,
         "fix_type":       fix_type,
         "device_role":    device_role,
         "environment":    environment,
         "autonomy_level": autonomy_level,
-        "promotable":     bool(promotable),  # checkbox: "1" when checked, "" when unchecked
+        "min_confidence": min_confidence,
+        "max_risk":       max_risk,
+        "promotable":     bool(promotable),
         "tenant_id":      tenant_id,
-        "conditions":   conditions   or None,
-        "rca_template": rca_template or None,
-        "fix_template": fix_template or None,
+        "conditions":     conditions,
+        "rca_template":   rca_template,
+        "fix_template":   fix_template,
     }
     await run_in_threadpool(task_store.create_policy, data)
     policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
@@ -1633,9 +1711,31 @@ async def partial_policy_edit_form(request: Request, policy_id: str):
     policy = await run_in_threadpool(task_store.get_policy, policy_id)
     if not policy:
         return HTMLResponse(f"<span class='muted'>Policy {policy_id} not found.</span>")
+    import json as _json
+    conditions_parsed: list = []
+    if policy.get("conditions"):
+        try:
+            conditions_parsed = _json.loads(policy["conditions"])
+        except Exception:
+            conditions_parsed = []
+    rca_parsed: dict = {}
+    if policy.get("rca_template"):
+        try:
+            rca_parsed = _json.loads(policy["rca_template"])
+        except Exception:
+            rca_parsed = {}
+    fix_parsed: dict = {}
+    if policy.get("fix_template"):
+        try:
+            fix_parsed = _json.loads(policy["fix_template"])
+        except Exception:
+            fix_parsed = {}
     return templates.TemplateResponse(request, "partials/policy_edit_form.html", {
-        "request": request,
-        "policy":  policy,
+        "request":           request,
+        "policy":            policy,
+        "conditions_parsed": conditions_parsed,
+        "rca_parsed":        rca_parsed,
+        "fix_parsed":        fix_parsed,
     })
 
 
@@ -1643,38 +1743,40 @@ async def partial_policy_edit_form(request: Request, policy_id: str):
 async def partial_policy_edit_save(
     request: Request,
     policy_id: str,
+    name:            str = Form(""),
+    alertname:       str = Form(""),
+    fix_type:        str = Form(""),
+    device_role:     str = Form(""),
+    environment:     str = Form(""),
     autonomy_level:  str = Form("L2"),
     min_confidence:  str = Form("low"),
     max_risk:        str = Form("high"),
     description:     str = Form(""),
-    conditions:      str = Form(""),
-    rca_template:    str = Form(""),
-    fix_template:    str = Form(""),
     tenant_id:       str = "default",
 ):
-    for field_name, field_val in [
-        ("conditions",   conditions),
-        ("rca_template", rca_template),
-        ("fix_template", fix_template),
-    ]:
-        if field_val.strip():
-            try:
-                json.loads(field_val)
-            except json.JSONDecodeError as exc:
-                return templates.TemplateResponse(request, "partials/action_status.html", {
-                    "request": request,
-                    "msg":     f"Invalid JSON in {field_name}: {exc}",
-                    "ok":      False,
-                })
-    updates = {
+    form_data = await request.form()
+    conditions   = _parse_condition_rows(form_data)
+    rca_template = _parse_rca_template(form_data)
+    fix_template = _parse_fix_template(form_data)
+    updates: dict = {
         "autonomy_level": autonomy_level,
         "min_confidence": min_confidence,
         "max_risk":       max_risk,
         "description":    description,
-        "conditions":     conditions.strip()   or None,
-        "rca_template":   rca_template.strip() or None,
-        "fix_template":   fix_template.strip() or None,
+        "conditions":     conditions,
+        "rca_template":   rca_template,
+        "fix_template":   fix_template,
     }
+    if name:
+        updates["name"] = name
+    if alertname is not None:
+        updates["alertname"] = alertname
+    if fix_type is not None:
+        updates["fix_type"] = fix_type
+    if device_role is not None:
+        updates["device_role"] = device_role
+    if environment is not None:
+        updates["environment"] = environment
     await run_in_threadpool(task_store.update_policy, policy_id, updates)
     policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
     return templates.TemplateResponse(request, "partials/policy_list.html", {
@@ -2132,19 +2234,62 @@ async def system_page(request: Request):
 
 @app.get("/partials/ops-health", response_class=HTMLResponse)
 async def partial_ops_health(request: Request):
-    kpis, badges = await asyncio.gather(
+    async def _fetch_ai_mode() -> bool:
+        try:
+            r = await _http_client.get(f"{OPS_AGENT_URL}/ai-mode", timeout=3.0)
+            return r.json().get("ai_enabled", True)
+        except Exception:
+            return True
+
+    kpis, badges, ai_enabled = await asyncio.gather(
         run_in_threadpool(task_store.get_kpis),
         asyncio.gather(*[
             _fetch_agent_health(_http_client, name, url)
             for name, url in [("AI Agent", OPS_AGENT_URL)]
         ]),
+        _fetch_ai_mode(),
     )
     agent_online = badges[0]["label"] == "Online" if badges else False
     return templates.TemplateResponse(request, "partials/ops_health.html", {
         "request":      request,
         "kpis":         kpis,
         "agent_online": agent_online,
+        "ai_enabled":   ai_enabled,
     })
+
+
+@app.get("/partials/ai-mode-badge", response_class=HTMLResponse)
+async def partial_ai_mode_badge(request: Request):
+    health_task = _fetch_agent_health(_http_client, "AI Agent", OPS_AGENT_URL)
+    async def _get_mode():
+        try:
+            r = await _http_client.get(f"{OPS_AGENT_URL}/ai-mode", timeout=3.0)
+            return r.json().get("ai_enabled", True)
+        except Exception:
+            return True
+    health, enabled = await asyncio.gather(health_task, _get_mode())
+    agent_online = health["label"] == "Online"
+    return templates.TemplateResponse(request, "partials/ai_mode_badge.html",
+                                      {"request": request, "ai_enabled": enabled, "agent_online": agent_online})
+
+
+@app.post("/partials/ai-mode-toggle", response_class=HTMLResponse)
+async def partial_ai_mode_toggle(request: Request):
+    async def _toggle():
+        try:
+            current = (await _http_client.get(f"{OPS_AGENT_URL}/ai-mode", timeout=3.0)).json().get("ai_enabled", True)
+            r = await _http_client.post(f"{OPS_AGENT_URL}/ai-mode",
+                                        json={"ai_enabled": not current}, timeout=3.0)
+            return r.json().get("ai_enabled", True)
+        except Exception:
+            return True
+    health, enabled = await asyncio.gather(
+        _fetch_agent_health(_http_client, "AI Agent", OPS_AGENT_URL),
+        _toggle(),
+    )
+    agent_online = health["label"] == "Online"
+    return templates.TemplateResponse(request, "partials/ai_mode_badge.html",
+                                      {"request": request, "ai_enabled": enabled, "agent_online": agent_online})
 
 
 if __name__ == "__main__":
