@@ -1,0 +1,53 @@
+<div id="active-pipelines-list"
+     hx-get="/partials/active-pipelines?sel_fp={{ sel_fp | urlencode }}"
+     hx-trigger="sse-refresh, every 5s"
+     hx-swap="outerHTML">
+
+{% if not pipelines %}
+<div class="muted" style="font-size:0.82em; padding:12px 10px; text-align:center">
+  ✅ No active incidents
+</div>
+{% else %}
+{% for p in pipelines %}
+<div class="alert-row
+            {% if p.selected %}selected{% endif %}
+            {% if p.is_awaiting %}awaiting{% endif %}"
+     data-fp="{{ p.fp }}"
+     {% if p.is_awaiting %}data-awaiting="true"{% endif %}
+     onclick="selectPipeline('{{ p.fp }}')">
+
+  {# Severity badge #}
+  <span style="font-size:0.65em; font-weight:700; padding:2px 5px;
+               background:{{ p.sev_color }}22; color:{{ p.sev_color }};
+               border:1px solid {{ p.sev_color }}55; border-radius:3px;
+               min-width:22px; text-align:center; flex-shrink:0">
+    {{ p.sev_badge }}
+  </span>
+
+  {# Alert name + device #}
+  <div style="flex:1; min-width:0">
+    <div style="font-weight:600; font-size:0.82em;
+                overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+                color:{% if p.is_awaiting %}#c084fc{% else %}var(--text){% endif %}">
+      {{ p.alertname }}
+    </div>
+    {% if p.device %}
+    <div class="mono muted" style="font-size:0.7em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">
+      {{ p.device }}
+    </div>
+    {% endif %}
+    <div style="font-size:0.7em; color:{{ p.step_color }}; white-space:nowrap; margin-top:1px">
+      {{ p.step_icon }} {{ p.step_label }}
+    </div>
+  </div>
+
+  {# Age #}
+  <div class="muted" style="font-size:0.68em; flex-shrink:0; text-align:right">
+    {{ p.age }}
+  </div>
+
+</div>
+{% endfor %}
+{% endif %}
+
+</div>

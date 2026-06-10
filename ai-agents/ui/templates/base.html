@@ -15,12 +15,18 @@
   </head>
   <body>
     <div class="page-header">
-      <div class="flex items-center gap-12 flex-wrap">
+      <div class="flex items-center gap-12 flex-wrap" style="justify-content:space-between">
         <div>
           <h1>📡 Clano</h1>
           <p class="muted" style="font-size:0.82em; margin-top:2px">
             Closed-Loop Autonomous Network Ops · powered by AI agents
           </p>
+        </div>
+        <div id="ai-mode-badge"
+             hx-get="/partials/ai-mode-badge"
+             hx-trigger="load, every 30s"
+             hx-swap="outerHTML"
+             style="display:flex; flex-direction:column; align-items:center; gap:6px">
         </div>
       </div>
     </div>
@@ -58,7 +64,7 @@
         var sse = null;
         var TARGETS = [
           "pipeline-chronicle",
-          "task-queue-body",
+          "active-pipelines-list",
           "approval-badge",
           "incident-list",
           "ops-health-bar",

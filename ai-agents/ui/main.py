@@ -411,6 +411,7 @@ app = FastAPI(title="Network AI Agents", description="Network Automation AI Agen
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=TMPL_DIR)
 templates.env.filters["from_json"] = lambda s: json.loads(s) if s else {}
+templates.env.filters["humanize_event"] = lambda et: _EVENT_LABELS.get(et, et.replace("_", " ").capitalize())
 
 store      = ActivityStore()
 task_store = TaskStore()
@@ -422,6 +423,26 @@ kb_store   = KBStore()
 def _truncate(text: str, max_len: int = 140) -> str:
     text = text or ""
     return text if len(text) <= max_len else f"{text[:max_len - 3]}..."
+
+
+_EVENT_LABELS: dict[str, str] = {
+    "rca_complete":          "Root cause identified",
+    "fix_proposal_complete": "Fix proposed",
+    "validation_complete":   "Validation complete",
+    "approval_requested":    "Awaiting approval",
+    "auto_approved":         "Auto-approved",
+    "execution_complete":    "Fix executed",
+    "execution_verified":    "Alert resolved",
+    "fast_path_resolved":    "Fast-path resolved",
+    "no_ai_skipped":         "AI disabled — manual review",
+    "pipeline_failed":       "Pipeline failed",
+    "pipeline_started":      "Pipeline started",
+    "intent_triggered":      "Intent triggered",
+}
+
+
+def _humanize_event_type(event_type: str) -> str:
+    return _EVENT_LABELS.get(event_type, event_type.replace("_", " ").capitalize())
 
 
 def _age(ts_str: str | None) -> str:
@@ -994,6 +1015,15 @@ def _incident_list_context(open_only: bool = True) -> dict:
 
 _TERMINAL_STATUSES = {"complete", "failed", "rejected"}
 
+_STAGE_ORDER = {"rca": 1, "fix_proposal": 2, "validation": 3, "approval_gate": 4, "verify": 5}
+_STAGE_NAMES = {
+    "rca":           "Investigating",
+    "fix_proposal":  "Fix proposed",
+    "validation":    "Validating",
+    "approval_gate": "Awaiting approval",
+    "verify":        "Verifying",
+}
+
 
 def _pipeline_fingerprints(active_only: bool = True) -> list[tuple[str, str]]:
     tasks = task_store.list_tasks(type="rca", limit=200)
@@ -1013,6 +1043,75 @@ def _pipeline_fingerprints(active_only: bool = True) -> list[tuple[str, str]]:
         title = (t.get("title") or "").strip()
         seen[fp] = title if title else fp[:20]
     return [(fp, label) for fp, label in seen.items()]
+
+
+def _active_pipelines_context(sel_fp: str = "") -> dict:
+    """Compact summary list of every active pipeline for the side panel."""
+    all_tasks = task_store.list_tasks(
+        exclude_statuses=list(_TERMINAL_STATUSES), limit=500
+    )
+
+    # Group non-terminal tasks by fingerprint
+    by_fp: dict[str, list[dict]] = {}
+    for t in all_tasks:
+        fp = t.get("alert_fingerprint", "")
+        if fp:
+            by_fp.setdefault(fp, []).append(t)
+
+    pipelines: list[dict] = []
+    for fp, tasks in by_fp.items():
+        rca = next((t for t in tasks if t["type"] == "rca"), None)
+        if not rca:
+            continue
+
+        try:
+            content = json.loads(rca.get("content") or "{}")
+        except Exception:
+            content = {}
+
+        # Most advanced stage currently active
+        most_advanced = max(tasks, key=lambda t: _STAGE_ORDER.get(t["type"], 0))
+        stage_type   = most_advanced["type"]
+        stage_status = most_advanced["status"]
+
+        if stage_status == "awaiting_approval":
+            step_label, step_color, step_icon = "Awaiting approval", "#a855f7", "🟣"
+        elif stage_status == "failed":
+            step_label, step_color, step_icon = "Failed",            "#ef4444", "❌"
+        elif stage_status in ("running", "claimed", "pending"):
+            step_label = _STAGE_NAMES.get(stage_type, stage_type)
+            step_color, step_icon = "#3b82f6", "⟳"
+        else:
+            step_label = _STAGE_NAMES.get(stage_type, stage_type)
+            step_color, step_icon = "#22c55e", "✓"
+
+        severity = content.get("severity", "")
+        sev_badge = "P1" if severity == "critical" else ("P2" if severity == "warning" else "P3")
+        sev_color = "#ef4444" if severity == "critical" else ("#f59e0b" if severity == "warning" else "#6b7280")
+
+        pipelines.append({
+            "fp":          fp,
+            "alertname":   content.get("alertname") or fp[:20],
+            "device":      content.get("device", ""),
+            "severity":    severity,
+            "sev_badge":   sev_badge,
+            "sev_color":   sev_color,
+            "step_label":  step_label,
+            "step_color":  step_color,
+            "step_icon":   step_icon,
+            "step_num":    _STAGE_ORDER.get(stage_type, 1),
+            "age":         _age(rca.get("created_at")),
+            "selected":    fp == sel_fp,
+            "is_awaiting": stage_status == "awaiting_approval",
+        })
+
+    # Sort: awaiting_approval first, then most advanced stage, then by name
+    def _sort_key(p: dict):
+        urgency = 0 if p["step_label"] == "Awaiting approval" else (1 if p["step_color"] == "#ef4444" else 2)
+        return (urgency, -p["step_num"], p["alertname"])
+
+    pipelines.sort(key=_sort_key)
+    return {"pipelines": pipelines, "sel_fp": sel_fp}
 
 
 def _task_queue_context(
@@ -1244,11 +1343,17 @@ def _task_detail_context(task_id: str) -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    fps, task_ctx = await asyncio.gather(
+    fps, approval_tasks, task_ctx = await asyncio.gather(
         run_in_threadpool(_pipeline_fingerprints),
+        run_in_threadpool(task_store.list_tasks, status="awaiting_approval", limit=1),
         run_in_threadpool(_task_queue_context),
     )
-    sel_fp = fps[0][0] if fps else ""
+    # Prefer pipelines awaiting human approval; fall back to the most recently created active one
+    if approval_tasks:
+        awaiting_fp = approval_tasks[0].get("alert_fingerprint", "")
+        sel_fp = awaiting_fp if awaiting_fp else (fps[0][0] if fps else "")
+    else:
+        sel_fp = fps[0][0] if fps else ""
     return templates.TemplateResponse(request, "pipeline.html", {
         "request":  request,
         "fps":      fps,
@@ -1407,6 +1512,14 @@ async def partial_live_feed(request: Request, tenant_id: str = "default"):
     return templates.TemplateResponse(request, "partials/live_feed.html", {
         "request": request,
         "events":  events,
+    })
+
+
+@app.get("/partials/active-pipelines", response_class=HTMLResponse)
+async def partial_active_pipelines(request: Request, sel_fp: str = ""):
+    ctx = await run_in_threadpool(_active_pipelines_context, sel_fp)
+    return templates.TemplateResponse(request, "partials/active_pipelines.html", {
+        "request": request, **ctx,
     })
 
 

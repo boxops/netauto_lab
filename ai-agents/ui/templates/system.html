@@ -65,4 +65,94 @@
   <div class="muted" style="font-size:0.85em; padding:8px 0">Loading activity…</div>
 </div>
 
+<hr class="divider" />
+
+{# ════════════════════════════════════════════════════════════════════════════
+   SECTION C — TASK QUEUE
+   ════════════════════════════════════════════════════════════════════════════ #}
+<div class="section-title">📋 Task Queue</div>
+<p class="muted" style="font-size:0.82em; margin-bottom:12px">
+  All tasks across the pipeline — filter by status or browse the full history.
+  Click a row to see the raw task record.
+</p>
+
+<div class="filters-row mb-8">
+  <select id="sys-status-filter"
+          hx-get="/partials/task-queue"
+          hx-target="#sys-task-queue-body"
+          hx-trigger="change"
+          hx-include="#sys-status-filter, #sys-show-archived"
+          hx-swap="innerHTML">
+    <option value="">Active statuses</option>
+    {% for s in ["pending","claimed","running","awaiting_approval","complete","failed","rejected"] %}
+    <option value="{{ s }}">{{ s }}</option>
+    {% endfor %}
+  </select>
+  <label style="display:flex; align-items:center; gap:5px; font-size:0.83em; color:var(--text-sub); cursor:pointer; user-select:none">
+    <input type="checkbox" id="sys-show-archived" name="show_archived" value="1"
+           hx-get="/partials/task-queue"
+           hx-target="#sys-task-queue-body"
+           hx-trigger="change"
+           hx-include="#sys-status-filter, #sys-show-archived"
+           hx-swap="innerHTML">
+    Show archived
+  </label>
+  <button class="btn btn-secondary btn-sm"
+          hx-get="/partials/task-queue"
+          hx-target="#sys-task-queue-body"
+          hx-include="#sys-status-filter, #sys-show-archived"
+          hx-swap="innerHTML">
+    🔄 Refresh
+  </button>
+  <button class="btn btn-secondary btn-sm"
+          hx-post="/tasks/clear"
+          hx-vals='{"confirmed":"yes"}'
+          hx-target="#sys-clear-status"
+          hx-swap="innerHTML"
+          hx-confirm="Delete ALL tasks and reset the alert poller? This cannot be undone.">
+    🗑️ Clear All Tasks
+  </button>
+  <span id="sys-clear-status" class="muted" style="font-size:0.82em"></span>
+</div>
+
+<div class="table-wrap mb-12">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>ID</th><th>Status</th><th>Priority</th><th>Title</th><th>Age</th><th></th>
+      </tr>
+    </thead>
+    <tbody id="sys-task-queue-body"
+           hx-get="/partials/task-queue"
+           hx-include="#sys-status-filter, #sys-show-archived"
+           hx-trigger="load"
+           hx-swap="innerHTML">
+    </tbody>
+  </table>
+</div>
+
+<div class="section-title" style="margin-top:20px">🔍 Task Detail</div>
+<div id="sys-task-detail" class="detail-panel">
+  <span class="muted">Click a task row above to see its full record.</span>
+</div>
+
+<script>
+  document.addEventListener("htmx:afterSwap", function (e) {
+    if (e.detail.target && e.detail.target.id === "sys-task-queue-body") {
+      attachSysRowClicks();
+    }
+  });
+  document.addEventListener("DOMContentLoaded", attachSysRowClicks);
+  function attachSysRowClicks() {
+    document.querySelectorAll("#sys-task-queue-body tr[data-task-id]").forEach(function (row) {
+      row.addEventListener("click", function () {
+        htmx.ajax("GET", "/partials/task/" + this.dataset.taskId, {
+          target: "#sys-task-detail",
+          swap:   "innerHTML",
+        });
+      });
+    });
+  }
+</script>
+
 {% endblock %}

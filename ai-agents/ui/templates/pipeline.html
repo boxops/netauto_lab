@@ -7,28 +7,29 @@
 {# ── Onboarding callout (dismissed via localStorage) ─────────────────────── #}
 <div class="help-callout" id="onboarding-callout" style="display:none">
   <div class="flex items-center gap-8 mb-8">
-    <strong>ℹ How this works</strong>
+    <strong>ℹ️ Welcome to Clano</strong>
     <button onclick="dismissOnboarding()" class="btn btn-secondary btn-sm"
             style="margin-left:auto; font-size:0.75em; padding:2px 8px">Dismiss</button>
   </div>
-  <p style="margin:0 0 6px">
-    When an alert fires in Prometheus, the AI agent runs a fully automated pipeline:
+  <p style="margin:0 0 8px">
+    Network incidents get <strong>investigated and fixed automatically</strong> — without you needing to dig through logs or run commands manually.
+    When something goes wrong, Clano works through five steps and stops for your approval before touching anything:
   </p>
   <div style="display:flex; gap:6px; flex-wrap:wrap; font-size:0.82em; margin-bottom:8px">
-    <span class="pill" style="background:#3b82f622; color:#60a5fa; border-color:#3b82f655">1 · Investigate</span>
+    <span class="pill" style="background:#3b82f622; color:#60a5fa; border-color:#3b82f655">1 · Investigate what broke</span>
     <span style="color:var(--text-sub)">→</span>
-    <span class="pill" style="background:#10b98122; color:#34d399; border-color:#10b98155">2 · Propose fix</span>
+    <span class="pill" style="background:#10b98122; color:#34d399; border-color:#10b98155">2 · Suggest a fix</span>
     <span style="color:var(--text-sub)">→</span>
-    <span class="pill" style="background:#8b5cf622; color:#a78bfa; border-color:#8b5cf655">3 · Validate</span>
+    <span class="pill" style="background:#8b5cf622; color:#a78bfa; border-color:#8b5cf655">3 · Check the fix is safe</span>
     <span style="color:var(--text-sub)">→</span>
-    <span class="pill" style="background:#f59e0b22; color:#fbbf24; border-color:#f59e0b55">4 · Approval gate</span>
+    <span class="pill" style="background:#f59e0b22; color:#fbbf24; border-color:#f59e0b55">4 · Wait for your approval ← you are here</span>
     <span style="color:var(--text-sub)">→</span>
-    <span class="pill" style="background:#22c55e22; color:#4ade80; border-color:#22c55e55">5 · Execute &amp; Verify</span>
+    <span class="pill" style="background:#22c55e22; color:#4ade80; border-color:#22c55e55">5 · Apply the fix &amp; confirm it worked</span>
   </div>
   <p style="margin:0; color:var(--text-sub)">
-    The <strong>Chronicle</strong> below shows every step of the active pipeline in real time.
-    Use <strong>⚙️ Config</strong> to tune how much autonomy the AI has.
-    Use <strong>💬 Assist</strong> to ask the agent questions in plain English.
+    Select an incident on the left to see its full timeline.
+    Use <strong>⚙️ Config</strong> to control how much the AI can do on its own.
+    Use <strong>💬 Assist</strong> to ask questions about the network in plain English.
   </p>
 </div>
 
@@ -42,150 +43,58 @@
   </div>
 </div>
 
-<hr class="divider" />
+{# ── Fixed two-pane ops viewport ─────────────────────────────────────────── #}
+<div class="ops-viewport">
 
-{# ── Live Activity Feed ───────────────────────────────────────────────────── #}
-<div class="section">
-  <div class="section-title" style="margin-bottom:8px">⚡ Live Activity</div>
-  <div id="live-feed"
-       hx-get="/partials/live-feed"
-       hx-trigger="load, sse:tasks-changed, every 3s"
-       hx-swap="outerHTML">
-    <div class="muted" style="font-size:0.82em">Loading activity…</div>
-  </div>
-</div>
+  {# ── Left pane: incident list + event log ──────────────────────────────── #}
+  <div class="ops-left-pane">
 
-<hr class="divider" />
+    <div class="ops-pane-label">Active Incidents</div>
 
-{# ── Alert Processing Pipeline ────────────────────────────────────────────── #}
-<div class="section">
-  <div class="section-title">🌐 Alert Processing Pipeline</div>
+    <div class="ops-incident-list">
+      <div id="active-pipelines-list"
+           hx-get="/partials/active-pipelines?sel_fp={{ sel_fp | default('') | urlencode }}"
+           hx-trigger="load, sse-refresh, every 5s"
+           hx-swap="outerHTML">
+        <div class="muted" style="font-size:0.82em; padding:10px">Loading…</div>
+      </div>
+    </div>
 
-  <div class="fp-row" style="margin-bottom:10px">
-    <select id="fp-select" name="fp" onchange="reloadChronicle(this.value)">
-      {% for fp, label in fps %}
-      <option value="{{ fp }}" {% if fp == sel_fp %}selected{% endif %}>{{ label }}</option>
-      {% else %}
-      <option value="">No alerts found</option>
-      {% endfor %}
-    </select>
-    <button class="btn btn-secondary"
-            hx-get="/partials/fingerprints"
-            hx-target="#fp-select"
-            hx-swap="innerHTML">
-      🔄 Refresh
-    </button>
+    <div class="ops-pane-label" style="margin-top:0">Recent Events</div>
+    <div class="ops-event-log">
+      <div id="live-feed"
+           hx-get="/partials/live-feed"
+           hx-trigger="load, sse:tasks-changed, every 3s"
+           hx-swap="outerHTML">
+        <div class="muted" style="font-size:0.82em; padding:6px 8px">Loading…</div>
+      </div>
+    </div>
+
   </div>
 
-  <div id="pipeline-content">
-    <div id="pipeline-chronicle"
-         hx-get="/partials/chronicle?fp={{ sel_fp | default('') }}"
-         hx-trigger="load, sse-refresh"
-         hx-swap="outerHTML">
-      <span class="muted" style="font-size:0.83em">Loading pipeline…</span>
+  {# ── Right pane: incident chronicle ────────────────────────────────────── #}
+  <div class="ops-right-pane">
+    <div id="pipeline-content">
+      <div id="pipeline-chronicle"
+           hx-get="/partials/chronicle?fp={{ sel_fp | default('') }}"
+           hx-trigger="load, sse-refresh"
+           hx-swap="outerHTML">
+        <div style="padding:40px 0; text-align:center">
+          <div style="font-size:1.5em; margin-bottom:10px">📋</div>
+          <div class="muted" style="font-size:0.87em">
+            Select an incident on the left to see its full timeline.
+          </div>
+        </div>
+      </div>
     </div>
   </div>
-</div>
 
-{# Task detail flyout — outside polling boundary so it survives refreshes #}
-<div id="pipeline-task-detail" class="detail-panel mb-16" style="display:none"></div>
-
-<hr class="divider" />
-
-{# ── Task Queue ──────────────────────────────────────────────────────────── #}
-<div class="section">
-  <div class="section-title">📋 Task Queue</div>
-  <p class="muted" style="font-size:0.82em; margin-bottom:10px">
-    Every pipeline stage is a task. Click a row to inspect its full timeline and raw data.
-    Approve or reject changes directly in the Chronicle above.
-  </p>
-
-  <div class="filters-row mb-8">
-    <select id="status-filter"
-            hx-get="/partials/task-queue"
-            hx-target="#task-queue-body"
-            hx-trigger="change"
-            hx-include="#status-filter, #type-filter, #show-archived"
-            hx-swap="innerHTML">
-      <option value="">Active statuses</option>
-      {% for s in ["pending","claimed","running","awaiting_approval","complete","failed","rejected"] %}
-      <option value="{{ s }}">{{ s }}</option>
-      {% endfor %}
-    </select>
-    <select id="type-filter"
-            hx-get="/partials/task-queue"
-            hx-target="#task-queue-body"
-            hx-trigger="change"
-            hx-include="#status-filter, #type-filter, #show-archived"
-            hx-swap="innerHTML">
-      <option value="">All types</option>
-      {% for t in ["rca"] %}
-      <option value="{{ t }}">{{ t }}</option>
-      {% endfor %}
-    </select>
-    <label style="display:flex; align-items:center; gap:5px; font-size:0.83em; color:var(--text-sub); cursor:pointer; user-select:none">
-      <input type="checkbox" id="show-archived" name="show_archived" value="1"
-             hx-get="/partials/task-queue"
-             hx-target="#task-queue-body"
-             hx-trigger="change"
-             hx-include="#status-filter, #type-filter, #show-archived"
-             hx-swap="innerHTML">
-      Show archived
-    </label>
-    <button class="btn btn-secondary btn-sm"
-            hx-get="/partials/task-queue"
-            hx-target="#task-queue-body"
-            hx-include="#status-filter, #type-filter, #show-archived"
-            hx-swap="innerHTML">
-      🔄 Refresh
-    </button>
-  </div>
-
-  <div class="table-wrap mb-12">
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>ID</th><th>Type</th><th>Status</th><th>Priority</th>
-          <th>Assigned To</th><th>Created By</th><th>Title</th><th>Age</th>
-        </tr>
-      </thead>
-      <tbody id="task-queue-body"
-             hx-get="/partials/task-queue"
-             hx-include="#status-filter, #type-filter, #show-archived"
-             hx-trigger="sse-refresh"
-             hx-swap="innerHTML">
-        {% include "partials/task_queue.html" %}
-      </tbody>
-    </table>
-  </div>
-
-  <hr class="divider" />
-  <div class="flex gap-8 items-center flex-wrap">
-    <button class="btn btn-secondary btn-sm"
-            hx-post="/tasks/clear"
-            hx-vals='{"confirmed":"yes"}'
-            hx-target="#clear-status"
-            hx-swap="innerHTML"
-            hx-confirm="Delete ALL tasks and reset the alert poller? This cannot be undone.">
-      🗑️ Clear All Tasks
-    </button>
-    <span id="clear-status" class="muted" style="font-size:0.82em"></span>
-  </div>
-</div>
-
-{# ── Task Detail ─────────────────────────────────────────────────────────── #}
-<div class="section">
-  <div class="section-title">🔍 Task Detail</div>
-  <div id="task-detail" class="detail-panel">
-    <span class="muted">Click a task row above to see its full timeline and context.</span>
-  </div>
 </div>
 
 <script>
-  // Show onboarding callout unless dismissed or help texts globally disabled
   (function () {
-    var helpOff = localStorage.getItem("clano-help-texts") === "0";
-    var dismissed = localStorage.getItem("onboarding-dismissed") === "1";
+    var helpOff    = localStorage.getItem("clano-help-texts") === "0";
+    var dismissed  = localStorage.getItem("onboarding-dismissed") === "1";
     if (!helpOff && !dismissed) {
       document.getElementById("onboarding-callout").style.display = "block";
     }
@@ -196,39 +105,46 @@
     document.getElementById("onboarding-callout").style.display = "none";
   }
 
-  // Reload Chronicle when alert fingerprint changes
+  var selectedFp = "{{ sel_fp | default('') }}";
+
   function reloadChronicle(fp) {
     htmx.ajax("GET", "/partials/chronicle?fp=" + encodeURIComponent(fp || ""), {
       target: "#pipeline-content",
-      swap: "innerHTML",
+      swap:   "innerHTML",
     });
   }
 
-  // Show pipeline-task-detail panel when a Details button populates it
-  document.body.addEventListener("htmx:afterSettle", function (e) {
-    if (e.detail.target.id === "pipeline-task-detail") {
-      var panel = document.getElementById("pipeline-task-detail");
-      panel.style.display = "block";
-      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  function selectPipeline(fp) {
+    if (!fp) return;
+    selectedFp = fp;
+    reloadChronicle(fp);
+    var panel = document.getElementById("active-pipelines-list");
+    if (panel) {
+      panel.setAttribute("hx-get",
+        "/partials/active-pipelines?sel_fp=" + encodeURIComponent(fp));
+      htmx.process(panel);
+    }
+    highlightSelectedPipeline();
+  }
+
+  function highlightSelectedPipeline() {
+    document.querySelectorAll(".alert-row").forEach(function (row) {
+      row.classList.toggle("selected", row.dataset.fp === selectedFp);
+    });
+  }
+
+  // Find and select the first incident that is awaiting approval
+  function selectFirstApproval() {
+    var row = document.querySelector(".alert-row.awaiting");
+    if (!row) row = document.querySelector(".alert-row");
+    if (row) selectPipeline(row.dataset.fp);
+  }
+
+  // Re-highlight after every HTMX poll of the incident list
+  document.addEventListener("htmx:afterSwap", function (e) {
+    if (e.detail.target && e.detail.target.id === "active-pipelines-list") {
+      highlightSelectedPipeline();
     }
   });
-
-  // Task row click → load detail panel
-  document.addEventListener("htmx:afterSwap", function (e) {
-    if (e.detail.target.id === "task-queue-body") attachRowClicks();
-  });
-  document.addEventListener("DOMContentLoaded", attachRowClicks);
-
-  function attachRowClicks() {
-    document.querySelectorAll("#task-queue-body tr[data-task-id]").forEach(function (row) {
-      row.addEventListener("click", function () {
-        var id = this.dataset.taskId;
-        htmx.ajax("GET", "/partials/task/" + id, {
-          target: "#task-detail",
-          swap: "innerHTML",
-        });
-      });
-    });
-  }
 </script>
 {% endblock %}

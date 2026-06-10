@@ -12,6 +12,22 @@
      hx-trigger="sse-refresh, every 30s"
      hx-swap="outerHTML">
 
+  {# Pending approval banner — full-width alert when action is needed #}
+  {% set approvals = today.get("awaiting_approval", 0) %}
+  {% if approvals > 0 %}
+  <div style="width:100%; grid-column:1/-1; padding:7px 14px; margin-bottom:4px;
+              background:#a855f722; border:1px solid #a855f755; border-radius:6px;
+              display:flex; align-items:center; gap:10px; font-size:0.85em">
+    <span style="color:#a855f7; font-size:1.1em">🟣</span>
+    <strong style="color:#a855f7">{{ approvals }} change{% if approvals != 1 %}s{% endif %} awaiting your approval</strong>
+    <a href="#"
+       onclick="if(typeof selectFirstApproval==='function')selectFirstApproval(); return false;"
+       style="margin-left:auto; color:#a855f7; text-decoration:underline; cursor:pointer">
+      Review →
+    </a>
+  </div>
+  {% endif %}
+
   {# Active pipelines = all tasks minus terminal states #}
   {% set _total = today.get("total_tasks", 0) %}
   {% set _done  = today.get("complete", 0) + today.get("failed", 0) + today.get("awaiting_approval", 0) %}
@@ -23,14 +39,16 @@
     <div class="kpi-label">Active pipelines</div>
   </div>
 
-  {# Pending approvals #}
-  {% set approvals = today.get("awaiting_approval", 0) %}
-  <div class="ops-health-kpi">
+  {# Pending approvals — clicking selects the first awaiting-approval incident #}
+  <a href="#" onclick="if(typeof selectFirstApproval==='function')selectFirstApproval(); return false;"
+     style="text-decoration:none; display:contents">
+  <div class="ops-health-kpi" style="{% if approvals > 0 %}cursor:pointer; background:#a855f711; border-radius:6px;{% endif %}">
     <div class="kpi-value" style="color:{% if approvals > 0 %}#a855f7{% else %}var(--text-sub){% endif %}">
       {{ approvals }}
     </div>
-    <div class="kpi-label">Awaiting approval</div>
+    <div class="kpi-label">Awaiting approval{% if approvals > 0 %} ↗{% endif %}</div>
   </div>
+  </a>
 
   {# Resolved today #}
   {% set resolved = today.get("complete", 0) %}

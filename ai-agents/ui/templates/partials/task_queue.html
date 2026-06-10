@@ -1,7 +1,6 @@
 {% for t in tasks %}
 <tr class="clickable" data-task-id="{{ t.id }}">
   <td class="mono" style="font-size:0.78em">{{ t.id }}</td>
-  <td>{{ t.type_icon }} {{ t.type }}</td>
   <td>
     <span class="pill"
           style="background:{{ t.status_color }}22; color:{{ t.status_color }}; border-color:{{ t.status_color }}55">
@@ -14,11 +13,22 @@
       {{ t.priority }}
     </span>
   </td>
-  <td class="muted">{{ t.assigned_to }}</td>
-  <td class="muted">{{ t.created_by }}</td>
   <td>{{ t.title }}</td>
   <td class="muted">{{ t.age }}</td>
+  <td>
+    {% if t.status == "awaiting_approval" %}
+    <button class="btn btn-sm"
+            style="background:#22c55e22; color:#22c55e; border:1px solid #22c55e55; font-size:0.75em; padding:2px 8px"
+            hx-post="/tasks/{{ t.id }}/approve"
+            hx-target="closest td"
+            hx-swap="innerHTML"
+            onclick="event.stopPropagation()"
+            title="Approve this change">
+      ✓ Approve
+    </button>
+    {% endif %}
+  </td>
 </tr>
 {% else %}
-<tr><td colspan="8" class="muted" style="text-align:center; padding:20px">No tasks found.</td></tr>
+<tr><td colspan="6" class="muted" style="text-align:center; padding:20px">No tasks found.</td></tr>
 {% endfor %}

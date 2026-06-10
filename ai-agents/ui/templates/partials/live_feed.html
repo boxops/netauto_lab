@@ -12,38 +12,23 @@
     "no_ai_skipped":      "#6b7280",
 } %}
 {% if not events %}
-  <div class="muted" style="font-size:0.82em; padding:6px 0">No pipeline events yet.</div>
+  <div class="muted" style="font-size:0.78em; padding:8px">No events yet.</div>
 {% else %}
-<div style="display:flex; flex-direction:column; gap:0">
   {% for e in events %}
   {% set color = event_colors.get(e.event_type, '#6b7280') %}
-  <div style="display:flex; align-items:center; gap:10px; font-size:0.8em;
-              padding:5px 0; border-bottom:1px solid var(--border)">
-    <span class="muted mono" style="min-width:56px; font-size:0.88em; white-space:nowrap">
-      {{ e.timestamp.split('T')[1][:8] if 'T' in e.timestamp else e.timestamp.split(' ')[1][:8] if ' ' in e.timestamp else e.timestamp }}
+  {% set ts = e.timestamp or "" %}
+  {% set fp = e.alert_fingerprint or "" %}
+  <div class="ops-event-row {% if fp %}clickable{% endif %}"
+       {% if fp %}onclick="selectPipeline('{{ fp }}')"{% endif %}
+       title="{{ e.alertname or '' }}{% if e.device %} · {{ e.device }}{% endif %}">
+    <span class="mono muted" style="width:36px; flex-shrink:0; font-size:0.9em">
+      {{ ts.split(' ')[1][:5] if ' ' in ts else (ts.split('T')[1][:5] if 'T' in ts else ts[:5]) }}
     </span>
-    <span class="pill"
-          style="background:{{ color }}22; color:{{ color }}; border-color:{{ color }}55;
-                 font-size:0.72em; min-width:148px; text-align:center; white-space:nowrap">
-      {{ e.event_type | replace('_', ' ') }}
+    <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+                 font-size:0.8em; color:{{ color }}">
+      {{ e.event_type | humanize_event }}
     </span>
-    <span style="font-weight:500; min-width:130px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">
-      {{ e.alertname or '—' }}
-    </span>
-    <span class="muted" style="min-width:80px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">
-      {{ e.device or '—' }}
-    </span>
-    <a href="#"
-       hx-get="/partials/task/{{ e.task_id }}"
-       hx-target="#task-detail"
-       hx-swap="innerHTML"
-       class="mono"
-       style="color:var(--accent); font-size:0.78em; text-decoration:none;
-              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:200px">
-      {{ e.task_id }}
-    </a>
   </div>
   {% endfor %}
-</div>
 {% endif %}
 </div>

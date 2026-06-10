@@ -622,7 +622,7 @@ class TaskStore:
 
         sql = text(f"""
             SELECT te.id, te.task_id, te.timestamp, te.agent, te.event_type, te.detail,
-                   t.content
+                   t.content, t.alert_fingerprint
             FROM task_events te
             JOIN tasks t ON t.id = te.task_id
             WHERE te.event_type IN ({placeholders})
@@ -648,14 +648,15 @@ class TaskStore:
             except Exception:
                 pass
             results.append({
-                "id":         r[0],
-                "task_id":    r[1],
-                "timestamp":  r[2],
-                "agent":      r[3],
-                "event_type": r[4],
-                "detail":     detail,
-                "device":     device,
-                "alertname":  alertname,
+                "id":                r[0],
+                "task_id":           r[1],
+                "timestamp":         r[2],
+                "agent":             r[3],
+                "event_type":        r[4],
+                "detail":            detail,
+                "device":            device,
+                "alertname":         alertname,
+                "alert_fingerprint": r[7] or "",
             })
         return results
 

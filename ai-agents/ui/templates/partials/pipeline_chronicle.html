@@ -59,6 +59,45 @@
     </div>
   </div>
 
+  {# ── 5-step progress strip ────────────────────────────────────────────── #}
+  {% set ns = namespace(current_step=1) %}
+  {% for ch in chapters %}
+    {% if ch.type == "fix_proposal"  and ns.current_step < 2 %}{% set ns.current_step = 2 %}{% endif %}
+    {% if ch.type == "validation"    and ns.current_step < 3 %}{% set ns.current_step = 3 %}{% endif %}
+    {% if ch.type == "approval_gate" and ns.current_step < 4 %}{% set ns.current_step = 4 %}{% endif %}
+    {% if ch.type == "verify"        and ns.current_step < 5 %}{% set ns.current_step = 5 %}{% endif %}
+  {% endfor %}
+  {% set prog_steps = [
+    (1, "Investigate"),
+    (2, "Propose fix"),
+    (3, "Validate"),
+    (4, "Approval gate"),
+    (5, "Execute"),
+  ] %}
+  <div style="display:flex; margin:10px 0 14px; overflow:hidden; border-radius:6px; border:1px solid var(--border)">
+    {% for n, slabel in prog_steps %}
+    {% if n < ns.current_step %}
+    <div style="flex:1; padding:6px 4px; text-align:center; font-size:0.72em;
+                background:#22c55e18; color:#22c55e;
+                {% if not loop.last %}border-right:1px solid var(--border){% endif %}">
+      ✓ {{ slabel }}
+    </div>
+    {% elif n == ns.current_step %}
+    <div style="flex:1; padding:6px 4px; text-align:center; font-size:0.72em; font-weight:700;
+                background:{{ ov.color }}22; color:{{ ov.color }};
+                {% if not loop.last %}border-right:1px solid var(--border){% endif %}">
+      ● {{ slabel }}
+    </div>
+    {% else %}
+    <div style="flex:1; padding:6px 4px; text-align:center; font-size:0.72em;
+                color:var(--text-sub);
+                {% if not loop.last %}border-right:1px solid var(--border){% endif %}">
+      {{ slabel }}
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+
   {# ── Timeline ─────────────────────────────────────────────────────────── #}
   {% set level_colors = {"L0":"#6b7280","L1":"#3b82f6","L2":"#f59e0b","L3":"#f97316","L4":"#22c55e","L5":"#a855f7"} %}
   {% set level_names  = {"L0":"Manual","L1":"Advisory","L2":"Supervised","L3":"Human gate","L4":"Auto-approve","L5":"Autonomous"} %}
