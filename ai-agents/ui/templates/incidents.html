@@ -3,38 +3,91 @@
 {% block title %}Incidents — Clano{% endblock %}
 
 {% block content %}
-<p class="muted mb-16" style="font-size:0.83em">
-  Incident view groups correlated alerts into a single timeline. Each incident
-  links to the full RCA → fix → validation → approval pipeline for every affected device.
-</p>
 
+{# Filter bar above the viewport #}
 <div class="flex gap-8 items-center mb-12">
-  <a href="/incidents?open_only=true"
+  <a href="/incidents?open_only=true{% if sel_id %}&sel_id={{ sel_id }}{% endif %}"
      class="btn btn-sm {{ 'btn-primary' if open_only else 'btn-secondary' }}">Open</a>
-  <a href="/incidents?open_only=false"
+  <a href="/incidents?open_only=false{% if sel_id %}&sel_id={{ sel_id }}{% endif %}"
      class="btn btn-sm {{ 'btn-primary' if not open_only else 'btn-secondary' }}">All</a>
 </div>
 
-<div class="flex gap-16" style="min-height:400px">
+<div class="inc-viewport">
 
-  {# ── Incident List ──────────────────────────────────────────────────── #}
-  <div style="flex:0 0 380px; min-width:280px">
-    <div class="section-title mb-8">Incidents</div>
-    <div id="incident-list"
-         hx-get="/partials/incidents?open_only={{ 'true' if open_only else 'false' }}"
-         hx-trigger="sse-refresh"
-         hx-swap="innerHTML">
-      {% include "partials/incident_list.html" %}
+  {# ── Left pane: incident list ─────────────────────────────────────── #}
+  <div class="inc-left-pane">
+    <div class="ops-pane-label">Incidents</div>
+    <div class="inc-incident-list">
+      <div id="incident-list"
+           hx-get="/partials/incidents?open_only={{ 'true' if open_only else 'false' }}&sel_id={{ sel_id }}"
+           hx-trigger="sse-refresh"
+           hx-swap="innerHTML">
+        {% include "partials/incident_list.html" %}
+      </div>
     </div>
   </div>
 
-  {# ── Incident Detail ────────────────────────────────────────────────── #}
-  <div style="flex:1; min-width:0">
-    <div class="section-title mb-8">Details</div>
-    <div id="incident-detail" class="detail-panel">
-      <span class="muted">Select an incident to see its full timeline.</span>
+  {# ── Right pane: incident detail ──────────────────────────────────── #}
+  <div class="inc-right-pane">
+    <div id="incident-content"
+         {% if sel_id %}
+         hx-get="/partials/incident/{{ sel_id }}"
+         hx-trigger="load"
+         hx-swap="innerHTML"
+         {% endif %}>
+      {% if not sel_id %}
+      <div class="muted" style="padding:24px 0; font-size:0.88em">
+        Select an incident from the list to see its full pipeline.
+      </div>
+      {% endif %}
     </div>
   </div>
 
 </div>
+
+<script>
+var _selIncidentId = "{{ sel_id }}";
+var _incOpenOnly   = {{ 'true' if open_only else 'false' }};
+
+function selectIncident(id) {
+  _selIncidentId = id;
+
+  // Load detail into right pane
+  htmx.ajax("GET", "/partials/incident/" + id, {
+    target: "#incident-content",
+    swap:   "innerHTML"
+  });
+
+  // Update list poll URL so SSE refreshes keep the selection
+  var listEl = document.getElementById("incident-list");
+  if (listEl) {
+    listEl.setAttribute(
+      "hx-get",
+      "/partials/incidents?open_only=" + (_incOpenOnly ? "true" : "false") + "&sel_id=" + id
+    );
+    htmx.process(listEl);
+  }
+
+  // Update browser URL without reload
+  var url = new URL(window.location.href);
+  url.searchParams.set("sel_id", id);
+  window.history.replaceState({}, "", url.toString());
+
+  highlightSelectedIncident();
+}
+
+function highlightSelectedIncident() {
+  document.querySelectorAll(".inc-row").forEach(function(el) {
+    el.classList.toggle("selected", el.dataset.id === _selIncidentId);
+  });
+}
+
+// Re-highlight after the list is refreshed by SSE
+document.body.addEventListener("htmx:afterSwap", function(e) {
+  if (e.detail.target && e.detail.target.id === "incident-list") {
+    highlightSelectedIncident();
+  }
+});
+</script>
+
 {% endblock %}

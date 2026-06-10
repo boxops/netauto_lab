@@ -309,6 +309,106 @@ a { color: inherit; text-decoration: none; }
 .alert-row.awaiting    { border-left: 3px solid #a855f7; padding-left: 7px; }
 .alert-row.awaiting.selected { background: #a855f711; border-left-color: #a855f7; }
 
+/* ── Incidents fixed-viewport two-pane layout ──────────────────────── */
+
+/*
+ * page-header ~66px + nav-tabs ~42px + content padding 20px
+ * + filter bar ~28px + mb-12 ~12px = ~168px; use 175px for gap.
+ */
+.inc-viewport {
+  display: flex;
+  height: calc(100vh - 175px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.inc-left-pane {
+  width: 290px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  background: var(--bg2);
+}
+
+.inc-incident-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+}
+.inc-incident-list::-webkit-scrollbar { width: 3px; }
+.inc-incident-list::-webkit-scrollbar-thumb { background: var(--border); }
+
+.inc-right-pane {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px 20px;
+  min-width: 0;
+}
+.inc-right-pane::-webkit-scrollbar { width: 5px; }
+.inc-right-pane::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* Incident list rows */
+.inc-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.1s;
+  user-select: none;
+}
+.inc-row:last-child  { border-bottom: none; }
+.inc-row:hover       { background: var(--bg3); }
+.inc-row.selected    { background: #3b82f611; border-left: 3px solid #3b82f6; padding-left: 7px; }
+.inc-row.awaiting    { border-left: 3px solid #a855f7; padding-left: 7px; }
+.inc-row.awaiting.selected { background: #a855f711; border-left-color: #a855f7; }
+
+/* Pipeline section card */
+.inc-pipeline-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.inc-pipeline-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Stage timeline rows */
+.inc-stage-row {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82em;
+}
+.inc-stage-row:last-child { border-bottom: none; }
+.inc-stage-icon {
+  width: 22px;
+  flex-shrink: 0;
+  text-align: center;
+  padding-top: 1px;
+  font-size: 1em;
+}
+.inc-stage-body  { flex: 1; min-width: 0; }
+.inc-stage-name  { font-weight: 600; }
+.inc-stage-summary {
+  margin-top: 4px;
+  font-size: 0.9em;
+  color: var(--text-sub);
+  line-height: 1.5;
+}
+
 /* ── Table ───────────────────────────────────────────── */
 
 .data-table { width: 100%; border-collapse: collapse; font-size: 0.82em; }

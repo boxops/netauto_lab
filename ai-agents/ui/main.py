@@ -310,6 +310,14 @@ TYPE_ICONS = {
     "rca": "🔍",
 }
 
+STAGE_ICONS = {
+    "rca":           "🔍",
+    "fix_proposal":  "🔧",
+    "validation":    "🧪",
+    "approval_gate": "🔐",
+    "verify":        "✅",
+}
+
 # ── Approval webhook ──────────────────────────────────────────────────────────
 
 async def _fire_approval_webhook(task: dict) -> None:
@@ -986,8 +994,13 @@ def _pipeline_chronicle_context(fp: str) -> dict:
 
 
 
-def _incident_list_context(open_only: bool = True) -> dict:
+def _incident_list_context(open_only: bool = True, sel_id: str = "") -> dict:
     incidents = task_store.list_incidents(open_only=open_only, limit=100)
+    # Build set of incident IDs that have a pending approval gate — one query
+    awaiting_gates = task_store.list_tasks(
+        status="awaiting_approval", type="approval_gate", limit=200
+    )
+    pending_inc_ids = {t["incident_id"] for t in awaiting_gates if t.get("incident_id")}
     rows = []
     for inc in incidents:
         try:
@@ -998,19 +1011,21 @@ def _incident_list_context(open_only: bool = True) -> dict:
         impact    = content.get("impact", "")
         devices   = content.get("affected_devices", [])
         rows.append({
-            "id":          inc["id"],
-            "severity":    severity,
-            "impact":      impact,
-            "status":      inc["status"],
-            "status_color": STATUS_COLORS.get(inc["status"], "#6b7280"),
-            "priority":    inc["priority"],
-            "priority_color": PRIORITY_COLORS.get(inc["priority"], "#6b7280"),
-            "devices":     devices,
-            "device_count": len(devices),
-            "age":         _age(inc.get("created_at")),
-            "created_at":  inc.get("created_at", ""),
+            "id":                  inc["id"],
+            "severity":            severity,
+            "impact":              impact,
+            "status":              inc["status"],
+            "status_color":        STATUS_COLORS.get(inc["status"], "#6b7280"),
+            "priority":            inc["priority"],
+            "priority_color":      PRIORITY_COLORS.get(inc["priority"], "#6b7280"),
+            "devices":             devices,
+            "device_count":        len(devices),
+            "age":                 _age(inc.get("created_at")),
+            "created_at":          inc.get("created_at", ""),
+            "has_pending_approval": inc["id"] in pending_inc_ids,
+            "selected":            inc["id"] == sel_id,
         })
-    return {"incidents": rows, "open_only": open_only}
+    return {"incidents": rows, "open_only": open_only, "sel_id": sel_id}
 
 
 _TERMINAL_STATUSES = {"complete", "failed", "rejected"}
@@ -1448,27 +1463,59 @@ async def partial_fingerprints(request: Request):
 
 
 @app.get("/incidents", response_class=HTMLResponse)
-async def incidents_page(request: Request, open_only: bool = True):
-    ctx = await run_in_threadpool(_incident_list_context, open_only)
+async def incidents_page(request: Request, open_only: bool = True, sel_id: str = ""):
+    ctx = await run_in_threadpool(_incident_list_context, open_only, sel_id)
     return templates.TemplateResponse(request, "incidents.html", {
         "request":   request,
         "open_only": open_only,
+        "sel_id":    sel_id,
         **ctx,
     })
 
 
 @app.get("/partials/incidents", response_class=HTMLResponse)
-async def partial_incidents(request: Request, open_only: bool = True):
-    ctx = await run_in_threadpool(_incident_list_context, open_only)
+async def partial_incidents(request: Request, open_only: bool = True, sel_id: str = ""):
+    ctx = await run_in_threadpool(_incident_list_context, open_only, sel_id)
     return templates.TemplateResponse(request, "partials/incident_list.html", {
         "request": request,
         **ctx,
     })
 
 
+def _extract_stage_summary(task: dict) -> str:
+    """Pull a short human-readable summary from a task's result or content field."""
+    result_raw = task.get("result") or ""
+    summary = ""
+    if result_raw:
+        try:
+            rj = json.loads(result_raw)
+            for key in ("summary", "diagnosis", "root_cause", "findings",
+                        "output", "result", "conclusion"):
+                val = rj.get(key) if isinstance(rj, dict) else None
+                if isinstance(val, str) and val.strip():
+                    summary = val.strip()
+                    break
+            if not summary and isinstance(rj, str):
+                summary = rj
+        except Exception:
+            summary = result_raw
+    if not summary:
+        content_raw = task.get("content") or ""
+        try:
+            cj = json.loads(content_raw)
+            for key in ("summary", "diagnosis", "description"):
+                val = cj.get(key) if isinstance(cj, dict) else None
+                if isinstance(val, str) and val.strip():
+                    summary = val.strip()
+                    break
+        except Exception:
+            pass
+    return _truncate(summary, 300)
+
+
 @app.get("/partials/incident/{incident_id}", response_class=HTMLResponse)
 async def partial_incident_detail(request: Request, incident_id: str):
-    inc, pipelines = await asyncio.gather(
+    inc, raw_pipelines = await asyncio.gather(
         run_in_threadpool(task_store.get_task, incident_id),
         run_in_threadpool(task_store.get_incident_pipelines, incident_id),
     )
@@ -1478,15 +1525,59 @@ async def partial_incident_detail(request: Request, incident_id: str):
         content = json.loads(inc.get("content") or "{}")
     except Exception:
         content = {}
+
+    stage_order = ["rca", "fix_proposal", "validation", "approval_gate", "verify"]
+    enriched_pipelines = []
+    for rca in raw_pipelines:
+        pipeline_tasks = rca.get("pipeline", [])
+        tasks_by_type = {t["type"]: t for t in pipeline_tasks if t.get("type") in stage_order}
+        stages = []
+        for stype in stage_order:
+            task = tasks_by_type.get(stype)
+            if not task:
+                stages.append({
+                    "type":              stype,
+                    "status":            "not_started",
+                    "icon":              STAGE_ICONS.get(stype, "📋"),
+                    "name":              _STAGE_NAMES.get(stype, stype),
+                    "summary":           "",
+                    "task_id":           None,
+                    "awaiting_approval": False,
+                    "completed_at":      "",
+                    "status_color":      "#4b5563",
+                })
+                continue
+            stages.append({
+                "type":              stype,
+                "status":            task.get("status", ""),
+                "icon":              STAGE_ICONS.get(stype, "📋"),
+                "name":              _STAGE_NAMES.get(stype, stype),
+                "summary":           _extract_stage_summary(task),
+                "task_id":           task["id"],
+                "awaiting_approval": task.get("status") == "awaiting_approval",
+                "completed_at":      task.get("completed_at") or "",
+                "status_color":      STATUS_COLORS.get(task.get("status", ""), "#6b7280"),
+            })
+        try:
+            rca_content = json.loads(rca.get("content") or "{}")
+        except Exception:
+            rca_content = {}
+        enriched_pipelines.append({
+            "alertname":           rca_content.get("alertname") or (rca.get("alert_fingerprint") or "")[:12],
+            "device":              rca_content.get("device", ""),
+            "fp_short":            (rca.get("alert_fingerprint") or "")[:12],
+            "fp":                  rca.get("alert_fingerprint") or "",
+            "stages":              stages,
+            "has_pending_approval": any(s["awaiting_approval"] for s in stages),
+        })
+
     return templates.TemplateResponse(request, "partials/incident_detail.html", {
-        "request":   request,
-        "incident":  inc,
-        "content":   content,
-        "pipelines": pipelines,
-        "age":       _age(inc.get("created_at")),
-        "type_icons":   TYPE_ICONS,
+        "request":       request,
+        "incident":      inc,
+        "content":       content,
+        "pipelines":     enriched_pipelines,
+        "age":           _age(inc.get("created_at")),
         "status_colors": STATUS_COLORS,
-        "truncate":  _truncate,
     })
 
 

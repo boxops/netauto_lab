@@ -1,80 +1,150 @@
 {% set sc = status_colors.get(incident.status, "#6b7280") %}
-<div>
-  <div class="flex items-center gap-8 mb-12">
-    <span class="bold">🚨 Incident <code>{{ incident.id }}</code></span>
-    <span class="pill" style="background:{{ sc }}22; color:{{ sc }}; border-color:{{ sc }}55">
-      {{ incident.status|upper }}
-    </span>
-    <span class="muted" style="font-size:0.8em">{{ age }}</span>
-  </div>
 
-  <table style="font-size:0.8em; margin-bottom:12px; border-collapse:collapse">
-    {% for k, v in [
-      ("Severity", content.get("severity","—")),
-      ("Impact",   content.get("impact","—")),
-      ("Priority", incident.priority),
-      ("Created",  incident.created_at or "—"),
-    ] %}
-    <tr>
-      <td class="muted" style="padding:2px 16px 2px 0; white-space:nowrap">{{ k }}</td>
-      <td>{{ v }}</td>
-    </tr>
-    {% endfor %}
-  </table>
-
-  {% if content.get("affected_devices") %}
-  <div class="mb-8">
-    <div class="section-label mb-4">Affected Devices</div>
-    <div style="font-size:0.85em">
-      {% for d in content.affected_devices %}
-        <code style="margin-right:8px">{{ d }}</code>
-      {% endfor %}
-    </div>
-  </div>
+{# ── Incident header ──────────────────────────────────────────────────── #}
+<div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid var(--border)">
+  <span style="font-weight:700; font-size:0.92em">🚨 <code>{{ incident.id }}</code></span>
+  <span class="pill" style="background:{{ sc }}22; color:{{ sc }}; border-color:{{ sc }}55">
+    {{ incident.status|upper }}
+  </span>
+  {% if content.get("severity") %}
+  <span style="font-weight:600; font-size:0.85em; color:{% if content.severity in ('P1','critical') %}#ef4444{% else %}#f97316{% endif %}">
+    {{ content.severity }}
+  </span>
   {% endif %}
+  <span class="muted" style="font-size:0.8em">{{ age }}</span>
+  {% if content.get("affected_devices") %}
+  <span class="muted" style="font-size:0.78em">·</span>
+  {% for d in content.affected_devices[:4] %}
+    <code style="font-size:0.78em; margin-right:2px">{{ d }}</code>
+  {% endfor %}
+  {% if content.affected_devices | length > 4 %}
+    <span class="muted" style="font-size:0.78em">&hellip;</span>
+  {% endif %}
+  {% endif %}
+  {% if incident.status not in ("complete", "rejected") %}
+  <span style="margin-left:auto">
+    <button class="btn btn-secondary btn-sm"
+            onclick="var f=document.getElementById('inc-close-form');f.style.display=f.style.display==='flex'?'none':'flex'">
+      Close Incident
+    </button>
+  </span>
+  {% endif %}
+</div>
 
-  <div class="mb-8">
-    <div class="section-label mb-4">Linked Alert Pipelines</div>
-    {% if pipelines %}
-      {% for rca in pipelines %}
-      <div style="background:var(--bg3); border-radius:6px; padding:8px 12px; margin-bottom:6px; font-size:0.8em">
-        <div class="flex items-center gap-8 flex-wrap">
-          <span class="bold">🔍 {{ rca.title or rca.id }}</span>
-          {% set rs = rca.status %}
-          {% set rsc = status_colors.get(rs, "#6b7280") %}
-          <span class="pill" style="background:{{ rsc }}22; color:{{ rsc }}; border-color:{{ rsc }}55">{{ rs }}</span>
-          <span class="muted">{{ rca.alert_fingerprint[:12] if rca.alert_fingerprint else "—" }}</span>
-        </div>
-        {% if rca.get("pipeline") %}
-        <div class="flex gap-8 mt-4 flex-wrap">
-          {% for stage in rca.pipeline %}
-          {% set stc = status_colors.get(stage.status, "#6b7280") %}
-          <span style="font-size:0.78em; color:{{ stc }}">
-            {{ type_icons.get(stage.type, "📋") }} {{ stage.type }}
-            <span class="pill" style="background:{{ stc }}22; color:{{ stc }}; border-color:{{ stc }}55">{{ stage.status }}</span>
-          </span>
-          {% endfor %}
-        </div>
-        {% endif %}
-      </div>
-      {% endfor %}
-    {% else %}
-      <span class="muted" style="font-size:0.83em">No pipelines linked yet.</span>
+{% if content.get("impact") %}
+<p style="font-size:0.83em; color:var(--text-sub); margin-bottom:14px; line-height:1.5">{{ content.impact }}</p>
+{% endif %}
+
+{% if incident.status not in ("complete", "rejected") %}
+<div id="inc-close-form" style="display:none; align-items:center; gap:8px; flex-wrap:wrap;
+     margin-bottom:16px; padding:10px 14px; background:var(--bg2); border-radius:8px; border:1px solid var(--border)">
+  <form hx-post="/incidents/{{ incident.id }}/close"
+        hx-target="#inc-close-status"
+        hx-swap="innerHTML"
+        class="flex gap-8 items-center flex-wrap" style="flex:1">
+    <input name="resolution" type="text" placeholder="Resolution summary (optional)"
+           style="flex:1; min-width:220px; background:var(--bg3); border:1px solid var(--border);
+                  color:var(--text); border-radius:6px; padding:6px 10px; font-size:0.82em">
+    <button type="submit" class="btn btn-primary btn-sm">✅ Close</button>
+  </form>
+  <div id="inc-close-status" class="muted" style="font-size:0.82em; width:100%; padding-top:2px"></div>
+</div>
+{% endif %}
+
+{# ── Pipeline sections ────────────────────────────────────────────────── #}
+{% if not pipelines %}
+<div class="muted" style="font-size:0.85em; padding:10px 0">No linked alert pipelines found.</div>
+{% else %}
+{% for pl in pipelines %}
+<div class="inc-pipeline-section">
+
+  {# Pipeline header #}
+  <div class="inc-pipeline-header">
+    <span style="font-weight:700; font-size:0.88em">{{ pl.alertname }}</span>
+    {% if pl.device %}
+    <span class="muted" style="font-size:0.82em">on <code>{{ pl.device }}</code></span>
+    {% endif %}
+    {% if pl.has_pending_approval %}
+    <span class="pill" style="background:#a855f722; color:#a855f7; border-color:#a855f755; font-size:0.7em; margin-left:4px">
+      Awaiting approval
+    </span>
+    {% endif %}
+    {% if pl.fp_short %}
+    <code class="muted" style="font-size:0.75em; margin-left:auto">{{ pl.fp_short }}</code>
     {% endif %}
   </div>
 
-  {% if incident.status not in ("complete", "rejected") %}
-  <div class="mt-8">
-    <form hx-post="/incidents/{{ incident.id }}/close"
-          hx-target="#incident-action-status"
-          hx-swap="innerHTML"
-          class="flex gap-8 items-center flex-wrap">
-      <input name="resolution" type="text" placeholder="Resolution summary (optional)"
-             style="flex:1; max-width:320px; background:var(--bg2); border:1px solid var(--border);
-                    color:var(--text); border-radius:6px; padding:7px 12px; font-size:0.83em">
-      <button type="submit" class="btn btn-secondary btn-sm">✅ Close Incident</button>
-    </form>
-    <div id="incident-action-status" class="mt-4"></div>
+  {# Stage timeline #}
+  {% for stage in pl.stages %}
+  {% set not_started = stage.status == "not_started" %}
+  <div class="inc-stage-row" style="{% if not_started %}opacity:0.38{% endif %}">
+    <div class="inc-stage-icon">{{ stage.icon }}</div>
+    <div class="inc-stage-body">
+
+      <div class="flex items-center gap-8 flex-wrap">
+        <span class="inc-stage-name">{{ stage.name }}</span>
+        {% if not not_started %}
+        <span class="pill" style="background:{{ stage.status_color }}22; color:{{ stage.status_color }}; border-color:{{ stage.status_color }}55; font-size:0.7em">
+          {{ stage.status | upper | replace("_", " ") }}
+        </span>
+        {% endif %}
+        {% if stage.completed_at %}
+        <span class="muted" style="font-size:0.72em; margin-left:auto">
+          {{ stage.completed_at[:16] }}
+        </span>
+        {% endif %}
+      </div>
+
+      {% if stage.summary %}
+      <div class="inc-stage-summary">{{ stage.summary }}</div>
+      {% endif %}
+
+      {# Inline approve / reject for awaiting gates #}
+      {% if stage.awaiting_approval %}
+      <div style="margin-top:12px; padding:10px 14px; background:var(--bg3); border-radius:8px; border:1px solid #a855f755">
+        <div style="font-size:0.75em; font-weight:700; color:#a855f7; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.06em">
+          Awaiting your decision
+        </div>
+        <div class="flex gap-8 items-center flex-wrap">
+          <button class="btn btn-primary btn-sm"
+                  hx-post="/tasks/{{ stage.task_id }}/approve"
+                  hx-target="#inc-gate-action-{{ stage.task_id }}"
+                  hx-swap="innerHTML">
+            ✅ Approve &amp; Execute
+          </button>
+          <button class="btn btn-danger btn-sm"
+                  id="inc-reject-btn-{{ stage.task_id }}"
+                  onclick="document.getElementById('inc-reject-form-{{ stage.task_id }}').style.display='block'; this.style.display='none'">
+            ❌ Reject
+          </button>
+          <span id="inc-gate-action-{{ stage.task_id }}" class="muted" style="font-size:0.82em"></span>
+        </div>
+        <div id="inc-reject-form-{{ stage.task_id }}" style="display:none; margin-top:10px">
+          <textarea id="inc-reject-reason-{{ stage.task_id }}" name="reason" rows="2"
+            placeholder="Rejection reason (optional)"
+            style="width:100%; max-width:480px; background:var(--bg2); border:1px solid var(--border);
+                   color:var(--text); border-radius:6px; padding:6px 10px; font-size:0.82em;
+                   resize:vertical; margin-bottom:6px; display:block"></textarea>
+          <button class="btn btn-danger btn-sm"
+                  hx-post="/tasks/{{ stage.task_id }}/reject"
+                  hx-target="#inc-gate-action-{{ stage.task_id }}"
+                  hx-include="#inc-reject-reason-{{ stage.task_id }}"
+                  hx-swap="innerHTML">
+            Confirm rejection
+          </button>
+          <button class="btn btn-secondary btn-sm" style="margin-left:6px"
+                  onclick="document.getElementById('inc-reject-form-{{ stage.task_id }}').style.display='none'; document.getElementById('inc-reject-btn-{{ stage.task_id }}').style.display='inline-flex'">
+            Cancel
+          </button>
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
   </div>
-  {% endif %}
+  {% endfor %}
+
 </div>
+{% if not loop.last %}<div style="height:14px"></div>{% endif %}
+{% endfor %}
+{% endif %}
