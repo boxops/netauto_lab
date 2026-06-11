@@ -1,0 +1,57 @@
+<tr id="kb-entry-{{ e.id }}">
+
+  <td class="mono muted" style="font-size:0.78em; white-space:nowrap; vertical-align:top">{{ e.id }}</td>
+
+  <td style="vertical-align:top">
+    {% if e.alert_type %}
+    <span class="pill kb-pill-{{ e.source }}" style="font-size:0.76em; font-weight:700">{{ e.alert_type }}</span>
+    {% else %}
+    <span class="muted" style="font-size:0.78em">—</span>
+    {% endif %}
+    {% if e.device_type %}
+    <div class="muted" style="font-size:0.74em; margin-top:2px">{{ e.device_type }}</div>
+    {% endif %}
+    <span class="pill kb-pill-{{ e.source }}" style="font-size:0.68em; display:inline-block; margin-top:3px">{{ e.source }}</span>
+    {% if e.fingerprint %}
+    <div style="margin-top:3px">
+      <a href="/?sel_fp={{ e.fingerprint }}" style="font-size:0.72em; color:var(--accent); text-decoration:none">→ pipeline</a>
+    </div>
+    {% endif %}
+  </td>
+
+  <td style="font-size:0.83em; vertical-align:top">{{ e.symptom }}</td>
+
+  <td style="font-size:0.83em; color:var(--text-sub); vertical-align:top">{{ e.root_cause }}</td>
+
+  <td style="font-size:0.83em; vertical-align:top">{{ e.resolution }}</td>
+
+  <td style="vertical-align:top; white-space:nowrap; font-size:0.78em">
+    {% if e.usage_count %}
+    <span class="kb-used-badge">{{ e.usage_count }}×</span>
+    {% else %}
+    <span class="muted">—</span>
+    {% endif %}
+    {% if e.updated_at %}
+    <div class="muted" style="font-size:0.85em; margin-top:2px">edited</div>
+    {% endif %}
+  </td>
+
+  <td style="vertical-align:top; white-space:nowrap">
+    <button class="btn btn-secondary btn-sm"
+            style="padding:2px 7px; font-size:0.74em"
+            hx-get="/partials/kb-entry/{{ e.id }}/edit"
+            hx-target="#kb-entry-{{ e.id }}"
+            hx-swap="outerHTML">
+      Edit
+    </button>
+    <button class="btn btn-secondary btn-sm"
+            style="padding:2px 6px; font-size:0.74em; color:#ef4444; border-color:#ef444455; margin-left:2px"
+            hx-delete="/partials/kb-entry/{{ e.id }}"
+            hx-target="#kb-entry-{{ e.id }}"
+            hx-swap="outerHTML"
+            hx-confirm="Delete this knowledge base entry?">
+      ✕
+    </button>
+  </td>
+
+</tr>

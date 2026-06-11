@@ -1522,24 +1522,53 @@ def _auto_save_kb(gate_task: dict, gate_content: dict, execution, task_store: Ta
     fp = gate_task.get("alert_fingerprint", "")
     diagnosis = ""
     device_role = ""
+    findings = ""
     if fp:
         rcas = task_store.list_tasks(type="rca", alert_fingerprint=fp, limit=1)
         if rcas:
             rca_result = rcas[0].get("result") or "{}"
             try:
                 r = json.loads(rca_result) if isinstance(rca_result, str) else rca_result
-                diagnosis = r.get("diagnosis", "")
+                # Try multiple keys — the LLM may use any of these
+                for key in ("diagnosis", "root_cause", "summary", "findings", "analysis", "output"):
+                    val = (r.get(key) or "").strip()
+                    if len(val) > 20:
+                        diagnosis = val
+                        break
+                findings = (r.get("findings") or r.get("summary") or "").strip()
                 if not alertname:
                     alertname = json.loads(rcas[0].get("content") or "{}").get("alertname", "")
                 device_role = r.get("device_role", "")
             except Exception:
                 pass
 
-    symptom    = f"{alertname} on {device}" if (alertname and device) else (alertname or device or "unknown")
-    root_cause = diagnosis or fix_proposal.get("diagnosis", "") or "See pipeline task"
+    base_symptom = f"{alertname} on {device}" if (alertname and device) else (alertname or device or "unknown")
+    # Enrich symptom with observed findings if they add context beyond the alert name
+    if findings and findings != diagnosis and len(findings) > 10:
+        symptom = f"{base_symptom} — {findings[:160]}"
+    else:
+        symptom = base_symptom
+
+    root_cause = (
+        diagnosis
+        or fix_proposal.get("diagnosis", "")
+        or f"Pipeline task {gate_task.get('id', 'unknown')}"
+    )
     resolution = changes or (f"Applied: {commands}" if commands and commands != "none" else "Escalated to human")
 
     if not (symptom and root_cause and resolution):
+        return
+
+    # Dedup: if this exact incident was already recorded, update instead of inserting a duplicate
+    existing = _kb_store.find_duplicate(alertname, fp) if (alertname and fp) else None
+    if existing:
+        _kb_store.update(
+            existing["id"],
+            symptom=symptom,
+            root_cause=root_cause,
+            resolution=resolution,
+            device_type=device_role or existing.get("device_type") or None,
+        )
         return
 
     _kb_store.save(
@@ -1550,6 +1579,7 @@ def _auto_save_kb(gate_task: dict, gate_content: dict, execution, task_store: Ta
         device_type=device_role or None,
         source="pipeline",
         task_id=gate_task.get("id"),
+        fingerprint=fp or None,
     )
 
 

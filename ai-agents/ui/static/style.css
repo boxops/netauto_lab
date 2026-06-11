@@ -966,6 +966,106 @@ html.no-help .help-callout { display: none !important; }
 /* ── Section title spacing helper ────────────────────── */
 .mt-20 { margin-top: 20px; }
 
+/* ── Knowledge Base layout ───────────────────────────── */
+.kb-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.kb-main { flex: 1; min-width: 0; }
+.kb-sidebar {
+  flex: 0 0 270px;
+  position: sticky;
+  top: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2);
+  overflow: hidden;
+}
+.kb-add-form {
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+.kb-form-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.82em;
+  color: var(--text-sub);
+}
+.kb-form-input {
+  padding: 5px 8px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.9em;
+  font-family: inherit;
+}
+.kb-form-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ── KB entry cards ──────────────────────────────────── */
+.kb-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+  overflow: hidden;
+  background: var(--bg2);
+  transition: border-color 0.15s;
+}
+.kb-card[open] { border-color: var(--accent); }
+.kb-card > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.kb-card > summary::-webkit-details-marker { display: none; }
+.kb-card > summary:hover { background: var(--bg3); }
+.kb-card-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background: var(--bg2);
+}
+.kb-card-body {
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 10px;
+}
+.kb-field-label {
+  font-size: 0.7em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-sub);
+  margin-bottom: 2px;
+}
+.kb-field-value {
+  font-size: 0.84em;
+  line-height: 1.55;
+}
+.kb-used-badge {
+  font-size: 0.72em;
+  color: #f59e0b;
+  white-space: nowrap;
+}
+/* Source pill colours — alert_type uses the same colour as source for visual grouping */
+.kb-pill-pipeline { background: #10b98122; color: #34d399; border-color: #10b98155; }
+.kb-pill-agent    { background: #a855f722; color: #c084fc; border-color: #a855f755; }
+.kb-pill-manual   { background: #3b82f622; color: #60a5fa; border-color: #3b82f655; }
+
 /* ── Chat two-column layout ──────────────────────────── */
 /*
  * Total vertical overhead: page-header ~72px + nav ~44px + content-pad 20px + title-bar ~36px ≈ 172px

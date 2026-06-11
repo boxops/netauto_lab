@@ -4,118 +4,124 @@
 
 {% block content %}
 
-<div class="section">
-  <div class="section-title">📚 Knowledge Base</div>
-  <p class="muted" style="font-size:0.82em; margin-bottom:12px">
-    Past incidents and proven resolutions. The AI agent consults this automatically
-    before investigating any alert. Add entries manually for recurring issues or
-    common runbook steps.
-  </p>
-
-  {# ── Search bar ────────────────────────────────────────────────────────── #}
-  <div style="display:flex; gap:8px; align-items:center; margin-bottom:14px; flex-wrap:wrap">
-    <input id="kb-search"
-           type="search"
-           name="q"
-           placeholder="Search by symptom, alert type, or keyword…"
-           autocomplete="off"
-           style="flex:1; min-width:220px; padding:6px 10px; background:var(--bg-card);
-                  border:1px solid var(--border); border-radius:4px; color:var(--text-main);
-                  font-size:0.88em"
-           hx-get="/partials/kb-search"
-           hx-trigger="keyup changed delay:300ms, search"
-           hx-target="#kb-results"
-           hx-swap="innerHTML"
-           hx-include="#kb-search">
-    <span id="kb-count" class="muted" style="font-size:0.82em; white-space:nowrap">
-      {{ total }} entr{{ "y" if total == 1 else "ies" }}
-    </span>
-  </div>
-
-  {# ── Results table ─────────────────────────────────────────────────────── #}
-  <div id="kb-results">
-    {% include "partials/kb_results.html" %}
-  </div>
+{# ── Stats KPI bar ─────────────────────────────────────────────────────────── #}
+<div id="kb-stats"
+     hx-get="/partials/kb-stats"
+     hx-trigger="load"
+     hx-swap="outerHTML"
+     class="muted" style="font-size:0.82em; padding:4px 0 12px">
+  Loading stats…
 </div>
 
-<hr class="divider" />
+{# ── Two-column layout ─────────────────────────────────────────────────────── #}
+<div class="kb-layout">
 
-{# ── Add entry form ────────────────────────────────────────────────────────── #}
-<div class="section">
-  <div class="section-title" style="cursor:pointer" onclick="toggleKBForm()">
-    ➕ Add Entry <span id="kb-form-toggle" style="font-size:0.75em; color:var(--text-sub)">(expand)</span>
-  </div>
-  <div id="kb-add-form" style="display:none; margin-top:10px">
-    <form hx-post="/partials/kb-entry"
+  {# ── Left: filter bar + results ─────────────────────────────────────────── #}
+  <div class="kb-main">
+
+    {# Filter row — all inputs are serialised together via the parent form #}
+    <form id="kb-filters"
+          hx-get="/partials/kb-search"
           hx-target="#kb-results"
+          hx-trigger="keyup changed delay:300ms from:#kb-search,
+                      search from:#kb-search,
+                      change from:#kb-source-filter,
+                      change from:#kb-alert-type-filter"
           hx-swap="innerHTML"
-          hx-on::after-request="this.reset(); document.getElementById('kb-count').textContent=''; htmx.ajax('GET','/partials/kb-search',{target:'#kb-results',swap:'innerHTML'})"
-          style="display:grid; gap:10px; max-width:680px">
-      <label style="font-size:0.85em; color:var(--text-sub)">
-        Symptom (what was observed) *
-        <textarea name="symptom" required rows="2"
-                  style="width:100%; margin-top:4px; padding:6px; background:var(--bg-card);
-                         border:1px solid var(--border); border-radius:4px; color:var(--text-main);
-                         font-size:0.88em; resize:vertical"
-                  placeholder="e.g. InterfaceAdminDown on spine2/Ethernet1"></textarea>
-      </label>
-      <label style="font-size:0.85em; color:var(--text-sub)">
-        Root cause *
-        <textarea name="root_cause" required rows="2"
-                  style="width:100%; margin-top:4px; padding:6px; background:var(--bg-card);
-                         border:1px solid var(--border); border-radius:4px; color:var(--text-main);
-                         font-size:0.88em; resize:vertical"
-                  placeholder="e.g. Admin-shutdown applied without a maintenance window record"></textarea>
-      </label>
-      <label style="font-size:0.85em; color:var(--text-sub)">
-        Resolution *
-        <textarea name="resolution" required rows="2"
-                  style="width:100%; margin-top:4px; padding:6px; background:var(--bg-card);
-                         border:1px solid var(--border); border-radius:4px; color:var(--text-main);
-                         font-size:0.88em; resize:vertical"
-                  placeholder="e.g. Ran 'no shutdown' on Ethernet1 via Nautobot job"></textarea>
-      </label>
-      <div style="display:flex; gap:10px; flex-wrap:wrap">
-        <label style="font-size:0.85em; color:var(--text-sub); flex:1; min-width:140px">
-          Alert type
-          <input name="alert_type" type="text"
-                 style="width:100%; margin-top:4px; padding:6px; background:var(--bg-card);
-                        border:1px solid var(--border); border-radius:4px; color:var(--text-main);
-                        font-size:0.88em"
-                 placeholder="e.g. InterfaceAdminDown">
-        </label>
-        <label style="font-size:0.85em; color:var(--text-sub); flex:1; min-width:140px">
-          Device type
-          <input name="device_type" type="text"
-                 style="width:100%; margin-top:4px; padding:6px; background:var(--bg-card);
-                        border:1px solid var(--border); border-radius:4px; color:var(--text-main);
-                        font-size:0.88em"
-                 placeholder="e.g. spine, leaf">
-        </label>
-      </div>
-      <div>
-        <button type="submit" class="btn btn-primary btn-sm">Save entry</button>
-        <button type="button" class="btn btn-secondary btn-sm"
-                onclick="document.getElementById('kb-add-form').style.display='none';
-                         document.getElementById('kb-form-toggle').textContent='(expand)'">
-          Cancel
-        </button>
-      </div>
+          style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px">
+
+      <input id="kb-search"
+             type="search"
+             name="q"
+             placeholder="Search symptom, alert type, or keyword…"
+             autocomplete="off"
+             style="flex:1; min-width:200px; padding:6px 10px; background:var(--bg2);
+                    border:1px solid var(--border); border-radius:4px; color:var(--text);
+                    font-size:0.88em">
+
+      <select id="kb-source-filter" name="source"
+              style="padding:6px 10px; background:var(--bg2); border:1px solid var(--border);
+                     color:var(--text); border-radius:4px; font-size:0.85em">
+        <option value="">All sources</option>
+        <option value="pipeline">Pipeline (auto)</option>
+        <option value="agent">Agent</option>
+        <option value="manual">Manual</option>
+      </select>
+
+      <select id="kb-alert-type-filter" name="alert_type"
+              style="padding:6px 10px; background:var(--bg2); border:1px solid var(--border);
+                     color:var(--text); border-radius:4px; font-size:0.85em; max-width:200px">
+        <option value="">All alert types</option>
+        {% for at in alert_types %}
+        <option value="{{ at }}">{{ at }}</option>
+        {% endfor %}
+      </select>
+
+      <span class="muted" style="font-size:0.82em; white-space:nowrap">
+        {{ total }} entr{{ "y" if total == 1 else "ies" }}
+      </span>
+
     </form>
+
+    {# Results list #}
+    <div id="kb-results">
+      {% include "partials/kb_results.html" %}
+    </div>
+
   </div>
+
+  {# ── Right: add entry panel (sticky) ────────────────────────────────────── #}
+  <div class="kb-sidebar">
+
+    <div class="ops-pane-label">Add Entry</div>
+
+    <form class="kb-add-form"
+          hx-post="/partials/kb-entry"
+          hx-target="#kb-card-list"
+          hx-swap="afterbegin"
+          hx-on::after-request="this.reset()">
+
+      <label class="kb-form-label">
+        Alert type
+        <input name="alert_type" type="text" class="kb-form-input"
+               placeholder="e.g. BGPPeerDown">
+      </label>
+
+      <label class="kb-form-label">
+        Device type
+        <input name="device_type" type="text" class="kb-form-input"
+               placeholder="e.g. spine, leaf">
+      </label>
+
+      <label class="kb-form-label">
+        Symptom <span style="color:#ef4444">*</span>
+        <textarea name="symptom" required rows="2" class="kb-form-input"
+                  style="resize:vertical"
+                  placeholder="What was observed — include metric values or log lines"></textarea>
+      </label>
+
+      <label class="kb-form-label">
+        Root cause <span style="color:#ef4444">*</span>
+        <textarea name="root_cause" required rows="3" class="kb-form-input"
+                  style="resize:vertical"
+                  placeholder="Why it happened — be specific about the mechanism"></textarea>
+      </label>
+
+      <label class="kb-form-label">
+        Resolution <span style="color:#ef4444">*</span>
+        <textarea name="resolution" required rows="2" class="kb-form-input"
+                  style="resize:vertical"
+                  placeholder="How it was fixed — reproducible steps or command"></textarea>
+      </label>
+
+      <button type="submit" class="btn btn-primary btn-sm" style="width:100%">
+        Save entry
+      </button>
+
+    </form>
+
+  </div>
+
 </div>
 
-<script>
-function toggleKBForm() {
-  var f = document.getElementById('kb-add-form');
-  var t = document.getElementById('kb-form-toggle');
-  if (f.style.display === 'none') {
-    f.style.display = 'block';
-    t.textContent = '(collapse)';
-  } else {
-    f.style.display = 'none';
-    t.textContent = '(expand)';
-  }
-}
-</script>
 {% endblock %}

@@ -1,0 +1,26 @@
+<div id="kb-stats" class="ops-health-bar" style="margin-bottom:14px">
+  <div class="ops-health-kpi">
+    <span class="kpi-value">{{ stats.total }}</span>
+    <span class="kpi-label">Total entries</span>
+  </div>
+  <div class="ops-health-kpi">
+    <span class="kpi-value" style="color:#34d399">{{ (stats.by_source.get('pipeline', 0) + stats.by_source.get('agent', 0)) }}</span>
+    <span class="kpi-label">Auto-generated</span>
+  </div>
+  <div class="ops-health-kpi">
+    <span class="kpi-value" style="color:#60a5fa">{{ stats.by_source.get('manual', 0) }}</span>
+    <span class="kpi-label">Manual</span>
+  </div>
+  <div class="ops-health-kpi">
+    <span class="kpi-value" style="color:#f59e0b">{{ stats.total_hits }}</span>
+    <span class="kpi-label">Agent lookups</span>
+  </div>
+  {% if stats.top_used %}
+  <div class="ops-health-kpi" style="min-width:160px">
+    <span class="kpi-value" style="font-size:0.9em; font-weight:700">
+      {{ stats.top_used[0].alert_type }}
+    </span>
+    <span class="kpi-label">Most consulted ({{ stats.top_used[0].hits }}×)</span>
+  </div>
+  {% endif %}
+</div>

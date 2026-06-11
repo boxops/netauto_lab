@@ -2475,24 +2475,97 @@ async def schedule_cancel(request: Request, job_id: str):
 
 @app.get("/knowledge-base", response_class=HTMLResponse)
 async def knowledge_base_page(request: Request):
-    entries = await run_in_threadpool(kb_store.get_all, 100)
-    total   = await run_in_threadpool(kb_store.count)
+    entries, total, alert_types = await asyncio.gather(
+        run_in_threadpool(kb_store.get_all, 100),
+        run_in_threadpool(kb_store.count),
+        run_in_threadpool(kb_store.get_distinct_alert_types),
+    )
     return templates.TemplateResponse(request, "knowledge_base.html", {
+        "request":     request,
+        "entries":     entries,
+        "total":       total,
+        "alert_types": alert_types,
+        "query":       "",
+    })
+
+
+@app.get("/partials/kb-stats", response_class=HTMLResponse)
+async def partial_kb_stats(request: Request):
+    stats = await run_in_threadpool(kb_store.get_stats)
+    return templates.TemplateResponse(request, "partials/kb_stats.html", {
         "request": request,
-        "entries": entries,
-        "total":   total,
-        "query":   "",
+        "stats":   stats,
     })
 
 
 @app.get("/partials/kb-search", response_class=HTMLResponse)
-async def partial_kb_search(request: Request, q: str = ""):
-    entries = await run_in_threadpool(kb_store.search, q, 50) if q.strip() else \
-              await run_in_threadpool(kb_store.get_all, 100)
+async def partial_kb_search(
+    request:    Request,
+    q:          str = "",
+    source:     str = "",
+    alert_type: str = "",
+):
+    if q.strip():
+        entries = await run_in_threadpool(kb_store.search, q, 100)
+        if source:
+            entries = [e for e in entries if e["source"] == source]
+        if alert_type:
+            entries = [e for e in entries if e.get("alert_type") == alert_type]
+    else:
+        entries = await run_in_threadpool(kb_store.get_all, 100, source, alert_type)
     return templates.TemplateResponse(request, "partials/kb_results.html", {
         "request": request,
         "entries": entries,
         "query":   q,
+    })
+
+
+@app.get("/partials/kb-entry/{entry_id}/card", response_class=HTMLResponse)
+async def kb_entry_card(request: Request, entry_id: int):
+    entry = await run_in_threadpool(kb_store.get, entry_id)
+    if not entry:
+        return HTMLResponse("")
+    return templates.TemplateResponse(request, "partials/kb_entry_card.html", {
+        "request": request,
+        "e":       entry,
+    })
+
+
+@app.get("/partials/kb-entry/{entry_id}/edit", response_class=HTMLResponse)
+async def kb_entry_edit_form(request: Request, entry_id: int):
+    entry = await run_in_threadpool(kb_store.get, entry_id)
+    if not entry:
+        return HTMLResponse("Entry not found", status_code=404)
+    return templates.TemplateResponse(request, "partials/kb_entry_edit.html", {
+        "request": request,
+        "e":       entry,
+    })
+
+
+@app.patch("/partials/kb-entry/{entry_id}", response_class=HTMLResponse)
+async def update_kb_entry(
+    request:     Request,
+    entry_id:    int,
+    symptom:     str = Form(""),
+    root_cause:  str = Form(""),
+    resolution:  str = Form(""),
+    alert_type:  str = Form(""),
+    device_type: str = Form(""),
+):
+    entry = await run_in_threadpool(
+        kb_store.update,
+        entry_id,
+        symptom=symptom.strip() or None,
+        root_cause=root_cause.strip() or None,
+        resolution=resolution.strip() or None,
+        alert_type=alert_type.strip() or None,
+        device_type=device_type.strip() or None,
+    )
+    if not entry:
+        return HTMLResponse("Entry not found", status_code=404)
+    return templates.TemplateResponse(request, "partials/kb_entry_card.html", {
+        "request": request,
+        "e":       entry,
     })
 
 
@@ -2506,17 +2579,16 @@ async def create_kb_entry(
     device_type: str = Form(""),
 ):
     if symptom.strip() and root_cause.strip() and resolution.strip():
-        await run_in_threadpool(
+        entry = await run_in_threadpool(
             kb_store.save,
             symptom.strip(), root_cause.strip(), resolution.strip(),
             alert_type.strip() or None, device_type.strip() or None,
         )
-    entries = await run_in_threadpool(kb_store.get_all, 100)
-    return templates.TemplateResponse(request, "partials/kb_results.html", {
-        "request": request,
-        "entries": entries,
-        "query":   "",
-    })
+        return templates.TemplateResponse(request, "partials/kb_entry_card.html", {
+            "request": request,
+            "e":       entry,
+        })
+    return HTMLResponse("")
 
 
 @app.delete("/partials/kb-entry/{entry_id}", response_class=HTMLResponse)

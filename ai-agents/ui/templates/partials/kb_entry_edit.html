@@ -1,0 +1,61 @@
+<tr id="kb-entry-{{ e.id }}">
+  <td colspan="7" style="padding:12px 14px; background:var(--bg2); border-left:3px solid var(--accent)">
+
+    <div style="font-size:0.8em; font-weight:700; color:var(--accent); margin-bottom:8px">
+      ✏️ Editing entry #{{ e.id }}
+      {% if e.source == 'pipeline' %}
+      <span class="muted" style="font-weight:400; margin-left:6px">
+        (pipeline auto-generated — improve the quality here)
+      </span>
+      {% endif %}
+    </div>
+
+    <form hx-patch="/partials/kb-entry/{{ e.id }}"
+          hx-target="#kb-entry-{{ e.id }}"
+          hx-swap="outerHTML"
+          style="display:grid; gap:8px">
+
+      <div class="flex gap-8 flex-wrap">
+        <label style="flex:1; min-width:120px; font-size:0.82em; color:var(--text-sub)">
+          Alert type
+          <input name="alert_type" type="text" value="{{ e.alert_type or '' }}" class="kb-form-input"
+                 style="width:100%; margin-top:3px; display:block">
+        </label>
+        <label style="flex:1; min-width:120px; font-size:0.82em; color:var(--text-sub)">
+          Device type
+          <input name="device_type" type="text" value="{{ e.device_type or '' }}" class="kb-form-input"
+                 style="width:100%; margin-top:3px; display:block">
+        </label>
+      </div>
+
+      <div class="flex gap-8 flex-wrap">
+        <label style="flex:1; min-width:200px; font-size:0.82em; color:var(--text-sub)">
+          Symptom
+          <textarea name="symptom" rows="2" required class="kb-form-input"
+                    style="width:100%; margin-top:3px; display:block; resize:vertical">{{ e.symptom }}</textarea>
+        </label>
+        <label style="flex:1; min-width:200px; font-size:0.82em; color:var(--text-sub)">
+          Root cause
+          <textarea name="root_cause" rows="2" required class="kb-form-input"
+                    style="width:100%; margin-top:3px; display:block; resize:vertical">{{ e.root_cause }}</textarea>
+        </label>
+        <label style="flex:1; min-width:200px; font-size:0.82em; color:var(--text-sub)">
+          Resolution
+          <textarea name="resolution" rows="2" required class="kb-form-input"
+                    style="width:100%; margin-top:3px; display:block; resize:vertical">{{ e.resolution }}</textarea>
+        </label>
+      </div>
+
+      <div style="display:flex; gap:8px; align-items:center">
+        <button type="submit" class="btn btn-primary btn-sm">Save</button>
+        <button type="button" class="btn btn-secondary btn-sm"
+                hx-get="/partials/kb-entry/{{ e.id }}/card"
+                hx-target="#kb-entry-{{ e.id }}"
+                hx-swap="outerHTML">
+          Cancel
+        </button>
+      </div>
+
+    </form>
+  </td>
+</tr>

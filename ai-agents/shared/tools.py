@@ -1473,11 +1473,13 @@ def search_knowledge_base(query: str) -> str:
     entries = _kb_store.search(query, limit=5)
     if not entries:
         return f"No prior incidents found matching: {query!r}"
+    # Record that these entries were consulted
+    _kb_store.increment_usage([e["id"] for e in entries])
     lines = [f"Found {len(entries)} matching knowledge base entry/entries:\n"]
     for i, e in enumerate(entries, 1):
         lines.append(
             f"[{i}] Alert type: {e.get('alert_type') or 'unknown'} | "
-            f"Source: {e.get('source')} | {e['created_at']}\n"
+            f"Source: {e.get('source')} | Used {e.get('usage_count', 0)} time(s) | {e['created_at']}\n"
             f"    Symptom:    {e['symptom']}\n"
             f"    Root cause: {e['root_cause']}\n"
             f"    Resolution: {e['resolution']}"
@@ -1515,7 +1517,7 @@ def save_to_knowledge_base(
         resolution=resolution,
         alert_type=alert_type or None,
         device_type=device_type or None,
-        source="manual",
+        source="agent",
     )
     return f"Knowledge base entry #{entry['id']} saved (alert_type={entry.get('alert_type') or 'unset'})."
 
