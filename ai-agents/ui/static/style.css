@@ -605,15 +605,16 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; 
 .metric-spark {
   position: relative;
   overflow: hidden;
-  padding-bottom: 62px;
+  padding: 10px 16px 38px;
 }
+.metric-spark .metric-value { font-size: 1.35em; }
 
 .spark-canvas {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
-  height: 56px;
+  height: 32px;
   pointer-events: none;
   opacity: 0.45;
   line-height: 0;
@@ -643,6 +644,50 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; 
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-bottom: 6px;
+}
+
+/* ── Chart empty state ───────────────────────────────── */
+.chart-empty-state {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px 20px;
+  text-align: center;
+  color: var(--text-main);
+  font-size: 0.88em;
+  margin-bottom: 10px;
+}
+
+/* ── Collapsible section ─────────────────────────────── */
+.collapsible-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  margin-bottom: 16px;
+}
+.collapsible-section > summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.collapsible-section > summary::-webkit-details-marker { display: none; }
+.collapsible-section > summary::before {
+  content: "▶";
+  font-size: 0.65em;
+  color: var(--text-sub);
+  transition: transform 0.15s;
+  display: inline-block;
+}
+.collapsible-section[open] > summary::before { transform: rotate(90deg); }
+
+/* ── Currency selector button active state ───────────── */
+.currency-btn-active {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* ── Animations ──────────────────────────────────────── */

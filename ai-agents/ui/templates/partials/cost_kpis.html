@@ -1,16 +1,15 @@
 <div id="cost-kpis"
      hx-get="/partials/cost-kpis"
-     hx-trigger="every 30s"
+     hx-trigger="every 30s, currency-changed"
      hx-swap="outerHTML">
 
-  <div class="section-label mb-8">💰 Cost Monitor</div>
   <div class="cards-row mb-12">
 
     <div class="metric-card metric-spark" style="border-top-color:{{ bar_color }}">
       {% if cost_sparkline %}<div class="spark-canvas">{{ cost_sparkline|safe }}</div>{% endif %}
       <div class="metric-title">Today's Spend</div>
-      <div class="metric-value" style="color:{{ bar_color }}">${{ "%.4f"|format(today_cost) }}</div>
-      <div class="metric-sub">{{ "%.1f"|format(pct_used) }}% of ${{ "%.2f"|format(daily_lim) }} budget</div>
+      <div class="metric-value" style="color:{{ bar_color }}">{{ currency_sym }}{{ "%.4f"|format(today_cost) }}</div>
+      <div class="metric-sub">{{ "%.1f"|format(pct_used) }}% of {{ currency_sym }}{{ "%.2f"|format(daily_lim) }} budget</div>
       <div class="progress-track mt-8">
         <div class="progress-fill" style="background:{{ bar_color }}; width:{{ pct_used }}%"></div>
       </div>
@@ -29,7 +28,7 @@
       <div class="metric-value" style="color:#8b5cf6">{{ "{:,}".format(hour_tok) }}</div>
       <div class="metric-sub">
         {% for name, u in usages.items() %}
-          <div>{{ name }}: {{ "{:,}".format(u.get("today",{}).get("total_tokens",0)) }} tok · ${{ "%.4f"|format(u.get("today",{}).get("cost_usd",0.0)) }}</div>
+          <div>{{ name }}: {{ "{:,}".format(u.get("today",{}).get("total_tokens",0)) }} tok · {{ currency_sym }}{{ "%.4f"|format(u.get("today",{}).get("cost_usd",0.0) * currency_rate) }}</div>
         {% endfor %}
       </div>
     </div>
@@ -37,8 +36,8 @@
     <div class="metric-card metric-spark" style="border-top-color:#22c55e">
       {% if budget_sparkline %}<div class="spark-canvas">{{ budget_sparkline|safe }}</div>{% endif %}
       <div class="metric-title">Budget Remaining</div>
-      <div class="metric-value" style="color:#22c55e">${{ "%.4f"|format(remaining) }}</div>
-      <div class="metric-sub">${{ "%.2f"|format(daily_lim) }} daily limit</div>
+      <div class="metric-value" style="color:#22c55e">{{ currency_sym }}{{ "%.4f"|format(remaining) }}</div>
+      <div class="metric-sub">{{ currency_sym }}{{ "%.2f"|format(daily_lim) }} daily limit</div>
     </div>
 
   </div>
@@ -88,9 +87,10 @@
   </div>
 
   <div class="section-label mb-8">📉 24-Hour Trends</div>
+  {% if has_chart_data %}
   <div class="chart-row">
     <div class="chart-card">
-      <div class="chart-card-title">Hourly Cost (USD) — dashed line = trend</div>
+      <div class="chart-card-title">Hourly Cost ({{ currency_sym }}) — dashed line = trend</div>
       {{ cost_chart|safe }}
     </div>
     <div class="chart-card">
@@ -98,5 +98,20 @@
       {{ tokens_chart|safe }}
     </div>
   </div>
+  {% else %}
+  <div class="chart-empty-state">
+    <div style="font-size:1.3em; margin-bottom:6px; opacity:0.5">📊</div>
+    <div style="font-weight:600; margin-bottom:4px">No AI activity in the last 24 hours</div>
+    {% if last_data_at %}
+    <div class="muted" style="font-size:0.82em">Last recorded activity: {{ last_data_at }}</div>
+    {% else %}
+    <div class="muted" style="font-size:0.82em">No token usage has been recorded yet.</div>
+    {% endif %}
+    <div class="muted" style="font-size:0.79em; margin-top:6px">
+      Token usage is recorded automatically during agent activity.
+      When using a local model (Ollama), costs show as {{ currency_sym }}0.0000 but activity is still tracked.
+    </div>
+  </div>
+  {% endif %}
 
 </div>

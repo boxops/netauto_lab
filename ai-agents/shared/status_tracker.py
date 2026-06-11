@@ -183,24 +183,40 @@ class StatusCallbackHandler(BaseCallbackHandler):
         self._emit("llm_start", None)
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
-        # Extract token counts from OpenAI response metadata
         prompt_tokens = 0
         completion_tokens = 0
         try:
             usage = response.llm_output.get("token_usage", {}) if response.llm_output else {}
-            prompt_tokens     = usage.get("prompt_tokens", 0)
-            completion_tokens = usage.get("completion_tokens", 0)
+            # OpenAI keys; also handle Anthropic-style keys
+            prompt_tokens     = int(usage.get("prompt_tokens")     or usage.get("input_tokens")  or 0)
+            completion_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
         except Exception:
             pass
+
+        # Ollama returns token counts in generation_info (prompt_eval_count / eval_count)
+        if not (prompt_tokens or completion_tokens):
+            try:
+                for gen_list in (response.generations or []):
+                    for gen in gen_list:
+                        info = getattr(gen, "generation_info", None) or {}
+                        p = int(info.get("prompt_eval_count") or 0)
+                        c = int(info.get("eval_count") or 0)
+                        if p or c:
+                            prompt_tokens, completion_tokens = p, c
+                            break
+                    if prompt_tokens or completion_tokens:
+                        break
+            except Exception:
+                pass
 
         total = prompt_tokens + completion_tokens
         self._status.add_tokens(total)
 
-        if self._rate_limiter and total > 0:
+        if self._rate_limiter:
             try:
                 model = ""
                 try:
-                    model = response.llm_output.get("model_name", "") if response.llm_output else ""
+                    model = (response.llm_output or {}).get("model_name", "") or ""
                 except Exception:
                     pass
                 cost = self._rate_limiter.record_usage(

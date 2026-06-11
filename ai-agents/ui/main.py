@@ -122,9 +122,23 @@ AGENT_API_KEY        = os.getenv("AGENT_API_KEY", "")
 # Shared persistent HTTP client — initialised in lifespan, reused across all requests.
 _http_client: httpx.AsyncClient | None = None
 
+# Currency conversion: code -> (rate_from_usd, symbol)
+_CURRENCY_RATES: dict[str, tuple[float, str]] = {
+    "USD": (1.0,   "$"),
+    "GBP": (0.79,  "£"),
+    "EUR": (0.93,  "€"),
+}
+
+def _get_currency(request: Request) -> tuple[str, float, str]:
+    """Return (code, rate, symbol) from the clano_currency cookie."""
+    code = request.cookies.get("clano_currency", "USD")
+    rate, sym = _CURRENCY_RATES.get(code, (1.0, "$"))
+    return code, rate, sym
+
 
 def _get_hourly_series(hours: int = 24) -> dict:
     """Hourly aggregated cost & token series from token_usage table."""
+    from sqlalchemy import text as _sql_text
     now     = datetime.now(timezone.utc)
     buckets = [(now - timedelta(hours=hours - 1 - i)).strftime("%Y-%m-%d %H") for i in range(hours)]
     labels  = [(now - timedelta(hours=hours - 1 - i)).strftime("%H") for i in range(hours)]
@@ -135,31 +149,38 @@ def _get_hourly_series(hours: int = 24) -> dict:
         "total_tokens":    [0]   * hours,
         "by_agent_cost":   {},
         "by_agent_tokens": {},
+        "last_data_at":    None,
     }
     try:
-        with sqlite3.connect(_ACTIVITY_DB, timeout=5) as conn:
-            conn.row_factory = sqlite3.Row
-            cutoff = buckets[0] + ":00:00 UTC"
+        cutoff = buckets[0] + ":00:00 UTC"
+        with task_store._engine.connect() as conn:
             rows = conn.execute(
-                "SELECT substr(timestamp,1,13) hk, agent, "
-                "SUM(estimated_cost_usd) cost, "
-                "SUM(prompt_tokens+completion_tokens) tokens "
-                "FROM token_usage WHERE timestamp>=? GROUP BY hk,agent",
-                (cutoff,),
+                _sql_text(
+                    "SELECT LEFT(timestamp, 13) hk, agent, "
+                    "SUM(estimated_cost_usd) cost, "
+                    "SUM(prompt_tokens + completion_tokens) tokens "
+                    "FROM token_usage WHERE timestamp >= :cutoff "
+                    "GROUP BY LEFT(timestamp, 13), agent"
+                ),
+                {"cutoff": cutoff},
             ).fetchall()
+            last_row = conn.execute(
+                _sql_text("SELECT MAX(timestamp) FROM token_usage")
+            ).fetchone()
+            result["last_data_at"] = last_row[0] if last_row else None
         idx = {b: i for i, b in enumerate(buckets)}
         for r in rows:
-            i = idx.get(r["hk"])
+            i = idx.get(r[0])
             if i is None:
                 continue
-            ag = r["agent"]
-            result["total_cost"][i]   += r["cost"]
-            result["total_tokens"][i] += r["tokens"]
+            ag = r[1]
+            result["total_cost"][i]   += float(r[2] or 0)
+            result["total_tokens"][i] += int(r[3] or 0)
             if ag not in result["by_agent_cost"]:
                 result["by_agent_cost"][ag]   = [0.0] * hours
                 result["by_agent_tokens"][ag] = [0]   * hours
-            result["by_agent_cost"][ag][i]   = r["cost"]
-            result["by_agent_tokens"][ag][i] = r["tokens"]
+            result["by_agent_cost"][ag][i]   = float(r[2] or 0)
+            result["by_agent_tokens"][ag][i] = int(r[3] or 0)
     except Exception:
         pass
     return result
@@ -1495,7 +1516,13 @@ async def partial_agent_status(request: Request):
             "age":     _age(status.get("started_at")),
             "truncate": _truncate,
         })
-    return templates.TemplateResponse(request, "partials/agent_status.html", {"request": request, "agents": statuses})
+    _, currency_rate, currency_sym = _get_currency(request)
+    return templates.TemplateResponse(request, "partials/agent_status.html", {
+        "request": request,
+        "agents": statuses,
+        "currency_sym": currency_sym,
+        "currency_rate": currency_rate,
+    })
 
 
 @app.get("/partials/fingerprints", response_class=HTMLResponse)
@@ -1683,6 +1710,7 @@ async def partial_cost_kpis(request: Request):
     _agent_usage_cfg = [
         ("ai_agent", OPS_AGENT_URL),
     ]
+    currency_code, currency_rate, currency_sym = _get_currency(request)
     usage_values, kpis, ts = await asyncio.gather(
         asyncio.gather(*[_fetch_agent_usage(_http_client, url) for _, url in _agent_usage_cfg]),
         run_in_threadpool(task_store.get_kpis),
@@ -1699,7 +1727,11 @@ async def partial_cost_kpis(request: Request):
     pct_used    = min(100.0, today_cost / daily_lim * 100) if daily_lim else 0
     bar_color   = "#ef4444" if pct_used >= 90 else "#f59e0b" if pct_used >= 70 else "#22c55e"
 
-    # 24-hour hourly time-series already fetched above via run_in_threadpool
+    # Apply currency conversion
+    r = currency_rate
+    today_cost_d  = today_cost  * r
+    remaining_d   = remaining   * r
+    daily_lim_d   = daily_lim   * r
 
     # Cumulative series for stat-card sparklines
     cum_cost: list[float] = []
@@ -1715,6 +1747,10 @@ async def partial_cost_kpis(request: Request):
     hour_sparkline   = _sparkline_svg([float(v) for v in ts["total_tokens"][-8:]], "#8b5cf6")
     budget_sparkline = _sparkline_svg(budget_series,                         "#22c55e")
 
+    # Detect no-data condition for 24h charts
+    has_chart_data = max(ts["total_cost"], default=0.0) > 0 or max(ts["total_tokens"], default=0) > 0
+    last_data_at   = (ts.get("last_data_at") or "")[:16]
+
     # Per-agent series for 24h charts
     _AGENT_DISPLAY = {
         "ai_agent":    ("Agent",  "#6366f1"),
@@ -1724,43 +1760,48 @@ async def partial_cost_kpis(request: Request):
         "chaos_agent": ("Chaos",  "#8b5cf6"),
     }
     cost_series: list[tuple[str, str, list[float]]] = [
-        ("Total", "#e2e8f0", ts["total_cost"])
+        ("Total", "#e2e8f0", [v * r for v in ts["total_cost"]])
     ]
     tok_series: list[tuple[str, str, list[float]]] = [
         ("Total", "#e2e8f0", [float(v) for v in ts["total_tokens"]])
     ]
     for ag, (lbl, clr) in _AGENT_DISPLAY.items():
         if ag in ts["by_agent_cost"]:
-            cost_series.append((lbl, clr, ts["by_agent_cost"][ag]))
+            cost_series.append((lbl, clr, [v * r for v in ts["by_agent_cost"][ag]]))
         if ag in ts["by_agent_tokens"]:
             tok_series.append((lbl, clr, [float(v) for v in ts["by_agent_tokens"][ag]]))
 
+    sym = currency_sym
     def _fmt_cost(v: float) -> str:
-        if v < 0.001: return f"${v:.5f}"
-        if v < 0.01:  return f"${v:.4f}"
-        return f"${v:.3f}"
+        if v < 0.001: return f"{sym}{v:.5f}"
+        if v < 0.01:  return f"{sym}{v:.4f}"
+        return f"{sym}{v:.3f}"
 
     def _fmt_tok(v: float) -> str:
         return f"{v/1000:.1f}k" if v >= 1000 else str(int(v))
 
-    cost_chart   = _chart_svg(cost_series, ts["labels"], fmt_y=_fmt_cost)
-    tokens_chart = _chart_svg(tok_series,  ts["labels"], fmt_y=_fmt_tok)
+    cost_chart   = _chart_svg(cost_series, ts["labels"], fmt_y=_fmt_cost) if has_chart_data else ""
+    tokens_chart = _chart_svg(tok_series,  ts["labels"], fmt_y=_fmt_tok)  if has_chart_data else ""
 
     return templates.TemplateResponse(request, "partials/cost_kpis.html", {
         "request":          request,
-        "today_cost":       today_cost,
+        "today_cost":       today_cost_d,
         "today_tok":        today_tok,
         "hour_tok":         hour_tok,
-        "daily_lim":        daily_lim,
-        "remaining":        remaining,
+        "daily_lim":        daily_lim_d,
+        "remaining":        remaining_d,
         "pct_used":         pct_used,
         "bar_color":        bar_color,
         "usages":           usages,
         "kpis":             kpis,
+        "currency_sym":     currency_sym,
+        "currency_rate":    currency_rate,
         "cost_sparkline":   cost_sparkline,
         "tokens_sparkline": tokens_sparkline,
         "hour_sparkline":   hour_sparkline,
         "budget_sparkline": budget_sparkline,
+        "has_chart_data":   has_chart_data,
+        "last_data_at":     last_data_at,
         "cost_chart":       cost_chart,
         "tokens_chart":     tokens_chart,
     })
@@ -2612,11 +2653,13 @@ async def system_page(request: Request):
         run_in_threadpool(store.get_recent, limit=150),
         run_in_threadpool(store.summary),
     )
+    currency_code, _, _ = _get_currency(request)
     return templates.TemplateResponse(request, "system.html", {
-        "request": request,
-        "records": records,
-        "summary": summary,
-        "truncate": _truncate,
+        "request":       request,
+        "records":       records,
+        "summary":       summary,
+        "truncate":      _truncate,
+        "currency_code": currency_code,
     })
 
 
@@ -2680,6 +2723,15 @@ async def partial_ai_mode_toggle(request: Request):
     agent_online = health["label"] == "Online"
     return templates.TemplateResponse(request, "partials/ai_mode_badge.html",
                                       {"request": request, "ai_enabled": enabled, "agent_online": agent_online})
+
+
+@app.post("/preferences/currency", response_class=HTMLResponse)
+async def set_currency_pref(request: Request, currency: str = Form("USD")):
+    code = currency if currency in _CURRENCY_RATES else "USD"
+    _, sym = _CURRENCY_RATES[code]
+    resp = HTMLResponse(f'<span style="font-size:0.78em;color:var(--text-sub)">{sym} {code} saved</span>')
+    resp.set_cookie("clano_currency", code, max_age=365 * 86400, samesite="lax")
+    return resp
 
 
 if __name__ == "__main__":

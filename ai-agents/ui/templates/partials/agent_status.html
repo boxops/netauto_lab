@@ -45,7 +45,7 @@
   <div class="mt-8">
     <div class="flex justify-between muted mb-4" style="font-size:0.72em">
       <span>Tokens/hr: {{ "{:,}".format(tokens_hr) }} / 50,000</span>
-      <span>Today: ${{ "%.4f"|format(today_cost) }}</span>
+      <span>Today: {{ currency_sym }}{{ "%.4f"|format(today_cost * currency_rate) }}</span>
     </div>
     <div class="progress-track">
       <div class="progress-fill" style="background:{{ bar_color }}; width:{{ pct }}%"></div>

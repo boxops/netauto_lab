@@ -7,15 +7,32 @@
 {# ════════════════════════════════════════════════════════════════════════════
    SECTION A — COST MONITOR
    ════════════════════════════════════════════════════════════════════════════ #}
-<div class="section-title">💰 Cost Monitor</div>
+<div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:10px">
+  <div class="section-title" style="margin-bottom:0">💰 Cost Monitor</div>
+  <div style="display:flex; align-items:center; gap:6px">
+    <span style="font-size:0.78em; color:var(--text-sub)">Currency:</span>
+    {% for code, label in [("USD","$ USD"), ("GBP","£ GBP"), ("EUR","€ EUR")] %}
+    <button class="btn btn-secondary btn-sm currency-btn {% if currency_code == code %}currency-btn-active{% endif %}"
+            style="padding:2px 9px; font-size:0.78em"
+            hx-post="/preferences/currency"
+            hx-vals='{"currency": "{{ code }}"}'
+            hx-target="#currency-saved"
+            hx-swap="innerHTML"
+            hx-on::after-request="htmx.trigger(document.getElementById('cost-kpis'), 'currency-changed'); htmx.trigger(document.querySelectorAll('[id=agent-status]')[0], 'currency-changed')">
+      {{ label }}
+    </button>
+    {% endfor %}
+    <span id="currency-saved" style="min-width:70px; font-size:0.78em; color:var(--text-sub)"></span>
+  </div>
+</div>
 <p class="muted" style="font-size:0.82em; margin-bottom:12px">
-  Token usage and estimated USD cost for all AI agent activity in the last 24 hours.
+  Token usage and estimated cost for all AI agent activity in the last 24 hours.
   The daily budget is set via the <code>DAILY_COST_LIMIT_USD</code> environment variable.
 </p>
 
 <div id="cost-kpis"
      hx-get="/partials/cost-kpis"
-     hx-trigger="load, every 30s"
+     hx-trigger="load, every 30s, currency-changed"
      hx-swap="innerHTML">
   <div class="muted" style="font-size:0.85em; padding:8px 0">Loading cost data…</div>
 </div>
@@ -23,73 +40,81 @@
 <hr class="divider" />
 
 {# ════════════════════════════════════════════════════════════════════════════
-   SECTION C — TASK QUEUE
+   SECTION C — TASK QUEUE (collapsible)
    ════════════════════════════════════════════════════════════════════════════ #}
-<div class="section-title">📋 Task Queue</div>
-<p class="muted" style="font-size:0.82em; margin-bottom:12px">
-  All tasks across the pipeline — filter by status or browse the full history.
-  Click a row to see the raw task record.
-</p>
+<details class="collapsible-section">
+  <summary>
+    <span class="section-title" style="display:inline; margin-bottom:0">📋 Task Queue</span>
+    <span class="muted" style="font-size:0.8em; margin-left:8px; font-weight:400">full pipeline history &amp; task inspector</span>
+  </summary>
 
-<div class="filters-row mb-8">
-  <select id="sys-status-filter"
-          hx-get="/partials/task-queue"
-          hx-target="#sys-task-queue-body"
-          hx-trigger="change"
-          hx-include="#sys-status-filter, #sys-show-archived"
-          hx-swap="innerHTML">
-    <option value="">Active statuses</option>
-    {% for s in ["pending","claimed","running","awaiting_approval","complete","failed","rejected"] %}
-    <option value="{{ s }}">{{ s }}</option>
-    {% endfor %}
-  </select>
-  <label style="display:flex; align-items:center; gap:5px; font-size:0.83em; color:var(--text-sub); cursor:pointer; user-select:none">
-    <input type="checkbox" id="sys-show-archived" name="show_archived" value="1"
-           hx-get="/partials/task-queue"
-           hx-target="#sys-task-queue-body"
-           hx-trigger="change"
-           hx-include="#sys-status-filter, #sys-show-archived"
-           hx-swap="innerHTML">
-    Show archived
-  </label>
-  <button class="btn btn-secondary btn-sm"
-          hx-get="/partials/task-queue"
-          hx-target="#sys-task-queue-body"
-          hx-include="#sys-status-filter, #sys-show-archived"
-          hx-swap="innerHTML">
-    🔄 Refresh
-  </button>
-  <button class="btn btn-secondary btn-sm"
-          hx-post="/tasks/clear"
-          hx-vals='{"confirmed":"yes"}'
-          hx-target="#sys-clear-status"
-          hx-swap="innerHTML"
-          hx-confirm="Delete ALL tasks and reset the alert poller? This cannot be undone.">
-    🗑️ Clear All Tasks
-  </button>
-  <span id="sys-clear-status" class="muted" style="font-size:0.82em"></span>
-</div>
+  <div style="margin-top:10px">
+  <p class="muted" style="font-size:0.82em; margin-bottom:12px">
+    All tasks across the pipeline — filter by status or browse the full history.
+    Click a row to see the raw task record.
+  </p>
 
-<div class="table-wrap mb-12">
-  <table class="data-table">
-    <thead>
-      <tr>
-        <th>ID</th><th>Status</th><th>Priority</th><th>Title</th><th>Age</th><th></th>
-      </tr>
-    </thead>
-    <tbody id="sys-task-queue-body"
-           hx-get="/partials/task-queue"
-           hx-include="#sys-status-filter, #sys-show-archived"
-           hx-trigger="load"
-           hx-swap="innerHTML">
-    </tbody>
-  </table>
-</div>
+  <div class="filters-row mb-8">
+    <select id="sys-status-filter"
+            hx-get="/partials/task-queue"
+            hx-target="#sys-task-queue-body"
+            hx-trigger="change"
+            hx-include="#sys-status-filter, #sys-show-archived"
+            hx-swap="innerHTML">
+      <option value="">Active statuses</option>
+      {% for s in ["pending","claimed","running","awaiting_approval","complete","failed","rejected"] %}
+      <option value="{{ s }}">{{ s }}</option>
+      {% endfor %}
+    </select>
+    <label style="display:flex; align-items:center; gap:5px; font-size:0.83em; color:var(--text-sub); cursor:pointer; user-select:none">
+      <input type="checkbox" id="sys-show-archived" name="show_archived" value="1"
+             hx-get="/partials/task-queue"
+             hx-target="#sys-task-queue-body"
+             hx-trigger="change"
+             hx-include="#sys-status-filter, #sys-show-archived"
+             hx-swap="innerHTML">
+      Show archived
+    </label>
+    <button class="btn btn-secondary btn-sm"
+            hx-get="/partials/task-queue"
+            hx-target="#sys-task-queue-body"
+            hx-include="#sys-status-filter, #sys-show-archived"
+            hx-swap="innerHTML">
+      🔄 Refresh
+    </button>
+    <button class="btn btn-secondary btn-sm"
+            hx-post="/tasks/clear"
+            hx-vals='{"confirmed":"yes"}'
+            hx-target="#sys-clear-status"
+            hx-swap="innerHTML"
+            hx-confirm="Delete ALL tasks and reset the alert poller? This cannot be undone.">
+      🗑️ Clear All Tasks
+    </button>
+    <span id="sys-clear-status" class="muted" style="font-size:0.82em"></span>
+  </div>
 
-<div class="section-title" style="margin-top:20px">🔍 Task Detail</div>
-<div id="sys-task-detail" class="detail-panel">
-  <span class="muted">Click a task row above to see its full record.</span>
-</div>
+  <div class="table-wrap mb-12">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>ID</th><th>Status</th><th>Priority</th><th>Title</th><th>Age</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="sys-task-queue-body"
+             hx-get="/partials/task-queue"
+             hx-include="#sys-status-filter, #sys-show-archived"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section-title" style="margin-top:20px">🔍 Task Detail</div>
+  <div id="sys-task-detail" class="detail-panel">
+    <span class="muted">Click a task row above to see its full record.</span>
+  </div>
+  </div>
+</details>
 
 <script>
   document.addEventListener("htmx:afterSwap", function (e) {
