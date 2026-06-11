@@ -1,0 +1,49 @@
+{% if not ok and not error %}
+<span class="muted" style="font-size:0.82em">Start typing to see a parsed summary…</span>
+{% elif error %}
+<div class="yaml-validation-error">
+  <div style="font-weight:700; color:#ef4444; margin-bottom:4px; font-size:0.82em">⚠ Parse error</div>
+  <div style="font-size:0.79em; color:#fca5a5; font-family:monospace; white-space:pre-wrap">{{ error }}</div>
+</div>
+{% elif ok and summary %}
+{% set level_color = {
+  'L0': '#6b7280', 'L1': '#3b82f6', 'L2': '#f59e0b',
+  'L3': '#f97316', 'L4': '#22c55e', 'L5': '#a855f7'
+}.get(summary.level, '#6b7280') %}
+<div class="yaml-validation-ok">
+  <div style="font-size:0.78em; font-weight:700; color:#22c55e; margin-bottom:8px">✓ Valid policy</div>
+
+  <div class="yaml-preview-row">
+    <span class="yaml-preview-label">Name</span>
+    <span class="yaml-preview-value" style="font-weight:600">{{ summary.name }}</span>
+  </div>
+  <div class="yaml-preview-row">
+    <span class="yaml-preview-label">Matches</span>
+    <span class="yaml-preview-value">
+      alert <strong>{{ summary.alertname }}</strong>
+      · fix_type <strong>{{ summary.fix_type }}</strong>
+      · role <strong>{{ summary.device_role }}</strong>
+      · env <strong>{{ summary.environment }}</strong>
+    </span>
+  </div>
+  <div class="yaml-preview-row">
+    <span class="yaml-preview-label">Gate</span>
+    <span class="yaml-preview-value">
+      <span style="background:{{ level_color }}22; color:{{ level_color }}; border:1px solid {{ level_color }}44;
+                   border-radius:3px; padding:1px 6px; font-size:0.88em; font-weight:700">{{ summary.level }}</span>
+      · confidence ≥ {{ summary.min_confidence }} · risk ≤ {{ summary.max_risk }}
+    </span>
+  </div>
+  <div class="yaml-preview-row">
+    <span class="yaml-preview-label">Fast path</span>
+    <span class="yaml-preview-value">
+      {% if summary.has_fast_path %}
+        <span style="color:#22c55e">⚡ enabled</span>
+        {% if summary.condition_count %}· {{ summary.condition_count }} condition{{ 's' if summary.condition_count != 1 }}{% endif %}
+      {% else %}
+        <span class="muted">— AI investigation only</span>
+      {% endif %}
+    </span>
+  </div>
+</div>
+{% endif %}

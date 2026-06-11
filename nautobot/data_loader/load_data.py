@@ -899,6 +899,13 @@ class NautobotDataLoader:
             if key in interface_def:
                 payload[key] = interface_def[key]
 
+        if "untagged_vlan" in interface_def:
+            vid = interface_def["untagged_vlan"]
+            vlan_matches = list(self.nb.ipam.vlans.filter(vid=vid))
+            if not vlan_matches:
+                raise RuntimeError(f"VLAN vid {vid} not found (needed by interface {interface_def['name']})")
+            payload["untagged_vlan"] = str(vlan_matches[0].id)
+
         return self.create_or_get(
             self.nb.dcim.interfaces,
             {"device_id": device_id, "name": interface_def["name"]},
@@ -1210,6 +1217,9 @@ class NautobotDataLoader:
             if supports_relations and item.get("platforms"):
                 payload["platforms"] = [self.get_by_name(self.nb.dcim.platforms, n, "Platform").id for n in item["platforms"]]
                 compare_keys.append("platforms")
+            if item.get("devices"):
+                payload["devices"] = [self.get_by_name(self.nb.dcim.devices, n, "Device").id for n in item["devices"]]
+                compare_keys.append("devices")
             self.create_or_get(
                 self.nb.extras.config_contexts,
                 {"name": item["name"]},
@@ -1366,6 +1376,9 @@ class NautobotDataLoader:
                     )
                 update_payload[device_primary_ip_field(fallback_addr)] = ip_obj.id
 
+            if "local_context_data" in item:
+                update_payload["local_config_context_data"] = item["local_context_data"]
+
             self.update_if_needed(device, update_payload, object_type="Device", identity=item["name"])
             display_primary = primary_ip4 or primary_ip6 or item.get("primary_ip", "none")
             print(f"  Device: {item['name']} ({display_primary})")
@@ -1441,6 +1454,49 @@ class NautobotDataLoader:
                 f"  Cable: {item['a_device']}:{item['a_interface']} <-> "
                 f"{item['b_device']}:{item['b_interface']}"
             )
+
+    def _resolve_platform_by_network_driver(self, network_driver: str) -> Any:
+        matches = list(self.nb.dcim.platforms.filter(network_driver=network_driver))
+        if not matches:
+            raise RuntimeError(f"Platform with network_driver '{network_driver}' not found")
+        return matches[0]
+
+    def ensure_compliance_rules(self) -> None:
+        platform_cache: dict[str, Any] = {}
+        for rule in self.data.get("compliance_rules", []):
+            slug = rule["feature_slug"]
+            network_driver = rule["platform_network_driver"]
+
+            feature = self.create_or_get(
+                self.nb.plugins.golden_config.compliance_feature,
+                {"name": slug},
+                {"name": slug, "slug": slug},
+                object_type="ComplianceFeature",
+                identity=slug,
+                update_existing=False,
+            )
+
+            if network_driver not in platform_cache:
+                platform_cache[network_driver] = self._resolve_platform_by_network_driver(network_driver)
+            platform = platform_cache[network_driver]
+
+            payload = {
+                "feature": str(feature.id),
+                "platform": str(platform.id),
+                "config_ordered": bool(rule.get("config_ordered", False)),
+                "match_config": rule.get("match_config", ""),
+                "config_type": rule.get("config_type", "cli"),
+                "config_remediation": bool(rule.get("config_remediation", True)),
+            }
+            self.create_or_get(
+                self.nb.plugins.golden_config.compliance_rule,
+                {"feature": str(feature.id), "platform": str(platform.id)},
+                payload,
+                object_type="ComplianceRule",
+                identity=f"{network_driver}:{slug}",
+                compare_keys=["config_ordered", "match_config", "config_type", "config_remediation"],
+            )
+            print(f"  ComplianceRule: {network_driver}:{slug}")
 
     def _managed_devices(self) -> dict[str, Any]:
         managed: dict[str, Any] = {}
@@ -1662,6 +1718,32 @@ class NautobotDataLoader:
                 self._remove_prefetch_object(self.nb.dcim.location_types, location_type)
             self._record_action("delete", "LocationType", name, object_id=getattr(location_type, "id", None))
 
+        desired_rule_identities = {
+            f"{r['platform_network_driver']}:{r['feature_slug']}"
+            for r in self.data.get("compliance_rules", [])
+        }
+        desired_feature_slugs = {r["feature_slug"] for r in self.data.get("compliance_rules", [])}
+        if self.data.get("compliance_rules") is not None:
+            for rule in list(self.nb.plugins.golden_config.compliance_rule.filter(limit=1000)):
+                feature_obj = getattr(rule, "feature", None)
+                platform_obj = getattr(rule, "platform", None)
+                feature_name = getattr(feature_obj, "name", None) or (feature_obj.get("name") if isinstance(feature_obj, dict) else None)
+                platform_nd = getattr(platform_obj, "network_driver", None) or (platform_obj.get("network_driver") if isinstance(platform_obj, dict) else None)
+                if feature_name is None or platform_nd is None:
+                    continue
+                identity = f"{platform_nd}:{feature_name}"
+                if identity not in desired_rule_identities:
+                    if not self.is_plan:
+                        self._safe_delete(rule)
+                    self._record_action("delete", "ComplianceRule", identity, object_id=getattr(rule, "id", None))
+            for feature in list(self.nb.plugins.golden_config.compliance_feature.filter(limit=1000)):
+                name = getattr(feature, "name", None)
+                if not name or name in desired_feature_slugs:
+                    continue
+                if not self.is_plan:
+                    self._safe_delete(feature)
+                self._record_action("delete", "ComplianceFeature", name, object_id=getattr(feature, "id", None))
+
     def prune_managed_network_state(self) -> None:
         managed_devices = self._managed_devices()
         desired_interfaces, desired_ips = self._desired_interface_sets()
@@ -1831,6 +1913,7 @@ class NautobotDataLoader:
         self.ensure_secrets_and_group()
         self.ensure_devices()
         self.ensure_cables()
+        self.ensure_compliance_rules()
         if self.mode in ("apply", "prune", "plan"):
             self.prune_managed_network_state()
             self.prune_managed_global_state()

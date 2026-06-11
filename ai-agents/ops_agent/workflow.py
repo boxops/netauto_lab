@@ -910,6 +910,26 @@ class IncidentWorkflow:
         device    = state.get("device", "") or state.get("instance", "")
         task_id   = state.get("rca_task_id")
 
+        # Collect fast-path policy candidates for diagnostics (enabled policies with conditions)
+        try:
+            all_policies = self._ts.list_policies(tenant_id=state.get("tenant_id", "default"))
+            fp_candidates = [
+                p.get("name", p.get("id", "?"))
+                for p in all_policies
+                if p.get("enabled") and p.get("conditions")
+            ]
+            non_fp = [
+                p.get("name", p.get("id", "?"))
+                for p in all_policies
+                if p.get("enabled") and not p.get("conditions")
+            ]
+            fp_hint = (
+                f"Fast-path candidates checked: {fp_candidates or 'none'}. "
+                f"Gate-only policies (require AI): {non_fp or 'none'}."
+            )
+        except Exception:
+            fp_hint = ""
+
         try:
             if not task_id:
                 task = self._ts.create_task(
@@ -927,7 +947,12 @@ class IncidentWorkflow:
                         "device":    device,
                         "instance":  state.get("instance", ""),
                         "summary":   state.get("summary", ""),
-                        "reason":    "AI investigation suppressed (ai_enabled=False). No programmatic fast-path policy matched. Manual review required.",
+                        "reason":    (
+                            "AI investigation suppressed (ai_enabled=False). "
+                            "No programmatic fast-path policy matched. "
+                            "Manual review required. "
+                            + fp_hint
+                        ).strip(),
                     },
                 )
                 task_id = task["id"]

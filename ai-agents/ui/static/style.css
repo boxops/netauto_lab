@@ -1288,3 +1288,199 @@ html.no-help .help-callout { display: none !important; }
   font-size: 0.95em;
 }
 .mt-24 { margin-top: 24px; }
+
+/* ══════════════════════════════════════════════════════════
+   POLICY YAML EDITOR
+   ══════════════════════════════════════════════════════════ */
+
+/* ── Add-policy tab strip ───────────────────────────────── */
+.add-policy-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0;
+}
+.add-policy-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 6px 16px;
+  font-size: 0.82em;
+  font-weight: 600;
+  color: var(--text-sub);
+  cursor: pointer;
+  margin-bottom: -1px;
+  letter-spacing: 0.02em;
+}
+.add-policy-tab:hover { color: var(--text); }
+.add-policy-tab-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.add-policy-panel {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  padding: 14px 16px 16px;
+  margin-bottom: 6px;
+}
+
+/* ── Blueprint picker ───────────────────────────────────── */
+.blueprint-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.blueprint-picker-label {
+  font-size: 0.75em;
+  font-weight: 600;
+  color: var(--text-sub);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+.blueprint-chip {
+  font-size: 0.76em !important;
+  padding: 2px 10px !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+.blueprint-chip:hover {
+  background: var(--accent-dim) !important;
+}
+
+/* ── Two-column editor/preview layout ───────────────────── */
+.policy-yaml-wrap {
+  width: 100%;
+}
+.policy-yaml-layout {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.policy-yaml-left  { flex: 3; min-width: 0; }
+.policy-yaml-right { flex: 1; min-width: 220px; max-width: 300px; }
+
+.policy-yaml-section-label {
+  font-size: 0.72em;
+  font-weight: 700;
+  color: var(--text-sub);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+/* ── YAML textarea ──────────────────────────────────────── */
+.yaml-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 420px;
+  background: #0a111e;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: #c9d1d9;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
+  font-size: 0.82em;
+  line-height: 1.6;
+  padding: 12px 14px;
+  resize: vertical;
+  tab-size: 2;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.yaml-textarea:focus {
+  border-color: var(--accent);
+}
+
+/* ── YAML error banner ──────────────────────────────────── */
+.yaml-error {
+  margin-top: 6px;
+  padding: 7px 10px;
+  background: #ef444418;
+  border: 1px solid #ef444455;
+  border-radius: 5px;
+  color: #fca5a5;
+  font-size: 0.8em;
+  font-family: monospace;
+  white-space: pre-wrap;
+}
+
+/* ── Validation preview panel ───────────────────────────── */
+.yaml-preview {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  min-height: 80px;
+  font-size: 0.8em;
+}
+.yaml-validation-error {
+  padding: 4px 0;
+}
+.yaml-validation-ok {
+  padding: 2px 0;
+}
+.yaml-preview-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 7px;
+}
+.yaml-preview-label {
+  font-size: 0.72em;
+  font-weight: 700;
+  color: var(--text-sub);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.yaml-preview-value {
+  font-size: 0.88em;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+/* ── Quick reference table ──────────────────────────────── */
+.yaml-reference { font-size: 0.78em; }
+.yaml-ref-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.yaml-ref-table th {
+  font-weight: 600;
+  color: var(--text-sub);
+  border-bottom: 1px solid var(--border);
+  padding: 2px 4px;
+  text-align: left;
+}
+.yaml-ref-table td {
+  padding: 2px 4px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border)44;
+}
+.yaml-ref-table td:first-child {
+  font-family: monospace;
+  color: var(--accent);
+  white-space: nowrap;
+  padding-right: 8px;
+}
+.yaml-ref-table td:last-child {
+  color: var(--text-sub);
+  word-break: break-word;
+}
+
+/* ── Edit YAML panel inside table row ───────────────────── */
+#policy-list table tr td .policy-yaml-wrap {
+  padding: 14px 16px;
+}
+
+/* ── Responsive: stack on narrow viewports ──────────────── */
+@media (max-width: 780px) {
+  .policy-yaml-layout { flex-direction: column; }
+  .policy-yaml-right  { max-width: 100%; width: 100%; }
+}

@@ -1,6 +1,16 @@
 {% if not policies %}
-  <div class="muted" style="font-size:0.85em; padding:8px 0">No policies defined.</div>
+  <div class="muted" style="font-size:0.85em; padding:8px 0">
+    No policies defined. Use a blueprint above to add your first one.
+  </div>
 {% else %}
+<div style="display:flex; justify-content:flex-end; margin-bottom:6px">
+  <a href="/partials/policy-export-yaml"
+     class="btn btn-secondary btn-sm"
+     style="font-size:0.78em; padding:3px 10px; text-decoration:none"
+     download="clano_policies.yaml">
+    ↓ Export all (YAML)
+  </a>
+</div>
 <table style="width:100%; border-collapse:collapse; font-size:0.83em">
   <thead>
     <tr style="color:var(--muted); border-bottom:1px solid var(--border); text-align:left">
@@ -17,15 +27,14 @@
   <tbody>
   {% for p in policies %}
   {% set level_color = {
-    'L0': '#ef4444', 'L1': '#f97316', 'L2': '#eab308',
-    'L3': '#22c55e', 'L4': '#3b82f6', 'L5': '#8b5cf6'
+    'L0': '#6b7280', 'L1': '#3b82f6', 'L2': '#f59e0b',
+    'L3': '#f97316', 'L4': '#22c55e', 'L5': '#a855f7'
   }.get(p.autonomy_level, '#6b7280') %}
   <tr style="border-bottom:1px solid var(--border)"
       id="policy-row-{{ p.id }}">
     <td style="padding:7px 10px; font-weight:500">
       {{ p.name }}
       {% if p.conditions %}
-        {# Fix 2: show fast-path outcome counters when at least one outcome recorded #}
         {% set fp_total = (p.fast_path_success_count or 0) + (p.fast_path_failure_count or 0) %}
         {% if fp_total > 0 %}
           <span title="Fast-path outcomes: {{ p.fast_path_success_count or 0 }} success / {{ p.fast_path_failure_count or 0 }} failure"
@@ -49,12 +58,10 @@
              border-color:{{ level_color }}55; font-size:0.78em; font-weight:700">
         {{ p.autonomy_level }}
       </span>
-      {# Fix 1: lock badge for non-promotable policies #}
       {% if not p.promotable %}
         <span title="Promotion locked — LearningEngine will not auto-promote this policy"
               style="font-size:0.75em; margin-left:4px; vertical-align:middle; color:var(--muted)">🔒</span>
       {% endif %}
-      {# Fix 3: expiry indicator — now_iso provided by route as current UTC timestamp string #}
       {% if p.autonomy_level_expires_at %}
         {% if p.autonomy_level_expires_at < now_iso %}
           <span title="Autonomy level expired — will be treated as L2 until re-validated"
@@ -72,7 +79,7 @@
         <span style="color:var(--muted); font-size:0.82em">disabled</span>
       {% endif %}
     </td>
-    <td style="padding:7px 10px">
+    <td style="padding:7px 10px; white-space:nowrap">
       <button class="btn btn-sm btn-secondary"
               hx-post="/partials/policy-toggle/{{ p.id }}"
               hx-target="#policy-list"
@@ -81,11 +88,19 @@
         {{ 'Disable' if p.enabled else 'Enable' }}
       </button>
       <button class="btn btn-sm btn-secondary"
-              hx-get="/partials/policy-edit/{{ p.id }}"
+              hx-get="/partials/policy-yaml-edit/{{ p.id }}"
               hx-target="#policy-row-{{ p.id }}"
               hx-swap="outerHTML"
               style="font-size:0.78em; padding:3px 10px; margin-left:4px">
         Edit
+      </button>
+      <button class="btn btn-sm btn-secondary"
+              hx-post="/partials/policy-duplicate/{{ p.id }}"
+              hx-target="#policy-list"
+              hx-swap="innerHTML"
+              title="Clone this policy"
+              style="font-size:0.78em; padding:3px 8px; margin-left:4px">
+        Clone
       </button>
       <button class="btn btn-sm"
               style="font-size:0.78em; padding:3px 10px; background:var(--bg3);

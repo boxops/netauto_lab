@@ -372,38 +372,86 @@ class PolicyRegistry:
         conf_rank = _CONFIDENCE_RANK.get(confidence, 0)
         risk_rank = _RISK_RANK.get(risk, 2)
 
+        logger.debug(
+            "PolicyRegistry._find_best_match: alertname=%s fix_type=%s device_role=%s "
+            "env=%s confidence=%s(rank=%d) risk=%s(rank=%d) prior_success=%d candidates=%d",
+            alertname, fix_type, device_role, environment,
+            confidence, conf_rank, risk, risk_rank, prior_success_count, len(policies),
+        )
+
         for p in policies:
+            pname = p.get("name", p.get("id", "?"))
             # Hard filter: confidence must meet minimum, risk must not exceed maximum
             min_conf = _CONFIDENCE_RANK.get(p.get("min_confidence", "low"), 0)
             max_risk = _RISK_RANK.get(p.get("max_risk", "high"), 2)
             if conf_rank < min_conf:
+                logger.info(
+                    "PolicyRegistry: skip '%s' — confidence %s(rank=%d) < min_confidence %s(rank=%d)",
+                    pname, confidence, conf_rank, p.get("min_confidence"), min_conf,
+                )
                 continue
             if risk_rank > max_risk:
+                logger.info(
+                    "PolicyRegistry: skip '%s' — risk %s(rank=%d) > max_risk %s(rank=%d)",
+                    pname, risk, risk_rank, p.get("max_risk"), max_risk,
+                )
                 continue
             if prior_success_count < p.get("min_prior_successes", 0):
+                logger.info(
+                    "PolicyRegistry: skip '%s' — prior_success_count %d < min_prior_successes %d",
+                    pname, prior_success_count, p.get("min_prior_successes", 0),
+                )
                 continue
 
             # Field matches — empty field in policy = wildcard (matches anything)
             score = 0
             if p.get("alertname"):
                 if p["alertname"] != alertname:
+                    logger.info(
+                        "PolicyRegistry: skip '%s' — alertname '%s' != '%s'",
+                        pname, p["alertname"], alertname,
+                    )
                     continue
                 score += 8
             if p.get("fix_type"):
                 if p["fix_type"] != fix_type:
+                    logger.info(
+                        "PolicyRegistry: skip '%s' — fix_type '%s' != '%s'",
+                        pname, p["fix_type"], fix_type,
+                    )
                     continue
                 score += 4
             if p.get("device_role"):
                 if p["device_role"] != device_role:
+                    logger.info(
+                        "PolicyRegistry: skip '%s' — device_role '%s' != '%s'",
+                        pname, p["device_role"], device_role,
+                    )
                     continue
                 score += 2
             if p.get("environment"):
                 if p["environment"] != environment:
+                    logger.info(
+                        "PolicyRegistry: skip '%s' — environment '%s' != '%s'",
+                        pname, p["environment"], environment,
+                    )
                     continue
                 score += 1
 
+            logger.debug("PolicyRegistry: candidate '%s' score=%d", pname, score)
             if score > best_score:
                 best_score = score
                 best = p
 
+        if best is None:
+            logger.info(
+                "PolicyRegistry: no match — alertname=%s fix_type=%s device_role=%s "
+                "env=%s confidence=%s risk=%s — falling back to L2 default",
+                alertname, fix_type, device_role, environment, confidence, risk,
+            )
+        else:
+            logger.info(
+                "PolicyRegistry: matched '%s' (level=%s score=%d) for alertname=%s",
+                best.get("name"), best.get("autonomy_level"), best_score, alertname,
+            )
         return best

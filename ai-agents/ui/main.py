@@ -12,6 +12,9 @@ import os
 import sys
 import uuid
 import sqlite3
+import textwrap
+
+import yaml as _yaml
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -1870,6 +1873,341 @@ async def intents_page(request: Request):
     return templates.TemplateResponse(request, "intents.html", {"request": request})
 
 
+# ── Policy ↔ YAML serialisation ───────────────────────────────────────────────
+
+def _policy_to_yaml(p: dict) -> str:
+    """Convert a policy DB row to a human-editable YAML string."""
+    import json as _j
+    doc: dict = {}
+    for k in ("name", "alertname", "fix_type", "device_role", "environment", "description"):
+        doc[k] = p.get(k) or ""
+
+    doc["gate"] = {
+        "level":          p.get("autonomy_level", "L2"),
+        "min_confidence": p.get("min_confidence", "low"),
+        "max_risk":       p.get("max_risk", "high"),
+        "promotable":     bool(p.get("promotable", True)),
+    }
+
+    conditions: list = []
+    if p.get("conditions"):
+        try:
+            conditions = _j.loads(p["conditions"])
+        except Exception:
+            conditions = []
+
+    rca: dict = {}
+    if p.get("rca_template"):
+        try:
+            rca = _j.loads(p["rca_template"])
+        except Exception:
+            rca = {}
+
+    fix: dict = {}
+    if p.get("fix_template"):
+        try:
+            fix = _j.loads(p["fix_template"])
+        except Exception:
+            fix = {}
+
+    if conditions or rca or fix:
+        fp: dict = {}
+        if conditions:
+            fp["conditions"] = conditions
+        if rca:
+            fp["rca"] = {
+                "diagnosis":      rca.get("diagnosis", ""),
+                "confidence":     rca.get("confidence", "high"),
+                "action":         rca.get("action", ""),
+                "upstream_cause": rca.get("upstream_cause", ""),
+            }
+        if fix:
+            fp["fix"] = {
+                "fix_type":   fix.get("fix_type", "config_change"),
+                "commands":   fix.get("commands", ""),
+                "risk":       fix.get("risk", "low"),
+                "confidence": fix.get("confidence", "high"),
+                "reason":     fix.get("reason", ""),
+            }
+        doc["fast_path"] = fp
+
+    return _yaml.dump(doc, default_flow_style=False, allow_unicode=True, sort_keys=False, width=100)
+
+
+def _yaml_to_policy(yaml_str: str, tenant_id: str = "default") -> dict:
+    """Parse a YAML string into a policy data dict ready for create/update.
+    Raises ValueError with a user-readable message on any problem."""
+    import json as _j
+    try:
+        doc = _yaml.safe_load(yaml_str)
+    except _yaml.YAMLError as exc:
+        raise ValueError(f"YAML parse error: {exc}") from exc
+
+    if not isinstance(doc, dict):
+        raise ValueError("Expected a YAML mapping at the top level.")
+
+    name = (doc.get("name") or "").strip()
+    if not name:
+        raise ValueError("'name' is required.")
+
+    valid_levels = {"L0", "L1", "L2", "L3", "L4", "L5"}
+    valid_conf   = {"low", "medium", "high", "certain"}
+    valid_risk   = {"low", "medium", "high"}
+
+    gate = doc.get("gate") or {}
+    level = (gate.get("level") or "L2").strip()
+    if level not in valid_levels:
+        raise ValueError(f"gate.level must be one of {sorted(valid_levels)}, got '{level}'.")
+    min_conf = (gate.get("min_confidence") or "low").strip()
+    if min_conf not in valid_conf:
+        raise ValueError(f"gate.min_confidence must be one of {sorted(valid_conf)}, got '{min_conf}'.")
+    max_risk = (gate.get("max_risk") or "high").strip()
+    if max_risk not in valid_risk:
+        raise ValueError(f"gate.max_risk must be one of {sorted(valid_risk)}, got '{max_risk}'.")
+
+    data: dict = {
+        "name":           name,
+        "alertname":      (doc.get("alertname") or "").strip(),
+        "fix_type":       (doc.get("fix_type") or "").strip(),
+        "device_role":    (doc.get("device_role") or "").strip(),
+        "environment":    (doc.get("environment") or "").strip(),
+        "description":    (doc.get("description") or "").strip(),
+        "autonomy_level": level,
+        "min_confidence": min_conf,
+        "max_risk":       max_risk,
+        "promotable":     bool(gate.get("promotable", True)),
+        "tenant_id":      tenant_id,
+        "conditions":     None,
+        "rca_template":   None,
+        "fix_template":   None,
+    }
+
+    fp = doc.get("fast_path")
+    if isinstance(fp, dict):
+        conds = fp.get("conditions")
+        if conds:
+            if not isinstance(conds, list):
+                raise ValueError("fast_path.conditions must be a list.")
+            valid_ctypes = {"metric", "show_command", "nautobot"}
+            for i, c in enumerate(conds):
+                if not isinstance(c, dict):
+                    raise ValueError(f"fast_path.conditions[{i}] must be a mapping.")
+                if c.get("type") not in valid_ctypes:
+                    raise ValueError(f"fast_path.conditions[{i}].type must be one of {sorted(valid_ctypes)}.")
+            data["conditions"] = _j.dumps(conds)
+
+        rca = fp.get("rca")
+        if isinstance(rca, dict) and rca.get("diagnosis"):
+            rconf = (rca.get("confidence") or "high").strip()
+            if rconf not in valid_conf:
+                raise ValueError(f"fast_path.rca.confidence must be one of {sorted(valid_conf)}.")
+            data["rca_template"] = _j.dumps({
+                "diagnosis":       (rca.get("diagnosis") or "").strip(),
+                "confidence":      rconf,
+                "action":          (rca.get("action") or "").strip(),
+                "affected_device": "{device}",
+                "upstream_cause":  (rca.get("upstream_cause") or "").strip(),
+                "is_leaf_symptom": False,
+            })
+
+        fix = fp.get("fix")
+        valid_ftypes = {"config_change", "runbook", "escalate_human", "no_action"}
+        if isinstance(fix, dict) and fix.get("commands"):
+            ftype = (fix.get("fix_type") or "config_change").strip()
+            if ftype not in valid_ftypes:
+                raise ValueError(f"fast_path.fix.fix_type must be one of {sorted(valid_ftypes)}.")
+            frisk = (fix.get("risk") or "low").strip()
+            if frisk not in valid_risk:
+                raise ValueError(f"fast_path.fix.risk must be one of {sorted(valid_risk)}.")
+            fconf = (fix.get("confidence") or "high").strip()
+            if fconf not in valid_conf:
+                raise ValueError(f"fast_path.fix.confidence must be one of {sorted(valid_conf)}.")
+            data["fix_template"] = _j.dumps({
+                "fix_type":   ftype,
+                "commands":   fix.get("commands", "").strip(),
+                "risk":       frisk,
+                "confidence": fconf,
+                "reason":     (fix.get("reason") or "").strip(),
+            })
+
+    return data
+
+
+# ── Policy blueprints ─────────────────────────────────────────────────────────
+
+_POLICY_BLUEPRINTS: dict[str, tuple[str, str]] = {
+    "interface_admin_down": (
+        "Interface Down Recovery",
+        textwrap.dedent("""\
+            name: InterfaceDown — lab spine
+            alertname: InterfaceDown
+            fix_type: config_change
+            device_role: spine
+            environment: lab
+            description: Auto-restore admin-down spine interfaces in the lab
+
+            gate:
+              level: L2
+              min_confidence: high
+              max_risk: low
+              promotable: true
+
+            fast_path:
+              conditions:
+                - type: metric
+                  query: "interface_ifAdminStatus{sysName='{device}',ifDescr='{interface}'}"
+                  expect: "2"
+                - type: nautobot
+                  path: "/api/dcim/interfaces/?name={interface}&device={device}"
+                  field: "results[0].enabled"
+                  expect: "true"
+
+              rca:
+                diagnosis: "{interface} on {device} is administratively shut down"
+                confidence: high
+                action: "no shutdown"
+                upstream_cause: ""
+
+              fix:
+                fix_type: config_change
+                commands: |
+                  interface {interface}
+                   no shutdown
+                risk: low
+                confidence: high
+                reason: "Restore admin-down interface {interface} on {device}"
+            """),
+    ),
+    "bgp_peer_down": (
+        "BGP Peer Down",
+        textwrap.dedent("""\
+            name: BGPPeerDown — leaf nodes
+            alertname: BGPPeerDown
+            fix_type: config_change
+            device_role: leaf
+            environment: ""
+            description: Investigate and recover dropped BGP sessions on leaf switches
+
+            gate:
+              level: L2
+              min_confidence: high
+              max_risk: medium
+              promotable: true
+
+            fast_path:
+              conditions:
+                - type: metric
+                  query: "bgp_peers_established{device='{device}'}"
+                  expect: "0"
+
+              rca:
+                diagnosis: "BGP session to {peer} on {device} is down"
+                confidence: high
+                action: "clear ip bgp {peer} soft"
+                upstream_cause: ""
+
+              fix:
+                fix_type: config_change
+                commands: |
+                  clear ip bgp {peer} soft
+                risk: medium
+                confidence: high
+                reason: "Soft-reset BGP peer {peer} on {device}"
+            """),
+    ),
+    "device_unreachable": (
+        "Device Unreachable — Escalate",
+        textwrap.dedent("""\
+            name: DeviceUnreachable — escalate
+            alertname: DeviceDown
+            fix_type: escalate_human
+            device_role: ""
+            environment: ""
+            description: Always escalate unreachable devices to a human — never auto-fix
+
+            gate:
+              level: L1
+              min_confidence: low
+              max_risk: high
+              promotable: false
+
+            # No fast_path — AI investigates, human decides
+            """),
+    ),
+    "high_utilisation": (
+        "High Interface Utilisation — Monitor Only",
+        textwrap.dedent("""\
+            name: HighInterfaceUtilisation — monitor
+            alertname: HighInterfaceUtilization
+            fix_type: no_action
+            device_role: ""
+            environment: ""
+            description: Log and surface high-utilisation alerts without taking any action
+
+            gate:
+              level: L0
+              min_confidence: low
+              max_risk: high
+              promotable: false
+
+            # No fast_path — observe only, no commands executed
+            """),
+    ),
+    "config_drift": (
+        "Config Drift — Human Gate",
+        textwrap.dedent("""\
+            name: ConfigDrift — production gate
+            alertname: ConfigDrift
+            fix_type: config_change
+            device_role: ""
+            environment: production
+            description: Config drift in production always requires explicit human approval
+
+            gate:
+              level: L3
+              min_confidence: high
+              max_risk: low
+              promotable: false
+
+            fast_path:
+              rca:
+                diagnosis: "Running config on {device} deviates from intended state"
+                confidence: high
+                action: "Review diff and apply intended config"
+                upstream_cause: ""
+
+              fix:
+                fix_type: config_change
+                commands: |
+                  # Commands will be determined by the AI based on the diff
+                  # Human must review before execution
+                risk: high
+                confidence: medium
+                reason: "Reconcile config drift on {device} — human approval required"
+            """),
+    ),
+    "lab_autonomous": (
+        "Lab — Full Autonomy (L5)",
+        textwrap.dedent("""\
+            name: Lab autonomous — all alerts
+            alertname: ""
+            fix_type: ""
+            device_role: ""
+            environment: lab
+            description: "Full autonomy for all alert types in the lab environment. Use only for testing."
+
+            gate:
+              level: L5
+              min_confidence: low
+              max_risk: high
+              promotable: false
+
+            # No fast_path — AI handles everything end-to-end
+            """),
+    ),
+}
+
+
 # ── Policy form parsing helpers ───────────────────────────────────────────────
 
 def _parse_condition_rows(form_data) -> str | None:
@@ -1934,6 +2272,30 @@ def _parse_fix_template(form_data) -> str | None:
         "confidence": form_data.get("fix_confidence", "high"),
         "reason":     form_data.get("fix_reason", "").strip(),
     })
+
+
+async def _get_agent_ai_mode() -> bool:
+    try:
+        r = await _http_client.get(f"{OPS_AGENT_URL}/ai-mode", timeout=3.0)
+        return r.json().get("ai_enabled", True)
+    except Exception:
+        return True  # assume enabled if agent unreachable
+
+
+@app.get("/partials/policy-ai-notice", response_class=HTMLResponse)
+async def partial_policy_ai_notice(request: Request):
+    ai_enabled = await _get_agent_ai_mode()
+    if ai_enabled:
+        return HTMLResponse("")
+    return HTMLResponse(
+        '<div style="background:#78350f22; border:1px solid #d97706; border-radius:6px; '
+        'padding:8px 14px; margin-bottom:12px; font-size:0.82em; color:#fbbf24">'
+        '<strong>⚠ AI investigation is disabled.</strong> '
+        'Regular autonomy policies (gate rules) only fire when the AI pipeline runs. '
+        'Policies with programmatic <code>conditions</code> (fast-path) still fire. '
+        'Enable AI in the Operations tab to activate full policy matching.'
+        '</div>'
+    )
 
 
 @app.get("/partials/policy-list", response_class=HTMLResponse)
@@ -2092,6 +2454,157 @@ async def partial_policy_edit_save(
         "policies": policies,
         "now_iso":  datetime.now(timezone.utc).isoformat(),
     })
+
+
+def _policy_list_response(request: Request, policies: list, tenant_id: str = "default"):
+    return templates.TemplateResponse(request, "partials/policy_list.html", {
+        "request":  request,
+        "policies": policies,
+        "now_iso":  datetime.now(timezone.utc).isoformat(),
+    })
+
+
+@app.get("/partials/policy-yaml-new", response_class=HTMLResponse)
+async def partial_policy_yaml_new(request: Request, blueprint: str = ""):
+    yaml_content = _POLICY_BLUEPRINTS.get(blueprint, ("", ""))[1] if blueprint else ""
+    return templates.TemplateResponse(request, "partials/policy_yaml_editor.html", {
+        "request":    request,
+        "policy_id":  None,
+        "yaml_content": yaml_content,
+        "blueprints": [(k, v[0]) for k, v in _POLICY_BLUEPRINTS.items()],
+        "error":      "",
+    })
+
+
+@app.post("/partials/policy-yaml-create", response_class=HTMLResponse)
+async def partial_policy_yaml_create(request: Request, tenant_id: str = "default"):
+    form = await request.form()
+    yaml_str = (form.get("yaml_content") or "").strip()
+    try:
+        data = _yaml_to_policy(yaml_str, tenant_id=tenant_id)
+    except ValueError as exc:
+        return templates.TemplateResponse(request, "partials/policy_yaml_editor.html", {
+            "request":      request,
+            "policy_id":    None,
+            "yaml_content": yaml_str,
+            "blueprints":   [(k, v[0]) for k, v in _POLICY_BLUEPRINTS.items()],
+            "error":        str(exc),
+        })
+    await run_in_threadpool(task_store.create_policy, data)
+    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
+    return _policy_list_response(request, policies, tenant_id)
+
+
+@app.get("/partials/policy-yaml-edit/{policy_id}", response_class=HTMLResponse)
+async def partial_policy_yaml_edit(request: Request, policy_id: str):
+    policy = await run_in_threadpool(task_store.get_policy, policy_id)
+    if not policy:
+        return HTMLResponse(f"<span class='muted'>Policy {policy_id} not found.</span>")
+    yaml_content = _policy_to_yaml(dict(policy))
+    return templates.TemplateResponse(request, "partials/policy_yaml_editor.html", {
+        "request":      request,
+        "policy_id":    policy_id,
+        "yaml_content": yaml_content,
+        "blueprints":   [(k, v[0]) for k, v in _POLICY_BLUEPRINTS.items()],
+        "error":        "",
+    })
+
+
+@app.post("/partials/policy-yaml-save/{policy_id}", response_class=HTMLResponse)
+async def partial_policy_yaml_save(request: Request, policy_id: str, tenant_id: str = "default"):
+    form = await request.form()
+    yaml_str = (form.get("yaml_content") or "").strip()
+    try:
+        data = _yaml_to_policy(yaml_str, tenant_id=tenant_id)
+    except ValueError as exc:
+        return templates.TemplateResponse(request, "partials/policy_yaml_editor.html", {
+            "request":      request,
+            "policy_id":    policy_id,
+            "yaml_content": yaml_str,
+            "blueprints":   [(k, v[0]) for k, v in _POLICY_BLUEPRINTS.items()],
+            "error":        str(exc),
+        })
+    del data["tenant_id"]
+    await run_in_threadpool(task_store.update_policy, policy_id, data)
+    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
+    return _policy_list_response(request, policies, tenant_id)
+
+
+@app.get("/partials/policy-blueprint/{bp_id}", response_class=HTMLResponse)
+async def partial_policy_blueprint(request: Request, bp_id: str):
+    entry = _POLICY_BLUEPRINTS.get(bp_id)
+    if not entry:
+        return HTMLResponse("")
+    _, yaml_text = entry
+    escaped = yaml_text.replace("`", "\\`").replace("${", "\\${")
+    return HTMLResponse(
+        f'<script>document.getElementById("policy-yaml-ta").value=`{escaped}`; '
+        f'document.getElementById("policy-yaml-ta").dispatchEvent(new Event("input"));</script>'
+    )
+
+
+@app.post("/partials/policy-duplicate/{policy_id}", response_class=HTMLResponse)
+async def partial_policy_duplicate(request: Request, policy_id: str, tenant_id: str = "default"):
+    policy = await run_in_threadpool(task_store.get_policy, policy_id)
+    if policy:
+        copy: dict = {
+            k: policy.get(k)
+            for k in ("alertname", "fix_type", "device_role", "environment", "description",
+                      "autonomy_level", "min_confidence", "max_risk", "promotable",
+                      "conditions", "rca_template", "fix_template")
+        }
+        copy["name"] = f"{policy.get('name', 'policy')} (copy)"
+        copy["tenant_id"] = tenant_id
+        await run_in_threadpool(task_store.create_policy, copy)
+    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
+    return _policy_list_response(request, policies, tenant_id)
+
+
+@app.post("/partials/policy-validate-yaml", response_class=HTMLResponse)
+async def partial_policy_validate_yaml(request: Request):
+    form = await request.form()
+    yaml_str = (form.get("yaml_content") or "").strip()
+    if not yaml_str:
+        return templates.TemplateResponse(request, "partials/policy_yaml_validation.html", {
+            "request": request, "ok": False, "summary": None, "error": "",
+        })
+    try:
+        data = _yaml_to_policy(yaml_str)
+        summary = {
+            "name":           data["name"],
+            "alertname":      data["alertname"] or "any",
+            "fix_type":       data["fix_type"] or "any",
+            "device_role":    data["device_role"] or "any",
+            "environment":    data["environment"] or "any",
+            "level":          data["autonomy_level"],
+            "min_confidence": data["min_confidence"],
+            "max_risk":       data["max_risk"],
+            "has_fast_path":  bool(data.get("conditions") or data.get("rca_template")),
+            "condition_count": len(json.loads(data["conditions"])) if data.get("conditions") else 0,
+        }
+        return templates.TemplateResponse(request, "partials/policy_yaml_validation.html", {
+            "request": request, "ok": True, "summary": summary, "error": "",
+        })
+    except ValueError as exc:
+        return templates.TemplateResponse(request, "partials/policy_yaml_validation.html", {
+            "request": request, "ok": False, "summary": None, "error": str(exc),
+        })
+
+
+@app.get("/partials/policy-export-yaml", response_class=HTMLResponse)
+async def partial_policy_export_yaml(request: Request, tenant_id: str = "default"):
+    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
+    parts = [f"# Clano policy export — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"]
+    for p in policies:
+        parts.append("---")
+        parts.append(_policy_to_yaml(dict(p)).rstrip())
+    full_yaml = "\n".join(parts) + "\n"
+    from fastapi.responses import Response
+    return Response(
+        content=full_yaml,
+        media_type="text/plain",
+        headers={"Content-Disposition": "attachment; filename=clano_policies.yaml"},
+    )
 
 
 @app.post("/partials/policy-simulate", response_class=HTMLResponse)

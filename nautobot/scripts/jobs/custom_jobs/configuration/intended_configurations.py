@@ -209,13 +209,26 @@ class DeviceIntent:
         context["role"] = device.role.name.lower() if device.role else ""
 
         # ── VLANs ────────────────────────────────────────────────────────────
-        # Derive from Vlan-prefixed interfaces present on the device.
-        vlan_vids = []
+        # Source 1: Vlan-prefixed interfaces (SVIs) present on the device.
+        vlan_vids = set()
         for iface in device.interfaces.filter(name__startswith="Vlan"):
             try:
-                vlan_vids.append(int(iface.name[4:]))
+                vlan_vids.add(int(iface.name[4:]))
             except ValueError:
                 pass
+        # Source 2: untagged/tagged VLANs on access/trunk interfaces.
+        for iface in device.interfaces.all():
+            if iface.untagged_vlan_id:
+                vlan_vids.add(iface.untagged_vlan.vid)
+            try:
+                for tv in iface.tagged_vlans.all():
+                    vlan_vids.add(tv.vid)
+            except Exception:
+                pass
+        # Source 3: explicit list from config context (for devices without SVIs or access ports).
+        for cv in cc.get("vlans", []):
+            if isinstance(cv, dict) and "vid" in cv:
+                vlan_vids.add(int(cv["vid"]))
         device_vlans = []
         for v in VLAN.objects.filter(vid__in=vlan_vids).order_by("vid"):
             device_vlans.append({"vid": v.vid, "name": v.name})
@@ -270,23 +283,26 @@ class DeviceIntent:
         context["bgp_neighbors"] = bgp_neighbors
 
         # BGP networks to advertise
-        bgp_networks = []
+        bgp_networks = set()
+        # From Vlan SVI IPs
         for iface in device.interfaces.filter(name__startswith="Vlan"):
             for ip_obj in iface.ip_addresses.all():
                 try:
                     net = ipaddress.ip_interface(str(ip_obj.address)).network
-                    bgp_networks.append(str(net))
+                    bgp_networks.add(str(net))
                 except ValueError:
                     pass
-        # Spines: no SVIs — advertise the loopback /24 summary
+        # Config context override/supplement (e.g. for devices advertising a network without a local SVI)
+        for net in cc.get("bgp", {}).get("networks", []):
+            bgp_networks.add(str(net))
+        # Fallback for devices with no SVIs and no context-defined networks: advertise loopback /24 summary
         if not bgp_networks and lo_ip:
             try:
                 lo_net = ipaddress.ip_network(lo_ip)
-                bgp_networks.append(str(lo_net.supernet(new_prefix=24)))
+                bgp_networks.add(str(lo_net.supernet(new_prefix=24)))
             except Exception:
                 pass
-        bgp_networks.sort()
-        context["bgp_networks"] = bgp_networks
+        context["bgp_networks"] = sorted(bgp_networks)
 
         return context
 

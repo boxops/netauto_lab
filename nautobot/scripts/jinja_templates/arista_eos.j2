@@ -3,8 +3,13 @@
 !
 no aaa root
 !
+{% if cc.users -%}
+username admin privilege 15 role network-admin secret sha512 {{ cc.users.admin.hash | safe }}
+username netauto privilege 15 secret sha512 {{ cc.users.netauto.hash | safe }}
+{% else -%}
 username admin privilege 15 role network-admin secret admin
 username netauto privilege 15 secret netauto
+{% endif -%}
 !
 service routing protocols model ribd
 !
@@ -35,7 +40,7 @@ management api http-commands
 !
 {% for iface in obj.interfaces.all() | sort(attribute='name') -%}
 interface {{ iface.name }}
-{% if iface.description %}   description '{{ iface.description }}'
+{% if iface.description %}   description "{{ iface.description | safe }}"
 {% endif -%}
 {%- set ips = iface.ip_addresses.all() -%}
 {% if ips %}

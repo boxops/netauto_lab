@@ -1,0 +1,136 @@
+{% if policy_id %}
+<tr id="policy-row-{{ policy_id }}">
+  <td colspan="8" style="padding:0; background:var(--bg2); border-bottom:1px solid var(--border)">
+{% else %}
+<div id="policy-yaml-new-panel">
+{% endif %}
+
+<div class="policy-yaml-wrap">
+
+  {# ── Blueprint picker ───────────────────────────────────────────────────── #}
+  <div class="blueprint-picker">
+    <span class="blueprint-picker-label">Blueprints:</span>
+    {% for bp_id, bp_name in blueprints %}
+    <button type="button" class="btn btn-secondary btn-sm blueprint-chip"
+            hx-get="/partials/policy-blueprint/{{ bp_id }}"
+            hx-swap="beforeend"
+            hx-target="#policy-yaml-bp-sink">
+      {{ bp_name }}
+    </button>
+    {% endfor %}
+    <div id="policy-yaml-bp-sink" style="display:none"></div>
+  </div>
+
+  {# ── Two-column editor / preview ────────────────────────────────────────── #}
+  <div class="policy-yaml-layout">
+
+    {# Left: textarea #}
+    <div class="policy-yaml-left">
+      <div class="policy-yaml-section-label">
+        YAML
+        <span class="muted" style="font-weight:400; text-transform:none; font-size:0.9em; margin-left:6px">
+          — edit, then Save
+        </span>
+      </div>
+
+      {% if policy_id %}
+      <form id="policy-yaml-form-{{ policy_id }}"
+            hx-post="/partials/policy-yaml-save/{{ policy_id }}"
+            hx-target="#policy-list"
+            hx-swap="innerHTML">
+      {% else %}
+      <form id="policy-yaml-form-new"
+            hx-post="/partials/policy-yaml-create"
+            hx-target="#policy-list"
+            hx-swap="innerHTML">
+      {% endif %}
+
+        <textarea id="policy-yaml-ta"
+                  name="yaml_content"
+                  class="yaml-textarea"
+                  spellcheck="false"
+                  autocomplete="off"
+                  hx-post="/partials/policy-validate-yaml"
+                  hx-trigger="input delay:600ms"
+                  hx-target="#policy-yaml-preview"
+                  hx-swap="innerHTML"
+                  hx-include="this">{{ yaml_content }}</textarea>
+
+        {% if error %}
+        <div class="yaml-error">⚠ {{ error }}</div>
+        {% endif %}
+
+        <div style="display:flex; gap:8px; margin-top:10px; align-items:center">
+          <button type="submit" class="btn btn-primary" style="font-size:0.85em; padding:6px 18px">
+            Save policy
+          </button>
+          <button type="button" class="btn btn-secondary" style="font-size:0.85em; padding:6px 14px"
+                  {% if policy_id %}
+                  hx-get="/partials/policy-list"
+                  hx-target="#policy-list"
+                  hx-swap="innerHTML"
+                  {% else %}
+                  onclick="document.getElementById('policy-yaml-new-panel').innerHTML=''"
+                  {% endif %}>
+            Cancel
+          </button>
+          <span class="muted" style="font-size:0.78em">
+            Use <code>{device}</code> <code>{interface}</code> <code>{peer}</code> as placeholders
+          </span>
+        </div>
+
+      </form>
+    </div>
+
+    {# Right: live validation preview #}
+    <div class="policy-yaml-right">
+      <div class="policy-yaml-section-label">Preview</div>
+      <div id="policy-yaml-preview" class="yaml-preview">
+        <span class="muted" style="font-size:0.82em">Start typing to see a parsed summary…</span>
+      </div>
+
+      <div class="yaml-reference" style="margin-top:16px">
+        <div class="policy-yaml-section-label" style="margin-bottom:6px">Quick reference</div>
+        <table class="yaml-ref-table">
+          <tr><th>Field</th><th>Valid values</th></tr>
+          <tr><td>gate.level</td><td>L0 L1 L2 L3 L4 L5</td></tr>
+          <tr><td>gate.min_confidence</td><td>low medium high certain</td></tr>
+          <tr><td>gate.max_risk</td><td>low medium high</td></tr>
+          <tr><td>fast_path.conditions[].type</td><td>metric show_command nautobot</td></tr>
+          <tr><td>fast_path.rca.confidence</td><td>low medium high certain</td></tr>
+          <tr><td>fast_path.fix.fix_type</td><td>config_change runbook escalate_human no_action</td></tr>
+          <tr><td>fast_path.fix.risk</td><td>low medium high</td></tr>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+{% if policy_id %}
+  </td>
+</tr>
+{% else %}
+</div>
+{% endif %}
+
+<script>
+(function () {
+  // Trigger initial validation if there is pre-filled content
+  var ta = document.getElementById("policy-yaml-ta");
+  if (ta && ta.value.trim()) {
+    htmx.trigger(ta, "input");
+  }
+  // Tab key inserts two spaces instead of changing focus
+  if (ta) {
+    ta.addEventListener("keydown", function (e) {
+      if (e.key === "Tab") {
+        e.preventDefault();
+        var s = ta.selectionStart, end = ta.selectionEnd;
+        ta.value = ta.value.substring(0, s) + "  " + ta.value.substring(end);
+        ta.selectionStart = ta.selectionEnd = s + 2;
+      }
+    });
+  }
+})();
+</script>
