@@ -3,4 +3,17 @@
 </div>
 <div class="chat-msg assistant">
   <div class="chat-bubble">{{ response }}</div>
+  {% if tool_calls %}
+  <details class="tool-badge">
+    <summary>🔧 {{ tool_calls|length }} tool{{ 's' if tool_calls|length != 1 else '' }} used</summary>
+    {% for tc in tool_calls %}
+    <div class="tool-call-row">
+      <strong>{{ tc.tool_name }}</strong>
+      {% if tc.input_summary %}
+        — {{ tc.input_summary[:90] }}{% if tc.input_summary|length > 90 %}…{% endif %}
+      {% endif %}
+    </div>
+    {% endfor %}
+  </details>
+  {% endif %}
 </div>

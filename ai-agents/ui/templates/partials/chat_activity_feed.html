@@ -1,0 +1,18 @@
+{% if not records %}
+<div class="muted" style="font-size:0.8em; padding:8px 10px">No queries yet.</div>
+{% else %}
+{% for r in records %}
+<div class="chat-activity-row"
+     onclick="loadSession('{{ r.session_id }}')"
+     title="{{ r.message }}">
+  <span class="chat-activity-time">{{ r.timestamp[11:16] if r.timestamp else '—' }}</span>
+  <span class="chat-activity-msg">
+    {{ r.message[:34] }}{% if r.message|length > 34 %}…{% endif %}
+  </span>
+  <span class="chat-activity-meta">
+    {% if r.status == 'success' %}<span style="color:#22c55e">✓</span>{% else %}<span style="color:#ef4444">✗</span>{% endif %}
+    {{ r.latency_ms }}ms
+  </span>
+</div>
+{% endfor %}
+{% endif %}

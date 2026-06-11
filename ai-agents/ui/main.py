@@ -72,6 +72,47 @@ AGENT_QUICK_PROMPTS = {
     ],
 }
 
+# Grouped variant used by the Assist tab sidebar (list of (category, [prompts]) tuples)
+AGENT_QUICK_PROMPTS_GROUPED = {
+    "ops": [
+        ("Monitoring & Health", [
+            "What alerts are currently firing?",
+            "Generate a network health report for all lab devices",
+            "List all devices and their current operational status",
+            "What changed on the network in the last 30 minutes?",
+            "Summarize all critical and warning events from the last 24 hours",
+        ]),
+        ("BGP & Routing", [
+            "Show BGP neighbor states for all routers in the topology",
+            "Investigate BGP peer down alert on spine2",
+            "Check for OSPF adjacency issues across all devices",
+            "What is the average latency between spine1 and leaf2?",
+        ]),
+        ("Interfaces & Capacity", [
+            "Show me interface errors on leaf1 in the last hour",
+            "Are there any interface flaps in the last 2 hours?",
+            "Why is spine1 showing high CPU?",
+            "Show recent log errors from spine2",
+            "Correlate the current CPU alert with recent config changes on leaf1",
+        ]),
+        ("Configuration & Ansible", [
+            "Design BGP configuration for a new leaf router with AS 65104",
+            "What IP addresses are available in 10.10.0.0/16?",
+            "Generate an Ansible playbook to configure VLANs 100-110 on all leaf switches",
+            "Review this EOS config snippet for security issues",
+            "What VLANs are currently configured on leaf1?",
+            "Validate the IP addressing scheme across all devices for inconsistencies",
+        ]),
+        ("Chaos & Testing", [
+            "Propose a safe chaos test for BGP flap detection in this lab",
+            "Simulate a leaf uplink failure on leaf1 in check mode",
+            "What is the expected blast radius if I bounce Ethernet1 on spine1?",
+            "Shut down Ethernet1 on leaf2 in check mode and show me what alerts would fire",
+            "Run a connectivity validation test across all leaf-spine links",
+        ]),
+    ],
+}
+
 _ACTIVITY_DB         = os.environ.get("ACTIVITY_DB_PATH", "./activity.db")
 APPROVAL_WEBHOOK_URL = os.getenv("APPROVAL_WEBHOOK_URL", "")
 APPROVAL_WEBHOOK_SECRET = os.getenv("APPROVAL_WEBHOOK_SECRET", "")
@@ -1383,12 +1424,13 @@ async def chat_page(request: Request, agent_name: str):
         return HTMLResponse("Unknown agent", status_code=404)
     label, color = AGENT_LABELS[agent_name]
     return templates.TemplateResponse(request, "chat.html", {
-        "request":      request,
-        "agent_name":   agent_name,
-        "agent_label":  label,
-        "agent_color":  color,
-        "quick_prompts": AGENT_QUICK_PROMPTS.get(agent_name, []),
-        "session_id":   str(uuid.uuid4()),
+        "request":         request,
+        "agent_name":      agent_name,
+        "agent_label":     label,
+        "agent_color":     color,
+        "quick_prompts":   AGENT_QUICK_PROMPTS.get(agent_name, []),
+        "grouped_prompts": AGENT_QUICK_PROMPTS_GROUPED.get(agent_name, []),
+        "session_id":      str(uuid.uuid4()),
     })
 
 
@@ -1737,6 +1779,27 @@ async def partial_activity(request: Request, agent: str = "All"):
         "summary":  summary,
         "agent":    agent,
         "truncate": _truncate,
+    })
+
+
+@app.get("/partials/chat-activity", response_class=HTMLResponse)
+async def partial_chat_activity(request: Request):
+    records = await run_in_threadpool(store.get_recent, limit=8)
+    return templates.TemplateResponse(request, "partials/chat_activity_feed.html", {
+        "request": request,
+        "records": records,
+    })
+
+
+@app.get("/partials/chat-session/{session_id}", response_class=HTMLResponse)
+async def partial_chat_session(request: Request, session_id: str):
+    records = await run_in_threadpool(store.get_session, session_id)
+    if not records:
+        return HTMLResponse('<div class="muted" style="padding:8px">Session not found.</div>')
+    return templates.TemplateResponse(request, "partials/chat_session.html", {
+        "request":    request,
+        "records":    records,
+        "session_id": session_id,
     })
 
 
@@ -2261,6 +2324,7 @@ async def chat_send(
         "response":   response,
         "session_id": session_id,
         "agent_name": agent_name,
+        "tool_calls": tool_calls,
     })
 
 

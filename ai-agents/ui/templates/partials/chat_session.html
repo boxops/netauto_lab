@@ -1,0 +1,19 @@
+{# Read-only session replay — loaded when user clicks a row in the Recent Queries feed #}
+<div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+     padding:8px 12px; margin-bottom:10px;
+     background:#3b82f614; border:1px solid #3b82f633; border-radius:8px;
+     font-size:0.82em; color:#3b82f6; flex-shrink:0">
+  <span>📂 Session from {{ records[0].timestamp[5:16] }} &nbsp;·&nbsp; {{ records|length }} turn{{ 's' if records|length != 1 else '' }}</span>
+  <button onclick="clearChat()" class="btn btn-secondary btn-sm" style="margin-left:auto; font-size:0.78em">
+    New chat
+  </button>
+</div>
+
+{% for r in records %}
+<div class="chat-msg user">
+  <div class="chat-bubble">{{ r.message }}</div>
+</div>
+<div class="chat-msg assistant">
+  <div class="chat-bubble">{{ r.response }}</div>
+</div>
+{% endfor %}

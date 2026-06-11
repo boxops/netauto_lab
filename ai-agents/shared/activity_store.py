@@ -135,6 +135,15 @@ class ActivityStore:
             rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
 
+    def get_session(self, session_id: str) -> list[dict]:
+        """Return all interactions for a session, oldest first."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM interactions WHERE session_id = ? ORDER BY id",
+                (session_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def get_tool_calls(self, session_id: str) -> list[dict]:
         """Return all tool calls for a specific session."""
         with self._connect() as conn:
