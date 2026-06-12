@@ -82,6 +82,14 @@ _ALERT_FOCUS: dict[str, str] = {
     "HighInterfaceUtilization": "interface utilization is high — identify the traffic source and affected flows",
     "InterfaceHighErrorRate":   "interface has elevated error rate — check for hardware or cabling issues",
     "BGPPrefixCountDecreased":  "BGP prefix count dropped significantly — possible route withdrawal or peering issue",
+    "ConfigDrift": (
+        "Device configuration has drifted from the intended state stored in Nautobot. "
+        "Call get_config_compliance(device) to see which compliance rules are failing and the exact diff "
+        "('missing' lines are in the intended config but absent from running; 'extra' lines are the reverse). "
+        "Propose fix_type=config_remediation. "
+        "Call remediate_config_compliance(device, dry_run=True) to preview the commands that would be pushed. "
+        "Do NOT call run_config_commands — the RemediateCompliance Nautobot job owns the diff computation and push."
+    ),
 }
 
 
@@ -1254,6 +1262,12 @@ class IncidentWorkflow:
         commands = fix_proposal.get("commands") or content.get("commands", "none")
         fix_type = fix_proposal.get("fix_type", "config_change")
 
+        # Compliance remediation uses a dedicated execution path — the Nautobot job
+        # owns the diff; we don't push raw config lines via run_config_commands.
+        if fix_type == "config_remediation":
+            self._resume_compliance_remediation(task_id, device, content)
+            return
+
         already_started = any(
             e.get("event_type") == "execution_started"
             for e in task.get("events", [])
@@ -1373,6 +1387,105 @@ class IncidentWorkflow:
             self._ts.add_event(task_id, AGENT, "execution_failed",
                                {"error": str(exc)[:500]})
             logger.exception("Workflow: execution failed task=%s", task_id)
+        finally:
+            self._sh.clear_context()
+
+    # ── compliance remediation execution ─────────────────────────────────────
+
+    def _resume_compliance_remediation(
+        self, task_id: str, device: str, content: dict
+    ) -> None:
+        """Execute an approved config compliance remediation via the Nautobot job."""
+        task = self._ts.get_task(task_id)
+        if not task:
+            logger.warning("Workflow: compliance remediation — task %s not found", task_id)
+            return
+
+        if content.get("do_not_auto_execute"):
+            self._ts.add_event(
+                task_id, AGENT, "execution_suppressed",
+                {"reason": "device in maintenance window — auto-execution disabled"},
+            )
+            return
+
+        self._ts.add_event(
+            task_id, AGENT, "execution_started",
+            {"device": device, "fix_type": "config_remediation"},
+        )
+
+        prompt = (
+            f"CONFIRM: A human operator has approved this compliance remediation. "
+            f"Apply it now — no further confirmation is needed.\n\n"
+            f"  Task ID:  {task_id}\n"
+            f"  Device:   {device}\n\n"
+            f"Steps (execute in order, do not skip):\n"
+            f"1. get_config_compliance('{device}') — confirm non-compliant rules are still present\n"
+            f"2. remediate_config_compliance('{device}', dry_run=False) — push missing config lines\n"
+            f"3. get_config_compliance('{device}') — verify device is now compliant\n\n"
+            f"End your response with exactly these lines:\n"
+            f"EXECUTION_STATUS: success | failed\n"
+            f"DEVICE: {device}\n"
+            f"CHANGES_APPLIED: <brief description of what was pushed or why it failed>"
+        )
+
+        session_id = f"exec-{task_id}"
+        try:
+            self._rl.check_budget("ops_agent")
+        except BudgetExceededError as exc:
+            self._ts.add_event(task_id, AGENT, "execution_failed",
+                               {"error": f"Budget exceeded: {exc}"})
+            return
+
+        self._sh.set_context(session_id=session_id, task_id=task_id, task_type="approval_gate")
+        agent, config = self._make_agent(session_id)
+
+        try:
+            result   = agent.invoke({"messages": [HumanMessage(content=prompt)]}, config=config)
+            response = result["messages"][-1].content
+            tool_calls = _extract_tool_calls(result["messages"])
+
+            execution, _, exec_parse_failed = parse_structured(
+                self._llm, response, ExecutionResult, config
+            )
+            if exec_parse_failed:
+                self._ts.add_event(task_id, AGENT, "parse_warning",
+                                   {"stage": "execution", "detail": "structured output parsing failed"})
+
+            self._ts.add_event(
+                task_id, AGENT, "execution_complete",
+                {
+                    "status":          execution.execution_status,
+                    "device":          device,
+                    "changes_applied": execution.changes_applied,
+                    "tool_calls":      len(tool_calls),
+                },
+            )
+            logger.info("Workflow: compliance remediation complete task=%s status=%s",
+                        task_id, execution.execution_status)
+
+            if execution.execution_status == "success":
+                try:
+                    _auto_save_kb(task, content, execution, self._ts)
+                except Exception:
+                    logger.exception("Workflow: KB auto-save failed for task=%s — non-fatal", task_id)
+
+            fp       = task.get("alert_fingerprint", "")
+            rca_info = _get_rca_info(self._ts, fp)
+            t = threading.Thread(
+                target=_verify_resolution,
+                args=(task_id, rca_info, self._ts, self._stop),
+                kwargs={"learning_engine": self._learning_engine},
+                daemon=True,
+            )
+            t.start()
+
+        except BudgetExceededError as exc:
+            self._ts.add_event(task_id, AGENT, "execution_failed",
+                               {"error": f"Budget exceeded: {exc}"})
+        except Exception as exc:
+            self._ts.add_event(task_id, AGENT, "execution_failed",
+                               {"error": str(exc)[:500]})
+            logger.exception("Workflow: compliance remediation failed task=%s", task_id)
         finally:
             self._sh.clear_context()
 

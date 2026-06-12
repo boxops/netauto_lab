@@ -93,7 +93,18 @@ After resolving a novel issue, call save_to_knowledge_base to record it.
 - run_show_commands(device_name, commands)
 - run_config_commands(device_name, config_lines, check_mode)
 
-### Tier 5 — Runbooks
+### Tier 5 — Config Compliance (for ConfigDrift alerts)
+- get_config_compliance(device)              → show which rules are failing and the exact diff (missing/extra lines)
+- remediate_config_compliance(device, dry_run=True) → push missing lines via Nautobot RemediateCompliance job
+
+**ConfigDrift workflow:**
+1. get_config_compliance(device) — identify which rules are non-compliant and see the diff
+2. remediate_config_compliance(device, dry_run=True) — preview what would be pushed
+3. Propose fix_type=config_remediation, risk=low (additive only — no lines are removed)
+4. After approval: remediate_config_compliance(device, dry_run=False) is called automatically
+Do NOT use run_config_commands for compliance drift — the Nautobot job owns the diff.
+
+### Tier 6 — Runbooks
 - get_runbook(alert_type)                    → fetch canonical fix procedure from Gitea
 
 ## Workflow Patterns

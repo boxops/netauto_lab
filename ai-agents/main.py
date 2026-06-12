@@ -106,6 +106,7 @@ async def lifespan(app: FastAPI):
     warn_if_no_api_key(AGENT_NAME)
     if settings.policy_auto_seed:
         _policy_registry.seed_defaults()
+        _intent_registry.seed_defaults()
     scheduler = OpsScheduler(agent)
     _intent_evaluator._scheduler = scheduler
     poller.start()

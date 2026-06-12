@@ -30,6 +30,11 @@
           {{ i.metric_query }}
           {% if i.threshold %}<span style="color:#3b82f6"> {{ i.threshold }}</span>{% endif %}
         </div>
+        <div style="font-size:0.73em; color:var(--muted); margin-top:2px">
+          every {{ i.interval_seconds or 300 }}s
+          {% if i.cooldown_minutes %} · cooldown {{ i.cooldown_minutes }}min{% endif %}
+          · priority {{ i.priority or 'normal' }}
+        </div>
       {% elif i.intent_type == 'chaos_schedule' %}
         {% if i.schedule %}
           <div style="font-size:0.76em; color:var(--muted); font-family:monospace; margin-top:2px">
@@ -66,11 +71,11 @@
         {{ 'Disable' if i.enabled else 'Enable' }}
       </button>
       <button class="btn btn-sm btn-secondary"
-              hx-get="/partials/intent-edit/{{ i.id }}"
+              hx-get="/partials/intent-yaml-edit/{{ i.id }}"
               hx-target="#intent-row-{{ i.id }}"
               hx-swap="outerHTML"
               style="font-size:0.78em; padding:3px 10px; margin-left:4px">
-        Edit
+        Edit YAML
       </button>
       <button class="btn btn-sm"
               style="font-size:0.78em; padding:3px 10px; background:var(--bg3);

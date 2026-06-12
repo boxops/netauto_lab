@@ -1,0 +1,133 @@
+{% if intent_id %}
+<tr id="intent-row-{{ intent_id }}">
+  <td colspan="7" style="padding:0; background:var(--bg2); border-bottom:1px solid var(--border)">
+{% else %}
+<div id="intent-yaml-new-panel">
+{% endif %}
+
+<div class="policy-yaml-wrap">
+
+  {# ── Blueprint picker ───────────────────────────────────────────────────── #}
+  <div class="blueprint-picker">
+    <span class="blueprint-picker-label">Blueprints:</span>
+    {% for bp_id, bp_name in blueprints %}
+    <button type="button" class="btn btn-secondary btn-sm blueprint-chip"
+            hx-get="/partials/intent-yaml-new?blueprint={{ bp_id }}"
+            hx-swap="beforeend"
+            hx-target="#intent-yaml-bp-sink">
+      {{ bp_name }}
+    </button>
+    {% endfor %}
+    <div id="intent-yaml-bp-sink" style="display:none"></div>
+  </div>
+
+  {# ── Two-column editor / preview ────────────────────────────────────────── #}
+  <div class="policy-yaml-layout">
+
+    {# Left: textarea #}
+    <div class="policy-yaml-left">
+      <div class="policy-yaml-section-label">
+        YAML
+        <span class="muted" style="font-weight:400; text-transform:none; font-size:0.9em; margin-left:6px">
+          — edit, then Save
+        </span>
+      </div>
+
+      {% if intent_id %}
+      <form id="intent-yaml-form-{{ intent_id }}"
+            hx-post="/partials/intent-yaml-save/{{ intent_id }}"
+            hx-target="#intent-list"
+            hx-swap="innerHTML">
+      {% else %}
+      <form id="intent-yaml-form-new"
+            hx-post="/partials/intent-yaml-create"
+            hx-target="#intent-list"
+            hx-swap="innerHTML">
+      {% endif %}
+
+        <textarea id="intent-yaml-ta"
+                  name="yaml_content"
+                  class="yaml-textarea"
+                  spellcheck="false"
+                  autocomplete="off"
+                  hx-post="/partials/intent-validate-yaml"
+                  hx-trigger="input delay:600ms"
+                  hx-target="#intent-yaml-preview"
+                  hx-swap="innerHTML"
+                  hx-include="this">{{ yaml_content }}</textarea>
+
+        {% if error %}
+        <div class="yaml-error">⚠ {{ error }}</div>
+        {% endif %}
+
+        <div style="display:flex; gap:8px; margin-top:10px; align-items:center">
+          <button type="submit" class="btn btn-primary" style="font-size:0.85em; padding:6px 18px">
+            Save intent
+          </button>
+          <button type="button" class="btn btn-secondary" style="font-size:0.85em; padding:6px 14px"
+                  {% if intent_id %}
+                  hx-get="/partials/intent-list"
+                  hx-target="#intent-list"
+                  hx-swap="innerHTML"
+                  {% else %}
+                  onclick="document.getElementById('intent-yaml-new-panel').innerHTML=''"
+                  {% endif %}>
+            Cancel
+          </button>
+        </div>
+
+      </form>
+    </div>
+
+    {# Right: live validation preview #}
+    <div class="policy-yaml-right">
+      <div class="policy-yaml-section-label">Preview</div>
+      <div id="intent-yaml-preview" class="yaml-preview">
+        <span class="muted" style="font-size:0.82em">Start typing to see a parsed summary…</span>
+      </div>
+
+      <div class="yaml-reference" style="margin-top:16px">
+        <div class="policy-yaml-section-label" style="margin-bottom:6px">Quick reference</div>
+        <table class="yaml-ref-table">
+          <tr><th>Field</th><th>Valid values / notes</th></tr>
+          <tr><td>type</td><td>suppress · escalate · monitor · chaos_schedule</td></tr>
+          <tr><td>device</td><td>hostname or "" for any device</td></tr>
+          <tr><td>alertname</td><td>Prometheus alert name or "" for any</td></tr>
+          <tr><td>monitor.query</td><td>PromQL or nautobot://&lt;api-path&gt;</td></tr>
+          <tr><td>monitor.threshold</td><td>&lt; 1 · &gt;= 2 · == 0 · "" (any result)</td></tr>
+          <tr><td>monitor.interval_seconds</td><td>minimum 60 — how often to re-evaluate</td></tr>
+          <tr><td>monitor.cooldown_minutes</td><td>quiet time after last trigger (0 = no cooldown)</td></tr>
+          <tr><td>monitor.priority</td><td>low · normal · high</td></tr>
+          <tr><td>chaos.schedule</td><td>cron expression (e.g. "0 2 * * 1")</td></tr>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+{% if intent_id %}
+  </td>
+</tr>
+{% else %}
+</div>
+{% endif %}
+
+<script>
+(function () {
+  var ta = document.getElementById("intent-yaml-ta");
+  if (ta && ta.value.trim()) {
+    htmx.trigger(ta, "input");
+  }
+  if (ta) {
+    ta.addEventListener("keydown", function (e) {
+      if (e.key === "Tab") {
+        e.preventDefault();
+        var s = ta.selectionStart, end = ta.selectionEnd;
+        ta.value = ta.value.substring(0, s) + "  " + ta.value.substring(end);
+        ta.selectionStart = ta.selectionEnd = s + 2;
+      }
+    });
+  }
+})();
+</script>

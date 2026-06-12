@@ -2033,6 +2033,176 @@ def _yaml_to_policy(yaml_str: str, tenant_id: str = "default") -> dict:
     return data
 
 
+# ── Intent ↔ YAML serialisation ──────────────────────────────────────────────
+
+def _intent_to_yaml(i: dict) -> str:
+    """Convert an intent DB row to a human-editable YAML string."""
+    doc: dict = {
+        "name":        i.get("name", ""),
+        "type":        i.get("intent_type", "monitor"),
+        "description": i.get("description", ""),
+        "device":      i.get("device", ""),
+        "alertname":   i.get("alertname", ""),
+        "enabled":     bool(i.get("enabled", True)),
+    }
+
+    itype = i.get("intent_type", "monitor")
+    if itype == "monitor":
+        doc["monitor"] = {
+            "query":            i.get("metric_query", ""),
+            "threshold":        i.get("threshold", ""),
+            "interval_seconds": int(i.get("interval_seconds") or 300),
+            "cooldown_minutes": int(i.get("cooldown_minutes") or 0),
+            "priority":         i.get("priority") or "normal",
+        }
+    elif itype == "chaos_schedule":
+        doc["chaos"] = {
+            "schedule": i.get("schedule", ""),
+            "action":   i.get("action", ""),
+        }
+
+    return _yaml.dump(doc, default_flow_style=False, allow_unicode=True,
+                      sort_keys=False, width=100)
+
+
+def _yaml_to_intent(yaml_str: str, tenant_id: str = "default") -> dict:
+    """Parse a YAML string into an intent data dict ready for create/update.
+    Raises ValueError with a user-readable message on any problem."""
+    try:
+        doc = _yaml.safe_load(yaml_str)
+    except _yaml.YAMLError as exc:
+        raise ValueError(f"YAML parse error: {exc}") from exc
+
+    if not isinstance(doc, dict):
+        raise ValueError("Expected a YAML mapping at the top level.")
+
+    name = (doc.get("name") or "").strip()
+    if not name:
+        raise ValueError("'name' is required.")
+
+    valid_types    = {"suppress", "escalate", "monitor", "chaos_schedule"}
+    valid_priority = {"low", "normal", "high"}
+
+    itype = (doc.get("type") or "monitor").strip()
+    if itype not in valid_types:
+        raise ValueError(f"'type' must be one of {sorted(valid_types)}, got '{itype}'.")
+
+    data: dict = {
+        "name":        name,
+        "intent_type": itype,
+        "description": (doc.get("description") or "").strip(),
+        "device":      (doc.get("device") or "").strip(),
+        "alertname":   (doc.get("alertname") or "").strip(),
+        "enabled":     bool(doc.get("enabled", True)),
+        "tenant_id":   tenant_id,
+        # defaults — overridden below for monitor intents
+        "metric_query":     "",
+        "threshold":        "",
+        "interval_seconds": 300,
+        "cooldown_minutes": 0,
+        "priority":         "normal",
+        "schedule":         "",
+        "action":           "",
+    }
+
+    if itype == "monitor":
+        mon = doc.get("monitor") or {}
+        if not isinstance(mon, dict):
+            raise ValueError("'monitor' must be a mapping.")
+        query = (mon.get("query") or "").strip()
+        if not query:
+            raise ValueError("monitor.query is required for monitor intents.")
+        data["metric_query"] = query
+        data["threshold"]    = (mon.get("threshold") or "").strip()
+        try:
+            data["interval_seconds"] = max(60, int(mon.get("interval_seconds") or 300))
+        except (ValueError, TypeError):
+            raise ValueError("monitor.interval_seconds must be an integer >= 60.")
+        try:
+            data["cooldown_minutes"] = max(0, int(mon.get("cooldown_minutes") or 0))
+        except (ValueError, TypeError):
+            raise ValueError("monitor.cooldown_minutes must be a non-negative integer.")
+        priority = (mon.get("priority") or "normal").strip()
+        if priority not in valid_priority:
+            raise ValueError(f"monitor.priority must be one of {sorted(valid_priority)}.")
+        data["priority"] = priority
+
+    elif itype == "chaos_schedule":
+        chaos = doc.get("chaos") or {}
+        if not isinstance(chaos, dict):
+            raise ValueError("'chaos' must be a mapping.")
+        data["schedule"] = (chaos.get("schedule") or "").strip()
+        data["action"]   = (chaos.get("action") or "").strip()
+
+    return data
+
+
+_INTENT_BLUEPRINTS: dict[str, tuple[str, str]] = {
+    "config_drift_monitor": (
+        "Config Drift Monitor",
+        textwrap.dedent("""\
+            name: Nautobot config drift monitor
+            type: monitor
+            description: Detect configuration drift on all devices via Nautobot Golden Config
+            device: ""
+            alertname: ""
+            enabled: true
+
+            monitor:
+              query: nautobot://plugins/golden-config/config-compliance/?compliance=false
+              threshold: ""
+              interval_seconds: 300
+              cooldown_minutes: 60
+              priority: normal
+            """),
+    ),
+    "prometheus_monitor": (
+        "Prometheus Threshold Monitor",
+        textwrap.dedent("""\
+            name: My metric monitor
+            type: monitor
+            description: Fire an RCA task when a Prometheus metric breaches a threshold
+            device: ""
+            alertname: ""
+            enabled: true
+
+            monitor:
+              query: 'up{job="telegraf"}'
+              threshold: "< 1"
+              interval_seconds: 120
+              cooldown_minutes: 30
+              priority: normal
+            """),
+    ),
+    "suppress_intent": (
+        "Suppress Alert",
+        textwrap.dedent("""\
+            name: Suppress leaf1 InterfaceDown
+            type: suppress
+            description: Suppress investigation for a known-flapping link during maintenance
+            device: leaf1
+            alertname: InterfaceDown
+            enabled: true
+            """),
+    ),
+    "chaos_schedule": (
+        "Chaos Schedule",
+        textwrap.dedent("""\
+            name: Weekly BGP flap test
+            type: chaos_schedule
+            description: Scheduled chaos scenario — runs via the agent on a cron expression
+            device: leaf1
+            alertname: ""
+            enabled: true
+
+            chaos:
+              schedule: "0 2 * * 1"
+              action: "Simulate BGP flap on leaf1 — run flap_bgp_neighbor with check_mode=True"
+            """),
+    ),
+}
+
+
 # ── Policy blueprints ─────────────────────────────────────────────────────────
 
 _POLICY_BLUEPRINTS: dict[str, tuple[str, str]] = {
@@ -2779,6 +2949,117 @@ async def partial_intent_edit_save(
         "request": request,
         "intents": intents,
     })
+
+
+# ── Intent YAML editor routes ─────────────────────────────────────────────────
+
+@app.get("/partials/intent-yaml-new", response_class=HTMLResponse)
+async def partial_intent_yaml_new(request: Request, blueprint: str = ""):
+    yaml_content = _INTENT_BLUEPRINTS.get(blueprint, ("", ""))[1] if blueprint else ""
+    blueprints = [(k, v[0]) for k, v in _INTENT_BLUEPRINTS.items()]
+    return templates.TemplateResponse(request, "partials/intent_yaml_editor.html", {
+        "intent_id":   None,
+        "blueprints":  blueprints,
+        "yaml_content": yaml_content,
+        "error":       None,
+        "preview":     None,
+    })
+
+
+@app.post("/partials/intent-yaml-create", response_class=HTMLResponse)
+async def partial_intent_yaml_create(request: Request, tenant_id: str = "default"):
+    form = await request.form()
+    yaml_str = (form.get("yaml_content") or "").strip()
+    blueprints = [(k, v[0]) for k, v in _INTENT_BLUEPRINTS.items()]
+    try:
+        data = _yaml_to_intent(yaml_str, tenant_id=tenant_id)
+    except ValueError as exc:
+        return templates.TemplateResponse(request, "partials/intent_yaml_editor.html", {
+            "intent_id":    None,
+            "blueprints":   blueprints,
+            "yaml_content": yaml_str,
+            "error":        str(exc),
+            "preview":      None,
+        })
+    await run_in_threadpool(task_store.create_intent, data)
+    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
+    return templates.TemplateResponse(request, "partials/intent_list.html", {
+        "request": request,
+        "intents": intents,
+    })
+
+
+@app.get("/partials/intent-yaml-edit/{intent_id}", response_class=HTMLResponse)
+async def partial_intent_yaml_edit(request: Request, intent_id: str):
+    intent = await run_in_threadpool(task_store.get_intent, intent_id)
+    if not intent:
+        return HTMLResponse("Not found", status_code=404)
+    blueprints = [(k, v[0]) for k, v in _INTENT_BLUEPRINTS.items()]
+    return templates.TemplateResponse(request, "partials/intent_yaml_editor.html", {
+        "intent_id":    intent_id,
+        "blueprints":   blueprints,
+        "yaml_content": _intent_to_yaml(dict(intent)),
+        "error":        None,
+        "preview":      None,
+    })
+
+
+@app.post("/partials/intent-yaml-save/{intent_id}", response_class=HTMLResponse)
+async def partial_intent_yaml_save(
+    request: Request, intent_id: str, tenant_id: str = "default"
+):
+    form = await request.form()
+    yaml_str = (form.get("yaml_content") or "").strip()
+    blueprints = [(k, v[0]) for k, v in _INTENT_BLUEPRINTS.items()]
+    try:
+        data = _yaml_to_intent(yaml_str, tenant_id=tenant_id)
+    except ValueError as exc:
+        return templates.TemplateResponse(request, "partials/intent_yaml_editor.html", {
+            "intent_id":    intent_id,
+            "blueprints":   blueprints,
+            "yaml_content": yaml_str,
+            "error":        str(exc),
+            "preview":      None,
+        })
+    await run_in_threadpool(task_store.update_intent, intent_id, data)
+    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
+    return templates.TemplateResponse(request, "partials/intent_list.html", {
+        "request": request,
+        "intents": intents,
+    })
+
+
+@app.post("/partials/intent-validate-yaml", response_class=HTMLResponse)
+async def partial_intent_validate_yaml(request: Request):
+    form = await request.form()
+    yaml_str = (form.get("yaml_content") or "").strip()
+    if not yaml_str:
+        return HTMLResponse('<span class="muted" style="font-size:0.82em">Start typing to see a parsed summary…</span>')
+    try:
+        data = _yaml_to_intent(yaml_str)
+    except ValueError as exc:
+        return HTMLResponse(
+            f'<div class="yaml-error" style="font-size:0.82em">⚠ {exc}</div>'
+        )
+    itype   = data.get("intent_type", "monitor")
+    enabled = "enabled" if data.get("enabled") else "disabled"
+    lines   = [
+        f'<div style="font-size:0.82em; display:flex; flex-direction:column; gap:6px">',
+        f'<div><span class="muted">name:</span> <strong>{data["name"]}</strong></div>',
+        f'<div><span class="muted">type:</span> {itype} &nbsp; <span class="muted">status:</span> {enabled}</div>',
+    ]
+    if data.get("device"):
+        lines.append(f'<div><span class="muted">device:</span> {data["device"]}</div>')
+    if itype == "monitor":
+        lines.append(f'<div><span class="muted">query:</span> <code style="font-size:0.9em">{data.get("metric_query","")}</code></div>')
+        if data.get("threshold"):
+            lines.append(f'<div><span class="muted">threshold:</span> {data["threshold"]}</div>')
+        lines.append(f'<div><span class="muted">interval:</span> {data.get("interval_seconds",300)}s &nbsp; <span class="muted">cooldown:</span> {data.get("cooldown_minutes",0)}min &nbsp; <span class="muted">priority:</span> {data.get("priority","normal")}</div>')
+    elif itype == "chaos_schedule":
+        lines.append(f'<div><span class="muted">schedule:</span> <code>{data.get("schedule","")}</code></div>')
+    lines.append(f'<div style="color:#22c55e; margin-top:4px; font-size:0.8em">✓ Valid</div>')
+    lines.append('</div>')
+    return HTMLResponse("".join(lines))
 
 
 # ── SSE task-change stream ────────────────────────────────────────────────────

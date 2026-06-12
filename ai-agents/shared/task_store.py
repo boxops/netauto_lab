@@ -208,6 +208,10 @@ _MIGRATIONS = [
     # Fix 3: promotion TTL — autonomy level expires after N days to require re-validation
     "ALTER TABLE action_policies ADD COLUMN autonomy_level_promoted_at TEXT",
     "ALTER TABLE action_policies ADD COLUMN autonomy_level_expires_at  TEXT",
+    # Intent evaluation controls
+    "ALTER TABLE standing_intents ADD COLUMN interval_seconds INTEGER NOT NULL DEFAULT 300",
+    "ALTER TABLE standing_intents ADD COLUMN cooldown_minutes INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE standing_intents ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'",
 ]
 
 _VALID_STATUSES = frozenset({
@@ -1289,6 +1293,9 @@ class TaskStore:
             "action":           data.get("action", ""),
             "schedule":         data.get("schedule", ""),
             "enabled":          int(data.get("enabled", True)),
+            "interval_seconds": int(data.get("interval_seconds", 300)),
+            "cooldown_minutes": int(data.get("cooldown_minutes", 0)),
+            "priority":         data.get("priority", "normal"),
             "created_at":       ts,
             "last_triggered_at": None,
         }
@@ -1296,10 +1303,14 @@ class TaskStore:
             conn.execute(
                 text("""INSERT INTO standing_intents
                     (id,tenant_id,name,description,intent_type,device,device_role,alertname,
-                     metric_query,threshold,action,schedule,enabled,created_at,last_triggered_at)
+                     metric_query,threshold,action,schedule,enabled,
+                     interval_seconds,cooldown_minutes,priority,
+                     created_at,last_triggered_at)
                     VALUES
                     (:id,:tenant_id,:name,:description,:intent_type,:device,:device_role,:alertname,
-                     :metric_query,:threshold,:action,:schedule,:enabled,:created_at,:last_triggered_at)"""),
+                     :metric_query,:threshold,:action,:schedule,:enabled,
+                     :interval_seconds,:cooldown_minutes,:priority,
+                     :created_at,:last_triggered_at)"""),
                 row,
             )
         return row
@@ -1308,6 +1319,7 @@ class TaskStore:
         allowed = {
             "name", "description", "intent_type", "device", "device_role", "alertname",
             "metric_query", "threshold", "action", "schedule", "enabled",
+            "interval_seconds", "cooldown_minutes", "priority",
         }
         sets = ", ".join(f"{k}=:{k}" for k in data if k in allowed)
         if not sets:

@@ -1226,6 +1226,128 @@ def run_config_commands(
         raise
 
 
+# ── Tier 5 – Config Compliance ───────────────────────────────────────────────
+
+@tool
+def get_config_compliance(device: str = "") -> str:
+    """
+    Query Nautobot Golden Config for configuration compliance status.
+
+    Returns which compliance rules are passing or failing per device and the
+    exact diff: 'missing' lines are in the intended config but absent from the
+    running config; 'extra' lines are in the running config but absent from the
+    intended config.
+
+    Call this first when investigating a ConfigDrift alert to understand exactly
+    what has changed before proposing a remediation.
+
+    Args:
+        device: Device hostname as it appears in Nautobot (e.g. 'leaf1').
+                Leave empty to return all non-compliant devices across the network.
+
+    Returns:
+        JSON summary of compliance status with per-device, per-rule diffs.
+    """
+    params: dict = {"compliance": "false"} if not device else {"device": device}
+    data = _nautobot_get("plugins/golden-config/config-compliance/", params)
+    results = data.get("results", [])
+
+    if not results:
+        if device:
+            return json.dumps({"status": "compliant", "device": device,
+                               "message": f"No non-compliant rules found for '{device}'.",
+                               "non_compliant": []})
+        return json.dumps({"status": "compliant", "message": "All devices are compliant.",
+                           "non_compliant": []})
+
+    by_device: dict[str, dict] = {}
+    for r in results:
+        dev_name = (r.get("device") or {}).get("name", "unknown")
+        rule = r.get("rule") or {}
+        feature = rule.get("feature") or rule.get("slug") or rule.get("name") or "unknown"
+        if isinstance(feature, dict):
+            feature = feature.get("name") or feature.get("slug") or "unknown"
+        if dev_name not in by_device:
+            by_device[dev_name] = {"device": dev_name, "rules": []}
+        by_device[dev_name]["rules"].append({
+            "feature":   feature,
+            "compliant": r.get("compliance", False),
+            "missing":   (r.get("missing") or "").strip(),
+            "extra":     (r.get("extra") or "").strip(),
+        })
+
+    non_compliant = [
+        v for v in by_device.values()
+        if any(not rule["compliant"] for rule in v["rules"])
+    ]
+
+    return json.dumps({
+        "total_devices_checked": len(by_device),
+        "non_compliant_count":   len(non_compliant),
+        "compliant_count":       len(by_device) - len(non_compliant),
+        "non_compliant":         non_compliant,
+    }, indent=2)
+
+
+@tool
+def remediate_config_compliance(
+    device: str,
+    dry_run: bool = True,
+) -> str:
+    """
+    Trigger the Nautobot 'Remediate Configuration Compliance' job for a device.
+
+    Pushes lines that are in the intended config but absent from the running
+    config ('missing' lines from get_config_compliance). Does NOT remove extra
+    lines — only additive changes are applied, making this safe by default.
+
+    dry_run=True (default): SIMULATION — computes what would be pushed without
+    touching the device. Always call this first to review the commands.
+
+    dry_run=False: Applies the missing config lines. Requires prior human
+    approval via the pipeline approval gate or an explicit CONFIRM token.
+
+    Args:
+        device:  Device hostname as it appears in Nautobot (e.g. 'leaf1').
+        dry_run: True = preview only (default). False = apply changes.
+
+    Returns:
+        JSON with job status and the remediation output from Nautobot.
+    """
+    try:
+        device_id = _get_device_id(device)
+        job_id    = _resolve_job_id("Remediate Configuration Compliance")
+        result_id = _submit_job(job_id, {
+            "device":             [device_id],
+            "dry_run":            dry_run,
+            "include_removals":   False,
+            "refresh_compliance": True,
+        })
+        job_result = _poll_job(result_id, timeout=300)
+        status = job_result.get("status", {})
+        if isinstance(status, dict):
+            status = status.get("value", "UNKNOWN")
+        logs   = _fetch_job_logs(result_id)
+        output = _format_job_output(logs, status)
+        output["compliance_action"] = "remediate"
+        output["device"]   = device
+        output["dry_run"]  = dry_run
+        output["job_result_url"] = (
+            f"{settings.nautobot_url}/extras/job-results/{result_id}/"
+        )
+        if dry_run:
+            output["notice"] = (
+                "DRY RUN — no changes applied to the device. "
+                "Re-run with dry_run=False after receiving explicit approval to execute."
+            )
+        return json.dumps(output, indent=2)
+    except Exception as exc:
+        return json.dumps({"error": str(exc), "device": device, "dry_run": dry_run})
+
+
+_COMPLIANCE_TOOLS = [get_config_compliance, remediate_config_compliance]
+
+
 # ── Runbook library ──────────────────────────────────────────────────────────
 
 # Built-in runbooks for common alert types.  Each runbook is a YAML string
@@ -1524,7 +1646,7 @@ def save_to_knowledge_base(
 
 _KB_TOOLS = [search_knowledge_base, save_to_knowledge_base]
 
-OPS_TOOLS = _NAUTOBOT_TOOLS + _PROMETHEUS_TOOLS + _LOKI_TOOLS + _ACTION_TOOLS + _RUNBOOK_TOOLS + _KB_TOOLS
+OPS_TOOLS = _NAUTOBOT_TOOLS + _PROMETHEUS_TOOLS + _LOKI_TOOLS + _ACTION_TOOLS + _COMPLIANCE_TOOLS + _RUNBOOK_TOOLS + _KB_TOOLS
 
 # Backward-compat alias — workflow.py imported ENG_TOOLS during the 3-agent era
 ENG_TOOLS = OPS_TOOLS
