@@ -21,7 +21,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ai-agents"))
 
 @pytest.fixture(scope="module")
 def client():
-    """TestClient wrapping the UI FastAPI app with all stores mocked."""
+    """TestClient wrapping the UI FastAPI app with all stores mocked.
+
+    ui.main may already have been imported by another test file (import order
+    is suite-dependent), so patching the store *classes* is not enough — the
+    module-level singletons must be replaced on the imported module itself.
+    """
     with (
         patch("shared.activity_store.ActivityStore") as mock_as_cls,
         patch("shared.task_store.TaskStore") as mock_ts_cls,
@@ -31,9 +36,13 @@ def client():
         mock_as_cls.return_value = mock_store
         mock_ts_cls.return_value = mock_task_store
 
-        from ui.main import app
-        with TestClient(app, raise_server_exceptions=True) as c:
-            yield c
+        import ui.main as ui_main
+        with (
+            patch.object(ui_main, "store", mock_store),
+            patch.object(ui_main, "task_store", mock_task_store),
+        ):
+            with TestClient(ui_main.app, raise_server_exceptions=True) as c:
+                yield c
 
 
 def _make_activity_store():

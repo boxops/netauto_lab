@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign in · Clano</title>
+    <link rel="stylesheet" href="/static/style.css?v=7" />
+    <style>
+      .login-wrap {
+        min-height: 80vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .login-card {
+        width: 320px;
+        padding: 32px 28px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .login-card h1 { margin: 0 0 4px; font-size: 1.3em; }
+      .login-card input[type="password"] {
+        width: 100%;
+        margin: 16px 0 12px;
+        padding: 9px 10px;
+        box-sizing: border-box;
+      }
+      .login-card button { width: 100%; }
+      .login-error { color: #f87171; font-size: 0.85em; margin: 0 0 4px; }
+    </style>
+  </head>
+  <body>
+    <div class="login-wrap">
+      <form class="login-card" method="post" action="/login">
+        <h1>📡 Clano</h1>
+        <p class="muted" style="font-size:0.82em; margin:0">
+          Closed-Loop Autonomous Network Ops
+        </p>
+        <input type="password" name="password" placeholder="Password"
+               autofocus autocomplete="current-password" />
+        {% if error %}<p class="login-error">{{ error }}</p>{% endif %}
+        <button type="submit" class="btn">Sign in</button>
+      </form>
+    </div>
+  </body>
+</html>

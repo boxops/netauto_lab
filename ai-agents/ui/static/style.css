@@ -1484,3 +1484,16 @@ html.no-help .help-callout { display: none !important; }
   .policy-yaml-layout { flex-direction: column; }
   .policy-yaml-right  { max-width: 100%; width: 100%; }
 }
+
+/* ── Approval queue ─────────────────────────────────────── */
+.approval-card.kbd-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+kbd {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.85em;
+}

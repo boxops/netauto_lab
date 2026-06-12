@@ -40,6 +40,25 @@
 <hr class="divider" />
 
 {# ════════════════════════════════════════════════════════════════════════════
+   SECTION B — AI ACCURACY LEDGER (self-grading eval loop)
+   ════════════════════════════════════════════════════════════════════════════ #}
+<div class="section-title">🎯 AI Accuracy Ledger</div>
+<p class="muted" style="font-size:0.82em; margin-bottom:12px">
+  Every chaos injection executed with <code>check_mode=False</code> is recorded as
+  ground truth. The pipeline's response is graded automatically: did it detect the
+  fault, blame the right device, diagnose the right cause, and resolve the alert?
+</p>
+
+<div id="eval-ledger"
+     hx-get="/partials/eval-ledger"
+     hx-trigger="load, every 60s"
+     hx-swap="innerHTML">
+  <div class="muted" style="font-size:0.85em; padding:8px 0">Loading accuracy data…</div>
+</div>
+
+<hr class="divider" />
+
+{# ════════════════════════════════════════════════════════════════════════════
    SECTION C — TASK QUEUE (collapsible)
    ════════════════════════════════════════════════════════════════════════════ #}
 <details class="collapsible-section">

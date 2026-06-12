@@ -9,6 +9,7 @@ import hmac
 import json
 import logging
 import os
+import secrets
 import sys
 import uuid
 import sqlite3
@@ -19,8 +20,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, Form, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.activity_store import ActivityStore
 from shared.config import settings
+from shared.eval_engine import EvalStore
 from shared.kb_store import KBStore
 from shared.task_store import TaskStore
 
@@ -486,9 +488,76 @@ templates = Jinja2Templates(directory=TMPL_DIR)
 templates.env.filters["from_json"] = lambda s: json.loads(s) if s else {}
 templates.env.filters["humanize_event"] = lambda et: _EVENT_LABELS.get(et, et.replace("_", " ").capitalize())
 
+
+# ── UI authentication ─────────────────────────────────────────────────────────
+# When UI_PASSWORD is set, every route except /login and /static requires a
+# session cookie. When unset (dev/lab), the UI is open — same philosophy as
+# AGENT_API_KEY — but a startup warning is logged. Sessions are bound to a
+# per-process random token, so restarting the UI signs everyone out.
+
+UI_PASSWORD     = os.getenv("UI_PASSWORD", "")
+_SESSION_COOKIE = "clano_session"
+_SESSION_TOKEN  = secrets.token_urlsafe(32)
+_SESSION_MAX_AGE = 12 * 3600  # seconds
+
+templates.env.globals["ui_auth_enabled"] = bool(UI_PASSWORD)
+
+if not UI_PASSWORD:
+    logger.warning(
+        "UI_PASSWORD is not set — the web UI (port 7860) is unauthenticated, "
+        "including approval and policy-edit actions. Set UI_PASSWORD in .env "
+        "before exposing the UI beyond localhost."
+    )
+
+
+def _session_valid(request: Request) -> bool:
+    return hmac.compare_digest(request.cookies.get(_SESSION_COOKIE, ""), _SESSION_TOKEN)
+
+
+@app.middleware("http")
+async def _require_login(request: Request, call_next):
+    path = request.url.path
+    if not UI_PASSWORD or path == "/login" or path.startswith("/static"):
+        return await call_next(request)
+    if _session_valid(request):
+        return await call_next(request)
+    # HTMX partial polls get a client-side redirect; full page loads a 303.
+    if request.headers.get("HX-Request"):
+        return Response(status_code=401, headers={"HX-Redirect": "/login"})
+    return RedirectResponse(url="/login", status_code=303)
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    if not UI_PASSWORD or _session_valid(request):
+        return RedirectResponse(url="/", status_code=303)
+    return templates.TemplateResponse(request, "login.html", {"error": ""})
+
+
+@app.post("/login")
+async def login_submit(request: Request, password: str = Form("")):
+    if UI_PASSWORD and hmac.compare_digest(password, UI_PASSWORD):
+        resp = RedirectResponse(url="/", status_code=303)
+        resp.set_cookie(
+            _SESSION_COOKIE, _SESSION_TOKEN,
+            max_age=_SESSION_MAX_AGE, httponly=True, samesite="strict",
+        )
+        return resp
+    return templates.TemplateResponse(
+        request, "login.html", {"error": "Invalid password."}, status_code=401
+    )
+
+
+@app.post("/logout")
+async def logout():
+    resp = RedirectResponse(url="/login", status_code=303)
+    resp.delete_cookie(_SESSION_COOKIE)
+    return resp
+
 store      = ActivityStore()
 task_store = TaskStore()
 kb_store   = KBStore()
+eval_store = EvalStore(task_store)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1422,14 +1491,17 @@ def _task_detail_context(task_id: str) -> dict:
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+async def index(request: Request, fp: str = ""):
     fps, approval_tasks, task_ctx = await asyncio.gather(
         run_in_threadpool(_pipeline_fingerprints),
         run_in_threadpool(task_store.list_tasks, status="awaiting_approval", limit=1),
         run_in_threadpool(_task_queue_context),
     )
-    # Prefer pipelines awaiting human approval; fall back to the most recently created active one
-    if approval_tasks:
+    # Deep link (?fp=...) wins; then pipelines awaiting human approval; then the
+    # most recently created active one.
+    if fp:
+        sel_fp = fp
+    elif approval_tasks:
         awaiting_fp = approval_tasks[0].get("alert_fingerprint", "")
         sel_fp = awaiting_fp if awaiting_fp else (fps[0][0] if fps else "")
     else:
@@ -1861,521 +1933,20 @@ async def partial_activity_detail(request: Request, record_id: int):
     })
 
 
-# ── Policies + Intents pages ──────────────────────────────────────────────────
-
-@app.get("/policies", response_class=HTMLResponse)
-async def policies_page(request: Request):
-    return templates.TemplateResponse(request, "policies.html", {"request": request})
-
-
-@app.get("/intents", response_class=HTMLResponse)
-async def intents_page(request: Request):
-    return templates.TemplateResponse(request, "intents.html", {"request": request})
-
+# ── Policies / Intents / KB routes — moved to ui/routers/ ────────────────────
 
 # ── Policy ↔ YAML serialisation ───────────────────────────────────────────────
+# Moved to ui/yaml_codec.py — aliased here so existing call sites and tests
+# (ui.main._yaml_to_policy etc.) keep working unchanged.
 
-def _policy_to_yaml(p: dict) -> str:
-    """Convert a policy DB row to a human-editable YAML string."""
-    import json as _j
-    doc: dict = {}
-    for k in ("name", "alertname", "fix_type", "device_role", "environment", "description"):
-        doc[k] = p.get(k) or ""
-
-    doc["gate"] = {
-        "level":          p.get("autonomy_level", "L2"),
-        "min_confidence": p.get("min_confidence", "low"),
-        "max_risk":       p.get("max_risk", "high"),
-        "promotable":     bool(p.get("promotable", True)),
-    }
-
-    conditions: list = []
-    if p.get("conditions"):
-        try:
-            conditions = _j.loads(p["conditions"])
-        except Exception:
-            conditions = []
-
-    rca: dict = {}
-    if p.get("rca_template"):
-        try:
-            rca = _j.loads(p["rca_template"])
-        except Exception:
-            rca = {}
-
-    fix: dict = {}
-    if p.get("fix_template"):
-        try:
-            fix = _j.loads(p["fix_template"])
-        except Exception:
-            fix = {}
-
-    if conditions or rca or fix:
-        fp: dict = {}
-        if conditions:
-            fp["conditions"] = conditions
-        if rca:
-            fp["rca"] = {
-                "diagnosis":      rca.get("diagnosis", ""),
-                "confidence":     rca.get("confidence", "high"),
-                "action":         rca.get("action", ""),
-                "upstream_cause": rca.get("upstream_cause", ""),
-            }
-        if fix:
-            fp["fix"] = {
-                "fix_type":   fix.get("fix_type", "config_change"),
-                "commands":   fix.get("commands", ""),
-                "risk":       fix.get("risk", "low"),
-                "confidence": fix.get("confidence", "high"),
-                "reason":     fix.get("reason", ""),
-            }
-        doc["fast_path"] = fp
-
-    return _yaml.dump(doc, default_flow_style=False, allow_unicode=True, sort_keys=False, width=100)
-
-
-def _yaml_to_policy(yaml_str: str, tenant_id: str = "default") -> dict:
-    """Parse a YAML string into a policy data dict ready for create/update.
-    Raises ValueError with a user-readable message on any problem."""
-    import json as _j
-    try:
-        doc = _yaml.safe_load(yaml_str)
-    except _yaml.YAMLError as exc:
-        raise ValueError(f"YAML parse error: {exc}") from exc
-
-    if not isinstance(doc, dict):
-        raise ValueError("Expected a YAML mapping at the top level.")
-
-    name = (doc.get("name") or "").strip()
-    if not name:
-        raise ValueError("'name' is required.")
-
-    valid_levels = {"L0", "L1", "L2", "L3", "L4", "L5"}
-    valid_conf   = {"low", "medium", "high", "certain"}
-    valid_risk   = {"low", "medium", "high"}
-
-    gate = doc.get("gate") or {}
-    level = (gate.get("level") or "L2").strip()
-    if level not in valid_levels:
-        raise ValueError(f"gate.level must be one of {sorted(valid_levels)}, got '{level}'.")
-    min_conf = (gate.get("min_confidence") or "low").strip()
-    if min_conf not in valid_conf:
-        raise ValueError(f"gate.min_confidence must be one of {sorted(valid_conf)}, got '{min_conf}'.")
-    max_risk = (gate.get("max_risk") or "high").strip()
-    if max_risk not in valid_risk:
-        raise ValueError(f"gate.max_risk must be one of {sorted(valid_risk)}, got '{max_risk}'.")
-
-    data: dict = {
-        "name":           name,
-        "alertname":      (doc.get("alertname") or "").strip(),
-        "fix_type":       (doc.get("fix_type") or "").strip(),
-        "device_role":    (doc.get("device_role") or "").strip(),
-        "environment":    (doc.get("environment") or "").strip(),
-        "description":    (doc.get("description") or "").strip(),
-        "autonomy_level": level,
-        "min_confidence": min_conf,
-        "max_risk":       max_risk,
-        "promotable":     bool(gate.get("promotable", True)),
-        "tenant_id":      tenant_id,
-        "conditions":     None,
-        "rca_template":   None,
-        "fix_template":   None,
-    }
-
-    fp = doc.get("fast_path")
-    if isinstance(fp, dict):
-        conds = fp.get("conditions")
-        if conds:
-            if not isinstance(conds, list):
-                raise ValueError("fast_path.conditions must be a list.")
-            valid_ctypes = {"metric", "show_command", "nautobot"}
-            for i, c in enumerate(conds):
-                if not isinstance(c, dict):
-                    raise ValueError(f"fast_path.conditions[{i}] must be a mapping.")
-                if c.get("type") not in valid_ctypes:
-                    raise ValueError(f"fast_path.conditions[{i}].type must be one of {sorted(valid_ctypes)}.")
-            data["conditions"] = _j.dumps(conds)
-
-        rca = fp.get("rca")
-        if isinstance(rca, dict) and rca.get("diagnosis"):
-            rconf = (rca.get("confidence") or "high").strip()
-            if rconf not in valid_conf:
-                raise ValueError(f"fast_path.rca.confidence must be one of {sorted(valid_conf)}.")
-            data["rca_template"] = _j.dumps({
-                "diagnosis":       (rca.get("diagnosis") or "").strip(),
-                "confidence":      rconf,
-                "action":          (rca.get("action") or "").strip(),
-                "affected_device": "{device}",
-                "upstream_cause":  (rca.get("upstream_cause") or "").strip(),
-                "is_leaf_symptom": False,
-            })
-
-        fix = fp.get("fix")
-        valid_ftypes = {"config_change", "runbook", "escalate_human", "no_action"}
-        if isinstance(fix, dict) and fix.get("commands"):
-            ftype = (fix.get("fix_type") or "config_change").strip()
-            if ftype not in valid_ftypes:
-                raise ValueError(f"fast_path.fix.fix_type must be one of {sorted(valid_ftypes)}.")
-            frisk = (fix.get("risk") or "low").strip()
-            if frisk not in valid_risk:
-                raise ValueError(f"fast_path.fix.risk must be one of {sorted(valid_risk)}.")
-            fconf = (fix.get("confidence") or "high").strip()
-            if fconf not in valid_conf:
-                raise ValueError(f"fast_path.fix.confidence must be one of {sorted(valid_conf)}.")
-            data["fix_template"] = _j.dumps({
-                "fix_type":   ftype,
-                "commands":   fix.get("commands", "").strip(),
-                "risk":       frisk,
-                "confidence": fconf,
-                "reason":     (fix.get("reason") or "").strip(),
-            })
-
-    return data
-
-
-# ── Intent ↔ YAML serialisation ──────────────────────────────────────────────
-
-def _intent_to_yaml(i: dict) -> str:
-    """Convert an intent DB row to a human-editable YAML string."""
-    doc: dict = {
-        "name":        i.get("name", ""),
-        "type":        i.get("intent_type", "monitor"),
-        "description": i.get("description", ""),
-        "device":      i.get("device", ""),
-        "alertname":   i.get("alertname", ""),
-        "enabled":     bool(i.get("enabled", True)),
-    }
-
-    itype = i.get("intent_type", "monitor")
-    if itype == "monitor":
-        doc["monitor"] = {
-            "query":            i.get("metric_query", ""),
-            "threshold":        i.get("threshold", ""),
-            "interval_seconds": int(i.get("interval_seconds") or 300),
-            "cooldown_minutes": int(i.get("cooldown_minutes") or 0),
-            "priority":         i.get("priority") or "normal",
-        }
-    elif itype == "chaos_schedule":
-        doc["chaos"] = {
-            "schedule": i.get("schedule", ""),
-            "action":   i.get("action", ""),
-        }
-
-    return _yaml.dump(doc, default_flow_style=False, allow_unicode=True,
-                      sort_keys=False, width=100)
-
-
-def _yaml_to_intent(yaml_str: str, tenant_id: str = "default") -> dict:
-    """Parse a YAML string into an intent data dict ready for create/update.
-    Raises ValueError with a user-readable message on any problem."""
-    try:
-        doc = _yaml.safe_load(yaml_str)
-    except _yaml.YAMLError as exc:
-        raise ValueError(f"YAML parse error: {exc}") from exc
-
-    if not isinstance(doc, dict):
-        raise ValueError("Expected a YAML mapping at the top level.")
-
-    name = (doc.get("name") or "").strip()
-    if not name:
-        raise ValueError("'name' is required.")
-
-    valid_types    = {"suppress", "escalate", "monitor", "chaos_schedule"}
-    valid_priority = {"low", "normal", "high"}
-
-    itype = (doc.get("type") or "monitor").strip()
-    if itype not in valid_types:
-        raise ValueError(f"'type' must be one of {sorted(valid_types)}, got '{itype}'.")
-
-    data: dict = {
-        "name":        name,
-        "intent_type": itype,
-        "description": (doc.get("description") or "").strip(),
-        "device":      (doc.get("device") or "").strip(),
-        "alertname":   (doc.get("alertname") or "").strip(),
-        "enabled":     bool(doc.get("enabled", True)),
-        "tenant_id":   tenant_id,
-        # defaults — overridden below for monitor intents
-        "metric_query":     "",
-        "threshold":        "",
-        "interval_seconds": 300,
-        "cooldown_minutes": 0,
-        "priority":         "normal",
-        "schedule":         "",
-        "action":           "",
-    }
-
-    if itype == "monitor":
-        mon = doc.get("monitor") or {}
-        if not isinstance(mon, dict):
-            raise ValueError("'monitor' must be a mapping.")
-        query = (mon.get("query") or "").strip()
-        if not query:
-            raise ValueError("monitor.query is required for monitor intents.")
-        data["metric_query"] = query
-        data["threshold"]    = (mon.get("threshold") or "").strip()
-        try:
-            data["interval_seconds"] = max(60, int(mon.get("interval_seconds") or 300))
-        except (ValueError, TypeError):
-            raise ValueError("monitor.interval_seconds must be an integer >= 60.")
-        try:
-            data["cooldown_minutes"] = max(0, int(mon.get("cooldown_minutes") or 0))
-        except (ValueError, TypeError):
-            raise ValueError("monitor.cooldown_minutes must be a non-negative integer.")
-        priority = (mon.get("priority") or "normal").strip()
-        if priority not in valid_priority:
-            raise ValueError(f"monitor.priority must be one of {sorted(valid_priority)}.")
-        data["priority"] = priority
-
-    elif itype == "chaos_schedule":
-        chaos = doc.get("chaos") or {}
-        if not isinstance(chaos, dict):
-            raise ValueError("'chaos' must be a mapping.")
-        data["schedule"] = (chaos.get("schedule") or "").strip()
-        data["action"]   = (chaos.get("action") or "").strip()
-
-    return data
-
-
-_INTENT_BLUEPRINTS: dict[str, tuple[str, str]] = {
-    "config_drift_monitor": (
-        "Config Drift Monitor",
-        textwrap.dedent("""\
-            name: Nautobot config drift monitor
-            type: monitor
-            description: Detect configuration drift on all devices via Nautobot Golden Config
-            device: ""
-            alertname: ""
-            enabled: true
-
-            monitor:
-              query: nautobot://plugins/golden-config/config-compliance/?compliance=false
-              threshold: ""
-              interval_seconds: 300
-              cooldown_minutes: 60
-              priority: normal
-            """),
-    ),
-    "prometheus_monitor": (
-        "Prometheus Threshold Monitor",
-        textwrap.dedent("""\
-            name: My metric monitor
-            type: monitor
-            description: Fire an RCA task when a Prometheus metric breaches a threshold
-            device: ""
-            alertname: ""
-            enabled: true
-
-            monitor:
-              query: 'up{job="telegraf"}'
-              threshold: "< 1"
-              interval_seconds: 120
-              cooldown_minutes: 30
-              priority: normal
-            """),
-    ),
-    "suppress_intent": (
-        "Suppress Alert",
-        textwrap.dedent("""\
-            name: Suppress leaf1 InterfaceDown
-            type: suppress
-            description: Suppress investigation for a known-flapping link during maintenance
-            device: leaf1
-            alertname: InterfaceDown
-            enabled: true
-            """),
-    ),
-    "chaos_schedule": (
-        "Chaos Schedule",
-        textwrap.dedent("""\
-            name: Weekly BGP flap test
-            type: chaos_schedule
-            description: Scheduled chaos scenario — runs via the agent on a cron expression
-            device: leaf1
-            alertname: ""
-            enabled: true
-
-            chaos:
-              schedule: "0 2 * * 1"
-              action: "Simulate BGP flap on leaf1 — run flap_bgp_neighbor with check_mode=True"
-            """),
-    ),
-}
-
-
-# ── Policy blueprints ─────────────────────────────────────────────────────────
-
-_POLICY_BLUEPRINTS: dict[str, tuple[str, str]] = {
-    "interface_admin_down": (
-        "Interface Down Recovery",
-        textwrap.dedent("""\
-            name: InterfaceDown — lab spine
-            alertname: InterfaceDown
-            fix_type: config_change
-            device_role: spine
-            environment: lab
-            description: Auto-restore admin-down spine interfaces in the lab
-
-            gate:
-              level: L2
-              min_confidence: high
-              max_risk: low
-              promotable: true
-
-            fast_path:
-              conditions:
-                - type: metric
-                  query: "interface_ifAdminStatus{sysName='{device}',ifDescr='{interface}'}"
-                  expect: "2"
-                - type: nautobot
-                  path: "/api/dcim/interfaces/?name={interface}&device={device}"
-                  field: "results[0].enabled"
-                  expect: "true"
-
-              rca:
-                diagnosis: "{interface} on {device} is administratively shut down"
-                confidence: high
-                action: "no shutdown"
-                upstream_cause: ""
-
-              fix:
-                fix_type: config_change
-                commands: |
-                  interface {interface}
-                   no shutdown
-                risk: low
-                confidence: high
-                reason: "Restore admin-down interface {interface} on {device}"
-            """),
-    ),
-    "bgp_peer_down": (
-        "BGP Peer Down",
-        textwrap.dedent("""\
-            name: BGPPeerDown — leaf nodes
-            alertname: BGPPeerDown
-            fix_type: config_change
-            device_role: leaf
-            environment: ""
-            description: Investigate and recover dropped BGP sessions on leaf switches
-
-            gate:
-              level: L2
-              min_confidence: high
-              max_risk: medium
-              promotable: true
-
-            fast_path:
-              conditions:
-                - type: metric
-                  query: "bgp_peers_established{device='{device}'}"
-                  expect: "0"
-
-              rca:
-                diagnosis: "BGP session to {peer} on {device} is down"
-                confidence: high
-                action: "clear ip bgp {peer} soft"
-                upstream_cause: ""
-
-              fix:
-                fix_type: config_change
-                commands: |
-                  clear ip bgp {peer} soft
-                risk: medium
-                confidence: high
-                reason: "Soft-reset BGP peer {peer} on {device}"
-            """),
-    ),
-    "device_unreachable": (
-        "Device Unreachable — Escalate",
-        textwrap.dedent("""\
-            name: DeviceUnreachable — escalate
-            alertname: DeviceDown
-            fix_type: escalate_human
-            device_role: ""
-            environment: ""
-            description: Always escalate unreachable devices to a human — never auto-fix
-
-            gate:
-              level: L1
-              min_confidence: low
-              max_risk: high
-              promotable: false
-
-            # No fast_path — AI investigates, human decides
-            """),
-    ),
-    "high_utilisation": (
-        "High Interface Utilisation — Monitor Only",
-        textwrap.dedent("""\
-            name: HighInterfaceUtilisation — monitor
-            alertname: HighInterfaceUtilization
-            fix_type: no_action
-            device_role: ""
-            environment: ""
-            description: Log and surface high-utilisation alerts without taking any action
-
-            gate:
-              level: L0
-              min_confidence: low
-              max_risk: high
-              promotable: false
-
-            # No fast_path — observe only, no commands executed
-            """),
-    ),
-    "config_drift": (
-        "Config Drift — Human Gate",
-        textwrap.dedent("""\
-            name: ConfigDrift — production gate
-            alertname: ConfigDrift
-            fix_type: config_change
-            device_role: ""
-            environment: production
-            description: Config drift in production always requires explicit human approval
-
-            gate:
-              level: L3
-              min_confidence: high
-              max_risk: low
-              promotable: false
-
-            fast_path:
-              rca:
-                diagnosis: "Running config on {device} deviates from intended state"
-                confidence: high
-                action: "Review diff and apply intended config"
-                upstream_cause: ""
-
-              fix:
-                fix_type: config_change
-                commands: |
-                  # Commands will be determined by the AI based on the diff
-                  # Human must review before execution
-                risk: high
-                confidence: medium
-                reason: "Reconcile config drift on {device} — human approval required"
-            """),
-    ),
-    "lab_autonomous": (
-        "Lab — Full Autonomy (L5)",
-        textwrap.dedent("""\
-            name: Lab autonomous — all alerts
-            alertname: ""
-            fix_type: ""
-            device_role: ""
-            environment: lab
-            description: "Full autonomy for all alert types in the lab environment. Use only for testing."
-
-            gate:
-              level: L5
-              min_confidence: low
-              max_risk: high
-              promotable: false
-
-            # No fast_path — AI handles everything end-to-end
-            """),
-    ),
-}
+from ui.yaml_codec import (
+    policy_to_yaml as _policy_to_yaml,
+    yaml_to_policy as _yaml_to_policy,
+    intent_to_yaml as _intent_to_yaml,
+    yaml_to_intent as _yaml_to_intent,
+    INTENT_BLUEPRINTS as _INTENT_BLUEPRINTS,
+    POLICY_BLUEPRINTS as _POLICY_BLUEPRINTS,
+)
 
 
 # ── Policy form parsing helpers ───────────────────────────────────────────────
@@ -2442,624 +2013,6 @@ def _parse_fix_template(form_data) -> str | None:
         "confidence": form_data.get("fix_confidence", "high"),
         "reason":     form_data.get("fix_reason", "").strip(),
     })
-
-
-async def _get_agent_ai_mode() -> bool:
-    try:
-        r = await _http_client.get(f"{OPS_AGENT_URL}/ai-mode", timeout=3.0)
-        return r.json().get("ai_enabled", True)
-    except Exception:
-        return True  # assume enabled if agent unreachable
-
-
-@app.get("/partials/policy-ai-notice", response_class=HTMLResponse)
-async def partial_policy_ai_notice(request: Request):
-    ai_enabled = await _get_agent_ai_mode()
-    if ai_enabled:
-        return HTMLResponse("")
-    return HTMLResponse(
-        '<div style="background:#78350f22; border:1px solid #d97706; border-radius:6px; '
-        'padding:8px 14px; margin-bottom:12px; font-size:0.82em; color:#fbbf24">'
-        '<strong>⚠ AI investigation is disabled.</strong> '
-        'Regular autonomy policies (gate rules) only fire when the AI pipeline runs. '
-        'Policies with programmatic <code>conditions</code> (fast-path) still fire. '
-        'Enable AI in the Operations tab to activate full policy matching.'
-        '</div>'
-    )
-
-
-@app.get("/partials/policy-list", response_class=HTMLResponse)
-async def partial_policy_list(request: Request, tenant_id: str = "default"):
-    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
-    return templates.TemplateResponse(request, "partials/policy_list.html", {
-        "request":  request,
-        "policies": policies,
-        "now_iso":  datetime.now(timezone.utc).isoformat(),
-    })
-
-
-@app.post("/partials/policy-create", response_class=HTMLResponse)
-async def partial_policy_create(
-    request: Request,
-    name: str = Form(...),
-    alertname: str = Form(""),
-    fix_type: str = Form(""),
-    device_role: str = Form(""),
-    environment: str = Form(""),
-    autonomy_level: str = Form("L2"),
-    min_confidence: str = Form("low"),
-    max_risk: str = Form("high"),
-    promotable: str = Form(""),
-    tenant_id: str = "default",
-):
-    form_data = await request.form()
-    conditions   = _parse_condition_rows(form_data)
-    rca_template = _parse_rca_template(form_data)
-    fix_template = _parse_fix_template(form_data)
-    data = {
-        "name":           name,
-        "alertname":      alertname,
-        "fix_type":       fix_type,
-        "device_role":    device_role,
-        "environment":    environment,
-        "autonomy_level": autonomy_level,
-        "min_confidence": min_confidence,
-        "max_risk":       max_risk,
-        "promotable":     bool(promotable),
-        "tenant_id":      tenant_id,
-        "conditions":     conditions,
-        "rca_template":   rca_template,
-        "fix_template":   fix_template,
-    }
-    await run_in_threadpool(task_store.create_policy, data)
-    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
-    return templates.TemplateResponse(request, "partials/policy_list.html", {
-        "request":  request,
-        "policies": policies,
-        "now_iso":  datetime.now(timezone.utc).isoformat(),
-    })
-
-
-@app.post("/partials/policy-toggle/{policy_id}", response_class=HTMLResponse)
-async def partial_policy_toggle(request: Request, policy_id: str, tenant_id: str = "default"):
-    existing = await run_in_threadpool(task_store.get_policy, policy_id)
-    if existing:
-        await run_in_threadpool(
-            task_store.update_policy, policy_id, {"enabled": 0 if existing["enabled"] else 1}
-        )
-    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
-    return templates.TemplateResponse(request, "partials/policy_list.html", {
-        "request":  request,
-        "policies": policies,
-        "now_iso":  datetime.now(timezone.utc).isoformat(),
-    })
-
-
-@app.delete("/partials/policy-delete/{policy_id}", response_class=HTMLResponse)
-async def partial_policy_delete(request: Request, policy_id: str, tenant_id: str = "default"):
-    await run_in_threadpool(task_store.delete_policy, policy_id)
-    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
-    return templates.TemplateResponse(request, "partials/policy_list.html", {
-        "request":  request,
-        "policies": policies,
-        "now_iso":  datetime.now(timezone.utc).isoformat(),
-    })
-
-
-@app.get("/partials/policy-edit/{policy_id}", response_class=HTMLResponse)
-async def partial_policy_edit_form(request: Request, policy_id: str):
-    policy = await run_in_threadpool(task_store.get_policy, policy_id)
-    if not policy:
-        return HTMLResponse(f"<span class='muted'>Policy {policy_id} not found.</span>")
-    import json as _json
-    conditions_parsed: list = []
-    if policy.get("conditions"):
-        try:
-            conditions_parsed = _json.loads(policy["conditions"])
-        except Exception:
-            conditions_parsed = []
-    rca_parsed: dict = {}
-    if policy.get("rca_template"):
-        try:
-            rca_parsed = _json.loads(policy["rca_template"])
-        except Exception:
-            rca_parsed = {}
-    fix_parsed: dict = {}
-    if policy.get("fix_template"):
-        try:
-            fix_parsed = _json.loads(policy["fix_template"])
-        except Exception:
-            fix_parsed = {}
-    return templates.TemplateResponse(request, "partials/policy_edit_form.html", {
-        "request":           request,
-        "policy":            policy,
-        "conditions_parsed": conditions_parsed,
-        "rca_parsed":        rca_parsed,
-        "fix_parsed":        fix_parsed,
-    })
-
-
-@app.post("/partials/policy-edit/{policy_id}", response_class=HTMLResponse)
-async def partial_policy_edit_save(
-    request: Request,
-    policy_id: str,
-    name:            str = Form(""),
-    alertname:       str = Form(""),
-    fix_type:        str = Form(""),
-    device_role:     str = Form(""),
-    environment:     str = Form(""),
-    autonomy_level:  str = Form("L2"),
-    min_confidence:  str = Form("low"),
-    max_risk:        str = Form("high"),
-    description:     str = Form(""),
-    tenant_id:       str = "default",
-):
-    form_data = await request.form()
-    conditions   = _parse_condition_rows(form_data)
-    rca_template = _parse_rca_template(form_data)
-    fix_template = _parse_fix_template(form_data)
-    updates: dict = {
-        "autonomy_level": autonomy_level,
-        "min_confidence": min_confidence,
-        "max_risk":       max_risk,
-        "description":    description,
-        "conditions":     conditions,
-        "rca_template":   rca_template,
-        "fix_template":   fix_template,
-    }
-    if name:
-        updates["name"] = name
-    if alertname is not None:
-        updates["alertname"] = alertname
-    if fix_type is not None:
-        updates["fix_type"] = fix_type
-    if device_role is not None:
-        updates["device_role"] = device_role
-    if environment is not None:
-        updates["environment"] = environment
-    await run_in_threadpool(task_store.update_policy, policy_id, updates)
-    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
-    return templates.TemplateResponse(request, "partials/policy_list.html", {
-        "request":  request,
-        "policies": policies,
-        "now_iso":  datetime.now(timezone.utc).isoformat(),
-    })
-
-
-def _policy_list_response(request: Request, policies: list, tenant_id: str = "default"):
-    return templates.TemplateResponse(request, "partials/policy_list.html", {
-        "request":  request,
-        "policies": policies,
-        "now_iso":  datetime.now(timezone.utc).isoformat(),
-    })
-
-
-@app.get("/partials/policy-yaml-new", response_class=HTMLResponse)
-async def partial_policy_yaml_new(request: Request, blueprint: str = ""):
-    yaml_content = _POLICY_BLUEPRINTS.get(blueprint, ("", ""))[1] if blueprint else ""
-    return templates.TemplateResponse(request, "partials/policy_yaml_editor.html", {
-        "request":    request,
-        "policy_id":  None,
-        "yaml_content": yaml_content,
-        "blueprints": [(k, v[0]) for k, v in _POLICY_BLUEPRINTS.items()],
-        "error":      "",
-    })
-
-
-@app.post("/partials/policy-yaml-create", response_class=HTMLResponse)
-async def partial_policy_yaml_create(request: Request, tenant_id: str = "default"):
-    form = await request.form()
-    yaml_str = (form.get("yaml_content") or "").strip()
-    try:
-        data = _yaml_to_policy(yaml_str, tenant_id=tenant_id)
-    except ValueError as exc:
-        return templates.TemplateResponse(request, "partials/policy_yaml_editor.html", {
-            "request":      request,
-            "policy_id":    None,
-            "yaml_content": yaml_str,
-            "blueprints":   [(k, v[0]) for k, v in _POLICY_BLUEPRINTS.items()],
-            "error":        str(exc),
-        })
-    await run_in_threadpool(task_store.create_policy, data)
-    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
-    return _policy_list_response(request, policies, tenant_id)
-
-
-@app.get("/partials/policy-yaml-edit/{policy_id}", response_class=HTMLResponse)
-async def partial_policy_yaml_edit(request: Request, policy_id: str):
-    policy = await run_in_threadpool(task_store.get_policy, policy_id)
-    if not policy:
-        return HTMLResponse(f"<span class='muted'>Policy {policy_id} not found.</span>")
-    yaml_content = _policy_to_yaml(dict(policy))
-    return templates.TemplateResponse(request, "partials/policy_yaml_editor.html", {
-        "request":      request,
-        "policy_id":    policy_id,
-        "yaml_content": yaml_content,
-        "blueprints":   [(k, v[0]) for k, v in _POLICY_BLUEPRINTS.items()],
-        "error":        "",
-    })
-
-
-@app.post("/partials/policy-yaml-save/{policy_id}", response_class=HTMLResponse)
-async def partial_policy_yaml_save(request: Request, policy_id: str, tenant_id: str = "default"):
-    form = await request.form()
-    yaml_str = (form.get("yaml_content") or "").strip()
-    try:
-        data = _yaml_to_policy(yaml_str, tenant_id=tenant_id)
-    except ValueError as exc:
-        return templates.TemplateResponse(request, "partials/policy_yaml_editor.html", {
-            "request":      request,
-            "policy_id":    policy_id,
-            "yaml_content": yaml_str,
-            "blueprints":   [(k, v[0]) for k, v in _POLICY_BLUEPRINTS.items()],
-            "error":        str(exc),
-        })
-    del data["tenant_id"]
-    await run_in_threadpool(task_store.update_policy, policy_id, data)
-    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
-    return _policy_list_response(request, policies, tenant_id)
-
-
-@app.get("/partials/policy-blueprint/{bp_id}", response_class=HTMLResponse)
-async def partial_policy_blueprint(request: Request, bp_id: str):
-    entry = _POLICY_BLUEPRINTS.get(bp_id)
-    if not entry:
-        return HTMLResponse("")
-    _, yaml_text = entry
-    escaped = yaml_text.replace("`", "\\`").replace("${", "\\${")
-    return HTMLResponse(
-        f'<script>document.getElementById("policy-yaml-ta").value=`{escaped}`; '
-        f'document.getElementById("policy-yaml-ta").dispatchEvent(new Event("input"));</script>'
-    )
-
-
-@app.post("/partials/policy-duplicate/{policy_id}", response_class=HTMLResponse)
-async def partial_policy_duplicate(request: Request, policy_id: str, tenant_id: str = "default"):
-    policy = await run_in_threadpool(task_store.get_policy, policy_id)
-    if policy:
-        copy: dict = {
-            k: policy.get(k)
-            for k in ("alertname", "fix_type", "device_role", "environment", "description",
-                      "autonomy_level", "min_confidence", "max_risk", "promotable",
-                      "conditions", "rca_template", "fix_template")
-        }
-        copy["name"] = f"{policy.get('name', 'policy')} (copy)"
-        copy["tenant_id"] = tenant_id
-        await run_in_threadpool(task_store.create_policy, copy)
-    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
-    return _policy_list_response(request, policies, tenant_id)
-
-
-@app.post("/partials/policy-validate-yaml", response_class=HTMLResponse)
-async def partial_policy_validate_yaml(request: Request):
-    form = await request.form()
-    yaml_str = (form.get("yaml_content") or "").strip()
-    if not yaml_str:
-        return templates.TemplateResponse(request, "partials/policy_yaml_validation.html", {
-            "request": request, "ok": False, "summary": None, "error": "",
-        })
-    try:
-        data = _yaml_to_policy(yaml_str)
-        summary = {
-            "name":           data["name"],
-            "alertname":      data["alertname"] or "any",
-            "fix_type":       data["fix_type"] or "any",
-            "device_role":    data["device_role"] or "any",
-            "environment":    data["environment"] or "any",
-            "level":          data["autonomy_level"],
-            "min_confidence": data["min_confidence"],
-            "max_risk":       data["max_risk"],
-            "has_fast_path":  bool(data.get("conditions") or data.get("rca_template")),
-            "condition_count": len(json.loads(data["conditions"])) if data.get("conditions") else 0,
-        }
-        return templates.TemplateResponse(request, "partials/policy_yaml_validation.html", {
-            "request": request, "ok": True, "summary": summary, "error": "",
-        })
-    except ValueError as exc:
-        return templates.TemplateResponse(request, "partials/policy_yaml_validation.html", {
-            "request": request, "ok": False, "summary": None, "error": str(exc),
-        })
-
-
-@app.get("/partials/policy-export-yaml", response_class=HTMLResponse)
-async def partial_policy_export_yaml(request: Request, tenant_id: str = "default"):
-    policies = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
-    parts = [f"# Clano policy export — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"]
-    for p in policies:
-        parts.append("---")
-        parts.append(_policy_to_yaml(dict(p)).rstrip())
-    full_yaml = "\n".join(parts) + "\n"
-    from fastapi.responses import Response
-    return Response(
-        content=full_yaml,
-        media_type="text/plain",
-        headers={"Content-Disposition": "attachment; filename=clano_policies.yaml"},
-    )
-
-
-@app.post("/partials/policy-simulate", response_class=HTMLResponse)
-async def partial_policy_simulate(
-    request: Request,
-    alertname:   str = Form(""),
-    device_role: str = Form(""),
-    environment: str = Form(""),
-    fix_type:    str = Form("config_change"),
-    confidence:  str = Form("high"),
-    risk:        str = Form("low"),
-    tenant_id:   str = "default",
-):
-    from shared.policy_registry import PolicyRegistry
-    registry = PolicyRegistry(task_store)
-
-    gate_decision = await run_in_threadpool(
-        registry.query,
-        fix_type=fix_type,
-        device_role=device_role,
-        environment=environment,
-        confidence=confidence,
-        risk=risk,
-        alertname=alertname,
-        tenant_id=tenant_id,
-    )
-    fast_path_candidates = await run_in_threadpool(
-        registry.get_fast_path_policies,
-        alertname, tenant_id, device_role,
-    )
-    # Parse conditions JSON for display (don't execute)
-    for p in fast_path_candidates:
-        try:
-            p["conditions_parsed"] = json.loads(p["conditions"]) if p.get("conditions") else []
-        except Exception:
-            p["conditions_parsed"] = []
-
-    level_colors = {
-        "L0": "#ef4444", "L1": "#f97316", "L2": "#eab308",
-        "L3": "#22c55e", "L4": "#3b82f6", "L5": "#8b5cf6",
-    }
-    return templates.TemplateResponse(request, "partials/policy_simulate_result.html", {
-        "request":              request,
-        "alertname":            alertname,
-        "device_role":          device_role,
-        "environment":          environment,
-        "fix_type":             fix_type,
-        "confidence":           confidence,
-        "risk":                 risk,
-        "gate_decision":        gate_decision,
-        "fast_path_candidates": fast_path_candidates,
-        "level_colors":         level_colors,
-    })
-
-
-@app.get("/partials/policy-performance", response_class=HTMLResponse)
-async def partial_policy_performance(request: Request, tenant_id: str = "default"):
-    stats   = await run_in_threadpool(task_store.get_policy_stats, tenant_id)
-    all_pol = await run_in_threadpool(task_store.list_policies, tenant_id=tenant_id)
-    names   = {p["id"]: p["name"] for p in all_pol}
-    return templates.TemplateResponse(request, "partials/policy_performance.html", {
-        "request":      request,
-        "stats":        stats,
-        "policy_names": names,
-    })
-
-
-@app.get("/partials/intent-list", response_class=HTMLResponse)
-async def partial_intent_list(request: Request, tenant_id: str = "default"):
-    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
-    return templates.TemplateResponse(request, "partials/intent_list.html", {
-        "request": request,
-        "intents": intents,
-    })
-
-
-@app.post("/partials/intent-create", response_class=HTMLResponse)
-async def partial_intent_create(
-    request: Request,
-    name: str = Form(...),
-    intent_type: str = Form(...),
-    device: str = Form(""),
-    alertname: str = Form(""),
-    description: str = Form(""),
-    metric_query: str = Form(""),
-    threshold: str = Form(""),
-    schedule: str = Form(""),
-    action: str = Form(""),
-    tenant_id: str = "default",
-):
-    data = {
-        "name":         name,
-        "intent_type":  intent_type,
-        "device":       device,
-        "alertname":    alertname,
-        "description":  description,
-        "metric_query": metric_query,
-        "threshold":    threshold,
-        "schedule":     schedule,
-        "action":       action,
-        "tenant_id":    tenant_id,
-    }
-    await run_in_threadpool(task_store.create_intent, data)
-    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
-    return templates.TemplateResponse(request, "partials/intent_list.html", {
-        "request": request,
-        "intents": intents,
-    })
-
-
-@app.post("/partials/intent-toggle/{intent_id}", response_class=HTMLResponse)
-async def partial_intent_toggle(request: Request, intent_id: str, tenant_id: str = "default"):
-    existing = await run_in_threadpool(task_store.get_intent, intent_id)
-    if existing:
-        await run_in_threadpool(
-            task_store.update_intent, intent_id, {"enabled": 0 if existing["enabled"] else 1}
-        )
-    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
-    return templates.TemplateResponse(request, "partials/intent_list.html", {
-        "request": request,
-        "intents": intents,
-    })
-
-
-@app.delete("/partials/intent-delete/{intent_id}", response_class=HTMLResponse)
-async def partial_intent_delete(request: Request, intent_id: str, tenant_id: str = "default"):
-    await run_in_threadpool(task_store.delete_intent, intent_id)
-    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
-    return templates.TemplateResponse(request, "partials/intent_list.html", {
-        "request": request,
-        "intents": intents,
-    })
-
-
-@app.get("/partials/intent-edit/{intent_id}", response_class=HTMLResponse)
-async def partial_intent_edit_form(request: Request, intent_id: str):
-    intent = await run_in_threadpool(task_store.get_intent, intent_id)
-    if not intent:
-        return HTMLResponse("Not found", status_code=404)
-    return templates.TemplateResponse(request, "partials/intent_edit_form.html", {
-        "request": request,
-        "intent": intent,
-    })
-
-
-@app.post("/partials/intent-edit/{intent_id}", response_class=HTMLResponse)
-async def partial_intent_edit_save(
-    request: Request,
-    intent_id: str,
-    name: str = Form(...),
-    description: str = Form(""),
-    device: str = Form(""),
-    alertname: str = Form(""),
-    metric_query: str = Form(""),
-    threshold: str = Form(""),
-    schedule: str = Form(""),
-    action: str = Form(""),
-    tenant_id: str = "default",
-):
-    await run_in_threadpool(task_store.update_intent, intent_id, {
-        "name":         name,
-        "description":  description,
-        "device":       device,
-        "alertname":    alertname,
-        "metric_query": metric_query,
-        "threshold":    threshold,
-        "schedule":     schedule,
-        "action":       action,
-    })
-    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
-    return templates.TemplateResponse(request, "partials/intent_list.html", {
-        "request": request,
-        "intents": intents,
-    })
-
-
-# ── Intent YAML editor routes ─────────────────────────────────────────────────
-
-@app.get("/partials/intent-yaml-new", response_class=HTMLResponse)
-async def partial_intent_yaml_new(request: Request, blueprint: str = ""):
-    yaml_content = _INTENT_BLUEPRINTS.get(blueprint, ("", ""))[1] if blueprint else ""
-    blueprints = [(k, v[0]) for k, v in _INTENT_BLUEPRINTS.items()]
-    return templates.TemplateResponse(request, "partials/intent_yaml_editor.html", {
-        "intent_id":   None,
-        "blueprints":  blueprints,
-        "yaml_content": yaml_content,
-        "error":       None,
-        "preview":     None,
-    })
-
-
-@app.post("/partials/intent-yaml-create", response_class=HTMLResponse)
-async def partial_intent_yaml_create(request: Request, tenant_id: str = "default"):
-    form = await request.form()
-    yaml_str = (form.get("yaml_content") or "").strip()
-    blueprints = [(k, v[0]) for k, v in _INTENT_BLUEPRINTS.items()]
-    try:
-        data = _yaml_to_intent(yaml_str, tenant_id=tenant_id)
-    except ValueError as exc:
-        return templates.TemplateResponse(request, "partials/intent_yaml_editor.html", {
-            "intent_id":    None,
-            "blueprints":   blueprints,
-            "yaml_content": yaml_str,
-            "error":        str(exc),
-            "preview":      None,
-        })
-    await run_in_threadpool(task_store.create_intent, data)
-    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
-    return templates.TemplateResponse(request, "partials/intent_list.html", {
-        "request": request,
-        "intents": intents,
-    })
-
-
-@app.get("/partials/intent-yaml-edit/{intent_id}", response_class=HTMLResponse)
-async def partial_intent_yaml_edit(request: Request, intent_id: str):
-    intent = await run_in_threadpool(task_store.get_intent, intent_id)
-    if not intent:
-        return HTMLResponse("Not found", status_code=404)
-    blueprints = [(k, v[0]) for k, v in _INTENT_BLUEPRINTS.items()]
-    return templates.TemplateResponse(request, "partials/intent_yaml_editor.html", {
-        "intent_id":    intent_id,
-        "blueprints":   blueprints,
-        "yaml_content": _intent_to_yaml(dict(intent)),
-        "error":        None,
-        "preview":      None,
-    })
-
-
-@app.post("/partials/intent-yaml-save/{intent_id}", response_class=HTMLResponse)
-async def partial_intent_yaml_save(
-    request: Request, intent_id: str, tenant_id: str = "default"
-):
-    form = await request.form()
-    yaml_str = (form.get("yaml_content") or "").strip()
-    blueprints = [(k, v[0]) for k, v in _INTENT_BLUEPRINTS.items()]
-    try:
-        data = _yaml_to_intent(yaml_str, tenant_id=tenant_id)
-    except ValueError as exc:
-        return templates.TemplateResponse(request, "partials/intent_yaml_editor.html", {
-            "intent_id":    intent_id,
-            "blueprints":   blueprints,
-            "yaml_content": yaml_str,
-            "error":        str(exc),
-            "preview":      None,
-        })
-    await run_in_threadpool(task_store.update_intent, intent_id, data)
-    intents = await run_in_threadpool(task_store.list_intents, tenant_id=tenant_id)
-    return templates.TemplateResponse(request, "partials/intent_list.html", {
-        "request": request,
-        "intents": intents,
-    })
-
-
-@app.post("/partials/intent-validate-yaml", response_class=HTMLResponse)
-async def partial_intent_validate_yaml(request: Request):
-    form = await request.form()
-    yaml_str = (form.get("yaml_content") or "").strip()
-    if not yaml_str:
-        return HTMLResponse('<span class="muted" style="font-size:0.82em">Start typing to see a parsed summary…</span>')
-    try:
-        data = _yaml_to_intent(yaml_str)
-    except ValueError as exc:
-        return HTMLResponse(
-            f'<div class="yaml-error" style="font-size:0.82em">⚠ {exc}</div>'
-        )
-    itype   = data.get("intent_type", "monitor")
-    enabled = "enabled" if data.get("enabled") else "disabled"
-    lines   = [
-        f'<div style="font-size:0.82em; display:flex; flex-direction:column; gap:6px">',
-        f'<div><span class="muted">name:</span> <strong>{data["name"]}</strong></div>',
-        f'<div><span class="muted">type:</span> {itype} &nbsp; <span class="muted">status:</span> {enabled}</div>',
-    ]
-    if data.get("device"):
-        lines.append(f'<div><span class="muted">device:</span> {data["device"]}</div>')
-    if itype == "monitor":
-        lines.append(f'<div><span class="muted">query:</span> <code style="font-size:0.9em">{data.get("metric_query","")}</code></div>')
-        if data.get("threshold"):
-            lines.append(f'<div><span class="muted">threshold:</span> {data["threshold"]}</div>')
-        lines.append(f'<div><span class="muted">interval:</span> {data.get("interval_seconds",300)}s &nbsp; <span class="muted">cooldown:</span> {data.get("cooldown_minutes",0)}min &nbsp; <span class="muted">priority:</span> {data.get("priority","normal")}</div>')
-    elif itype == "chaos_schedule":
-        lines.append(f'<div><span class="muted">schedule:</span> <code>{data.get("schedule","")}</code></div>')
-    lines.append(f'<div style="color:#22c55e; margin-top:4px; font-size:0.8em">✓ Valid</div>')
-    lines.append('</div>')
-    return HTMLResponse("".join(lines))
 
 
 # ── SSE task-change stream ────────────────────────────────────────────────────
@@ -3163,6 +2116,114 @@ async def chat_send(
     })
 
 
+# ── Approval queue ──────────────────────────────────────────────────────────────
+
+_RISK_ORDER = {"high": 2, "medium": 1, "low": 0}
+
+
+def _approval_queue_context() -> dict:
+    """
+    Group awaiting_approval tasks by alertname for the Approvals view.
+    Groups are ordered highest-risk first, then oldest; cards within a group
+    are oldest first so a flap storm reads chronologically.
+    """
+    tasks = task_store.list_tasks(status="awaiting_approval", limit=200)
+    groups: dict[str, list[dict]] = {}
+    for t in tasks:
+        raw = t.get("content") or "{}"
+        try:
+            content = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        except Exception:
+            content = {}
+        fix = content.get("fix_proposal") or {}
+        alertname = content.get("alertname") or "Other"
+        groups.setdefault(alertname, []).append({
+            "task_id":        t["id"],
+            "title":          t.get("title") or "",
+            "alertname":      alertname,
+            "device":         content.get("device", ""),
+            "fix_type":       fix.get("fix_type", ""),
+            "commands":       content.get("commands", ""),
+            "config_diff":    content.get("config_diff", ""),
+            "risk":           (content.get("risk_confirmed") or fix.get("risk") or "medium").lower(),
+            "confidence":     (fix.get("confidence") or "").lower(),
+            "verdict":        content.get("validation_verdict", ""),
+            "autonomy_level": content.get("autonomy_level", ""),
+            "reason":         content.get("reason", ""),
+            "age":            _age(t.get("created_at")),
+            "created_at":     t.get("created_at") or "",
+            "fingerprint":    t.get("alert_fingerprint", ""),
+            "priority":       t.get("priority", "normal"),
+        })
+
+    def _group_key(item: tuple[str, list[dict]]):
+        cards = item[1]
+        max_risk = max((_RISK_ORDER.get(c["risk"], 1) for c in cards), default=0)
+        oldest = min((c["created_at"] for c in cards), default="")
+        return (-max_risk, oldest)
+
+    ordered = sorted(groups.items(), key=_group_key)
+    for _, cards in ordered:
+        cards.sort(key=lambda c: c["created_at"])
+    return {"groups": ordered, "total": len(tasks)}
+
+
+async def _approve_and_resume(task_id: str, operator_commands: str = "") -> tuple[bool, str]:
+    """Approve a gate task and trigger Phase 2 execution on the agent.
+    Returns (ok, message)."""
+    task = await run_in_threadpool(task_store.get_task, task_id)
+    if not task:
+        return False, f"Task `{task_id}` not found."
+    if task["status"] != "awaiting_approval":
+        return False, f"Task `{task_id}` is `{task['status']}`, not awaiting approval."
+    await run_in_threadpool(task_store.approve_task, task_id, "human")
+    cmds = operator_commands.strip()
+    try:
+        await _http_client.post(
+            f"{OPS_AGENT_URL}/workflow/resume/{task_id}",
+            json={"operator_commands": cmds},
+            timeout=5.0,
+        )
+    except Exception as exc:
+        logger.warning("UI: workflow resume call failed for task=%s: %s", task_id, exc)
+    extra = " Operator commands queued for execution." if cmds else ""
+    return True, f"✅ Task `{task_id}` approved.{extra}"
+
+
+@app.get("/approvals", response_class=HTMLResponse)
+async def approvals_page(request: Request):
+    ctx = await run_in_threadpool(_approval_queue_context)
+    return templates.TemplateResponse(request, "approvals.html", {
+        "request": request, "active_tab": "approvals", **ctx,
+    })
+
+
+@app.get("/partials/approval-queue", response_class=HTMLResponse)
+async def partial_approval_queue(request: Request):
+    ctx = await run_in_threadpool(_approval_queue_context)
+    return templates.TemplateResponse(request, "partials/approval_queue.html", {
+        "request": request, **ctx,
+    })
+
+
+@app.post("/approvals/group/approve", response_class=HTMLResponse)
+async def approvals_group_approve(request: Request, alertname: str = Form(...)):
+    """Bulk-approve every awaiting_approval task in one alertname group."""
+    ctx = await run_in_threadpool(_approval_queue_context)
+    cards = dict(ctx["groups"]).get(alertname, [])
+    approved = 0
+    for card in cards:
+        ok, _ = await _approve_and_resume(card["task_id"])
+        if ok:
+            approved += 1
+    logger.info("UI: bulk-approved %d/%d gates for alertname=%s", approved, len(cards), alertname)
+    ctx = await run_in_threadpool(_approval_queue_context)
+    return templates.TemplateResponse(request, "partials/approval_queue.html", {
+        "request": request, **ctx,
+        "flash": f"✅ Approved {approved} task(s) in group “{alertname}”.",
+    })
+
+
 # ── Task management actions ────────────────────────────────────────────────────
 
 @app.post("/tasks/{task_id}/approve", response_class=HTMLResponse)
@@ -3171,24 +2232,7 @@ async def task_approve(
     task_id: str,
     operator_commands: str = Form(""),
 ):
-    task = await run_in_threadpool(task_store.get_task, task_id)
-    if not task:
-        msg, ok = f"Task `{task_id}` not found.", False
-    elif task["status"] != "awaiting_approval":
-        msg, ok = f"Task `{task_id}` is `{task['status']}`, not awaiting approval.", False
-    else:
-        await run_in_threadpool(task_store.approve_task, task_id, "human")
-        cmds = operator_commands.strip()
-        try:
-            await _http_client.post(
-                f"{OPS_AGENT_URL}/workflow/resume/{task_id}",
-                json={"operator_commands": cmds},
-                timeout=5.0,
-            )
-        except Exception as exc:
-            logger.warning("UI: workflow resume call failed for task=%s: %s", task_id, exc)
-        extra = " Operator commands queued for execution." if cmds else ""
-        msg, ok = f"✅ Task `{task_id}` approved.{extra}", True
+    ok, msg = await _approve_and_resume(task_id, operator_commands)
     return templates.TemplateResponse(request, "partials/action_status.html", {"request": request, "msg": msg, "ok": ok})
 
 
@@ -3306,132 +2350,6 @@ async def schedule_cancel(request: Request, job_id: str):
     })
 
 
-# ── Knowledge Base ────────────────────────────────────────────────────────────
-
-@app.get("/knowledge-base", response_class=HTMLResponse)
-async def knowledge_base_page(request: Request):
-    entries, total, alert_types = await asyncio.gather(
-        run_in_threadpool(kb_store.get_all, 100),
-        run_in_threadpool(kb_store.count),
-        run_in_threadpool(kb_store.get_distinct_alert_types),
-    )
-    return templates.TemplateResponse(request, "knowledge_base.html", {
-        "request":     request,
-        "entries":     entries,
-        "total":       total,
-        "alert_types": alert_types,
-        "query":       "",
-    })
-
-
-@app.get("/partials/kb-stats", response_class=HTMLResponse)
-async def partial_kb_stats(request: Request):
-    stats = await run_in_threadpool(kb_store.get_stats)
-    return templates.TemplateResponse(request, "partials/kb_stats.html", {
-        "request": request,
-        "stats":   stats,
-    })
-
-
-@app.get("/partials/kb-search", response_class=HTMLResponse)
-async def partial_kb_search(
-    request:    Request,
-    q:          str = "",
-    source:     str = "",
-    alert_type: str = "",
-):
-    if q.strip():
-        entries = await run_in_threadpool(kb_store.search, q, 100)
-        if source:
-            entries = [e for e in entries if e["source"] == source]
-        if alert_type:
-            entries = [e for e in entries if e.get("alert_type") == alert_type]
-    else:
-        entries = await run_in_threadpool(kb_store.get_all, 100, source, alert_type)
-    return templates.TemplateResponse(request, "partials/kb_results.html", {
-        "request": request,
-        "entries": entries,
-        "query":   q,
-    })
-
-
-@app.get("/partials/kb-entry/{entry_id}/card", response_class=HTMLResponse)
-async def kb_entry_card(request: Request, entry_id: int):
-    entry = await run_in_threadpool(kb_store.get, entry_id)
-    if not entry:
-        return HTMLResponse("")
-    return templates.TemplateResponse(request, "partials/kb_entry_card.html", {
-        "request": request,
-        "e":       entry,
-    })
-
-
-@app.get("/partials/kb-entry/{entry_id}/edit", response_class=HTMLResponse)
-async def kb_entry_edit_form(request: Request, entry_id: int):
-    entry = await run_in_threadpool(kb_store.get, entry_id)
-    if not entry:
-        return HTMLResponse("Entry not found", status_code=404)
-    return templates.TemplateResponse(request, "partials/kb_entry_edit.html", {
-        "request": request,
-        "e":       entry,
-    })
-
-
-@app.patch("/partials/kb-entry/{entry_id}", response_class=HTMLResponse)
-async def update_kb_entry(
-    request:     Request,
-    entry_id:    int,
-    symptom:     str = Form(""),
-    root_cause:  str = Form(""),
-    resolution:  str = Form(""),
-    alert_type:  str = Form(""),
-    device_type: str = Form(""),
-):
-    entry = await run_in_threadpool(
-        kb_store.update,
-        entry_id,
-        symptom=symptom.strip() or None,
-        root_cause=root_cause.strip() or None,
-        resolution=resolution.strip() or None,
-        alert_type=alert_type.strip() or None,
-        device_type=device_type.strip() or None,
-    )
-    if not entry:
-        return HTMLResponse("Entry not found", status_code=404)
-    return templates.TemplateResponse(request, "partials/kb_entry_card.html", {
-        "request": request,
-        "e":       entry,
-    })
-
-
-@app.post("/partials/kb-entry", response_class=HTMLResponse)
-async def create_kb_entry(
-    request: Request,
-    symptom:     str = Form(""),
-    root_cause:  str = Form(""),
-    resolution:  str = Form(""),
-    alert_type:  str = Form(""),
-    device_type: str = Form(""),
-):
-    if symptom.strip() and root_cause.strip() and resolution.strip():
-        entry = await run_in_threadpool(
-            kb_store.save,
-            symptom.strip(), root_cause.strip(), resolution.strip(),
-            alert_type.strip() or None, device_type.strip() or None,
-        )
-        return templates.TemplateResponse(request, "partials/kb_entry_card.html", {
-            "request": request,
-            "e":       entry,
-        })
-    return HTMLResponse("")
-
-
-@app.delete("/partials/kb-entry/{entry_id}", response_class=HTMLResponse)
-async def delete_kb_entry(request: Request, entry_id: int):
-    await run_in_threadpool(kb_store.delete, entry_id)
-    return HTMLResponse("")
-
-
 # ── Config page (Policies + Intents merged) ───────────────────────────────────
 
 @app.get("/config", response_class=HTMLResponse)
@@ -3458,6 +2376,23 @@ async def system_page(request: Request):
 
 
 # ── Ops health KPI bar ────────────────────────────────────────────────────────
+
+@app.get("/partials/eval-ledger", response_class=HTMLResponse)
+async def partial_eval_ledger(request: Request):
+    """AI accuracy ledger — pipeline grades against chaos ground truth."""
+    summary, recent = await asyncio.gather(
+        run_in_threadpool(eval_store.summary),
+        run_in_threadpool(eval_store.recent_grades, 10),
+    )
+    for row in summary:
+        row["avg_ttd"] = _fmt_gap(row["avg_ttd_seconds"]) if row["avg_ttd_seconds"] else "—"
+        row["avg_ttr"] = _fmt_gap(row["avg_ttr_seconds"]) if row["avg_ttr_seconds"] else "—"
+    return templates.TemplateResponse(request, "partials/eval_ledger.html", {
+        "request": request,
+        "summary": summary,
+        "recent":  recent,
+    })
+
 
 @app.get("/partials/ops-health", response_class=HTMLResponse)
 async def partial_ops_health(request: Request):
@@ -3531,3 +2466,14 @@ async def set_currency_pref(request: Request, currency: str = Form("USD")):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("ui.main:app", host="0.0.0.0", port=7860, log_level="info")
+
+
+# ── Split routers (ui/routers/) — imported last so all module globals exist ────
+
+from ui.routers import policies as _policy_routes  # noqa: E402
+from ui.routers import intents as _intent_routes   # noqa: E402
+from ui.routers import kb as _kb_routes            # noqa: E402
+
+app.include_router(_policy_routes.router)
+app.include_router(_intent_routes.router)
+app.include_router(_kb_routes.router)

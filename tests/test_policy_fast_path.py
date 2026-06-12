@@ -236,8 +236,13 @@ class TestWorkflowFastPathRouting:
     and a real TaskStore.
     """
 
-    def _make_workflow(self, db):
-        """Import and wire up only enough of IncidentWorkflow to test the node."""
+    def _make_workflow(self, db, device_role="spine"):
+        """Import and wire up only enough of IncidentWorkflow to test the node.
+
+        device_role: what the (mocked) Nautobot role lookup returns. "" simulates
+        a failed lookup, which under strict_role matching excludes role-specific
+        policies.
+        """
         import unittest.mock as mock_module
 
         # Patch LangChain + tools so IncidentWorkflow.__init__ doesn't need a running LLM
@@ -248,6 +253,7 @@ class TestWorkflowFastPathRouting:
                 wf._ts = db
                 wf._policy_resolver = PolicyResolver()
                 wf._policy_registry = PolicyRegistry(db)
+                wf._lookup_device_role = lambda device: device_role
                 return wf
 
     def _base_state(self) -> dict:
@@ -316,6 +322,23 @@ class TestWorkflowFastPathRouting:
         wf = self._make_workflow(db)
         result = wf._node_policy_fast_path(self._base_state())
         assert result["pipeline_decision"] is None
+
+    @patch("shared.policy_resolver._prometheus_instant", return_value="2")
+    def test_unknown_device_role_excludes_role_specific_policies(self, mock_prom, db):
+        """strict_role contract: if the Nautobot role lookup fails, a spine-only
+        policy must NOT match — the alert falls through to AI investigation."""
+        _fast_policy(db)  # device_role="spine"
+        wf = self._make_workflow(db, device_role="")
+        result = wf._node_policy_fast_path(self._base_state())
+        assert result["pipeline_decision"] is None
+
+    @patch("shared.policy_resolver._prometheus_instant", return_value="2")
+    def test_unknown_device_role_still_matches_wildcard_policies(self, mock_prom, db):
+        """Wildcard-role fast-path policies remain usable when the role lookup fails."""
+        _fast_policy(db, device_role="")
+        wf = self._make_workflow(db, device_role="")
+        result = wf._node_policy_fast_path(self._base_state())
+        assert result["pipeline_decision"] == "fast_path_resolved"
 
 
 # ── Integration tests ─────────────────────────────────────────────────────────

@@ -111,6 +111,19 @@ class Settings(BaseSettings):
     topology_blast_radius_hops: int = 2     # BFS depth for blast-radius calculation
     topology_cache_ttl: int = 60            # seconds: cache Nautobot topology between polls
 
+    # Policy synthesis — compile repeated, identical AI resolutions of the same
+    # alert pattern into DRAFT fast-path policies (created disabled; an operator
+    # reviews and enables them). Runs inside the hourly promotion sweep.
+    policy_synthesis_enabled: bool = True
+    policy_synthesis_min_successes: int = 3
+
+    # Self-grading eval loop — chaos injections are recorded as ground truth and
+    # the pipeline's response is graded into the accuracy ledger (System page).
+    eval_grading_enabled: bool = True
+    eval_grading_interval: int = 300       # seconds between grading sweeps
+    eval_min_age_seconds: int = 300        # wait before grading (pipeline run time)
+    eval_match_window_seconds: int = 1800  # injection → rca-task matching window
+
     # Chaos / destructive tools gate — set true ONLY in lab environments.
     # When false, shutdown_interface, restore_interface, and flap_bgp_neighbor
     # are removed from the chaos agent's tool set entirely.
@@ -121,6 +134,12 @@ class Settings(BaseSettings):
     # alerts. Alerts with no matching fast-path policy are placed in
     # awaiting_approval with a no_ai_skipped event for manual review.
     ai_enabled: bool = False
+
+    # Inbound Alertmanager webhook authentication.
+    # When set, POST /webhook/alert requires "Authorization: Bearer <secret>".
+    # Configure Alertmanager's matching side via http_config.authorization
+    # (see prometheus/alertmanager.yml). Empty = unauthenticated (lab default).
+    alert_webhook_secret: str = ""
 
     # Approval webhook — POST when a task enters awaiting_approval
     approval_webhook_url: str = ""

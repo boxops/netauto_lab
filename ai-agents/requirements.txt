@@ -3,6 +3,9 @@ langchain-openai>=0.1.0
 langchain-community>=0.2.0
 langchain-ollama>=0.2.0
 langgraph>=0.1.0
+# Optional but recommended: persists chat threads across restarts
+# (shared/checkpoints.py falls back to MemorySaver when absent)
+langgraph-checkpoint-sqlite>=2.0.0
 langsmith>=0.1.0
 openai>=1.30.0
 ollama>=0.2.0

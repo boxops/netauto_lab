@@ -19,8 +19,8 @@ from typing import AsyncGenerator
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent
-from langgraph.checkpoint.memory import MemorySaver
 
+from shared.checkpoints import get_chat_checkpointer
 from shared.config import settings
 from shared.llm import get_llm
 from shared.tools import OPS_TOOLS, ENG_TOOLS
@@ -139,7 +139,7 @@ class UnifiedAgent:
 
     def __init__(self, rate_limiter, status_handler) -> None:
         self.llm            = get_llm(temperature=0.1)
-        self.memory         = MemorySaver()
+        self.memory         = get_chat_checkpointer()
         self._rate_limiter  = rate_limiter
         self._status_handler = status_handler
         self.agent = create_react_agent(

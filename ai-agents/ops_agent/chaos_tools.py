@@ -7,14 +7,40 @@ Each tool defaults to check_mode=True. Destructive tools require CHAOS_TOOLS_ENA
 from __future__ import annotations
 
 import json
+import logging
 
 from langchain_core.tools import tool
 
 from shared.tools import run_show_commands as _show
 from shared.tools import run_config_commands as _config
 
+logger = logging.getLogger(__name__)
+
 _show_fn = _show.func
 _config_fn = _config.func
+
+# ── Eval ground truth ──────────────────────────────────────────────────────────
+# Every *executed* chaos fault is recorded as ground truth so the eval sweep
+# can later grade whether the pipeline detected, diagnosed and resolved it.
+
+_eval_store = None
+
+
+def _record_injection(fault_type: str, device: str, target: str, result: dict) -> None:
+    """Best-effort: never let eval bookkeeping break a chaos tool."""
+    global _eval_store
+    if result.get("error"):
+        return  # the fault was not actually injected
+    try:
+        if _eval_store is None:
+            from shared.task_store import TaskStore
+            from shared.eval_engine import EvalStore
+            _eval_store = EvalStore(TaskStore())
+        _eval_store.record_injection(
+            fault_type=fault_type, device=device, target=target, source="chaos_tool",
+        )
+    except Exception as exc:
+        logger.warning("chaos_tools: failed to record injection for eval: %s", exc)
 
 
 @tool
@@ -68,6 +94,7 @@ def shutdown_interface(
     result["chaos_action"] = "shutdown_interface"
     result["device"] = device
     result["interface"] = interface
+    _record_injection("interface_down", device, interface, result)
     return json.dumps(result, indent=2)
 
 
@@ -182,6 +209,7 @@ def flap_bgp_neighbor(
         output["method"] = method
         output["command_run"] = clear_cmd
         output["job_result_url"] = f"{settings.nautobot_url}/extras/job-results/{result_id}/"
+        _record_injection("bgp_flap", device, neighbor_ip, output)
         return json.dumps(output, indent=2)
     except Exception as e:
         return json.dumps({"error": str(e)})

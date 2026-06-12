@@ -54,6 +54,18 @@ receivers:
       - url: 'http://ai-agent:8000/webhook/alert'
         send_resolved: true
         max_alerts: 0
+        # ── Webhook authentication (recommended outside the lab) ──
+        # The agent rejects unauthenticated alerts when ALERT_WEBHOOK_SECRET is
+        # set in .env. To make Alertmanager send the matching credential:
+        #   1. Write the same secret (single line) to prometheus/webhook_secret
+        #      (gitignored)
+        #   2. Mount it in docker-compose.yml under the alertmanager service:
+        #        - ./prometheus/webhook_secret:/etc/alertmanager/webhook_secret:ro
+        #   3. Uncomment:
+        # http_config:
+        #   authorization:
+        #     type: Bearer
+        #     credentials_file: /etc/alertmanager/webhook_secret
       # Audit log: also feed the event receiver for historical record
       - url: 'http://alert-event-receiver:8770/alertmanager/webhook'
         send_resolved: true

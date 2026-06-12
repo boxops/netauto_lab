@@ -58,52 +58,54 @@ All services run as Docker containers defined in `docker-compose.yml`. The four 
 | Observability | Prometheus, Alertmanager, Grafana, Loki | 9090, 9093, 3000, 3100 |
 | Metrics collection | Telegraf (SNMP + ICMP) | — |
 | Log ingestion | Promtail → Loki | — |
-| AI agents | Ops Agent, Eng Agent, Chaos Agent | 8000, 8001, 8002 |
+| AI agent | Unified agent (`ai-agent` service) | 8000 |
 | Agent UI | FastAPI + Jinja2 + HTMX | 7860 |
 | Git | Gitea | 3001 |
 | Lab | Containerlab cEOS spine-leaf | 172.20.20.0/24 |
 
 ### AI agent internals (`ai-agents/`)
 
-Each agent is a **LangGraph ReAct** agent running inside a FastAPI server (uvicorn). The three agents (`ops_agent`, `eng_agent`, `chaos_agent`) share a single Docker image built from `ai-agents/Dockerfile`.
+There is **one unified agent service**. `ai-agents/main.py` is the single FastAPI entry point (see the `CMD` in `ai-agents/Dockerfile`); it serves the interactive chat agent (`shared/unified_agent.py`, a LangGraph ReAct agent with the full tool set) and starts all background loops in its lifespan: `AlertPoller`, `IncidentWorkflow`, `IntentEvaluator`, `OpsScheduler`, and the hourly policy-promotion sweep. The historical three-agent layout (ops/eng/chaos services on 8000/8001/8002) is retired — do not recreate per-agent `main.py` files.
 
 **Shared layer (`ai-agents/shared/`):**
-- `tools.py` — 24 LangChain `@tool` functions organised in four tiers: Nautobot discovery → Prometheus metrics → Loki logs → Ansible actions. All agent tool sets are drawn from this one file.
-- `task_store.py` — SQLite-backed task queue (`activity.db`) shared across all three agent containers via a named Docker volume. This is the backbone of the closed-loop pipeline; all pipeline state lives here.
-- `activity_store.py` — Separate SQLite table logging every chat interaction (message, response, latency, tool calls) for the Activity tab.
-- `config.py` — `pydantic-settings` `Settings` class; reads from `.env`. LLM selection falls back to Ollama if `OPENAI_API_KEY` is not set.
-- `status_tracker.py` — `AgentStatus` dataclass + `StatusCallbackHandler` (LangChain callback). Updated in real-time during every ReAct loop iteration; polled by the UI `/status` endpoint every 2 s.
-- `rate_limiter.py` — Token + cost budgets per agent per hour/day. Raises `BudgetExceededError` on breach; the agent's `/chat` endpoint returns HTTP 429.
+- `tools.py` — LangChain `@tool` functions organised in tiers: Nautobot discovery → Prometheus metrics → Loki logs → compliance → runbooks → KB → Ansible actions. `OPS_TOOLS` is the canonical list (`ENG_TOOLS` is a backward-compat alias).
+- `unified_agent.py` — `UnifiedAgent` class: `create_react_agent` + combined system prompt; used by `/chat` and `/chat/stream`.
+- `task_store.py` — Task queue + events + feedback + autonomy policies + standing intents + token usage. Backend chosen by `TASK_DB_URL`: Postgres (`agent-postgres`, the compose default) or SQLite (`activity.db`, WAL mode).
+- `policy_registry.py` / `policy_resolver.py` — L0–L5 autonomy policies. Policies with `conditions` + templates form the **programmatic fast path** that resolves known alert patterns with zero LLM calls.
+- `intent_registry.py` — Standing intents (suppress / escalate / monitor / chaos_schedule) plus the `IntentEvaluator` background thread.
+- `activity_store.py` — Chat interaction log (message, response, latency, tool calls) for the Activity view.
+- `config.py` — `pydantic-settings` `Settings`; reads `.env`. Notable flags: `ai_enabled` (AI-optional mode), `chaos_tools_enabled`, `environment` (lab/staging/production autonomy defaults).
+- `status_tracker.py` — `AgentStatus` + `StatusCallbackHandler`; polled by the UI `/status` endpoint.
+- `rate_limiter.py` — Token + cost budgets; `BudgetExceededError` → HTTP 429 on `/chat`.
+- `auth.py` — `X-API-Key` auth for agent endpoints when `AGENT_API_KEY` is set (header only; no query-param auth).
+- `task_bus.py` — Optional RabbitMQ publish/consume; no-op without `RABBITMQ_URL` (agents fall back to polling).
+- Also: `kb_store.py` (knowledge base), `learning_engine.py`, `topology_correlator.py`, `notifications.py` (Slack/PagerDuty/webhook on approval gates), `metrics.py` (Prometheus `/metrics`), `pipeline_models.py` + `structured_output.py` (typed stage outputs).
 
-**Per-agent structure:** each agent directory (`ops_agent/`, `engineering_agent/`, `chaos_agent/`) contains:
-- `agent.py` — `create_react_agent` call, system prompt, module-level singletons (`task_store`, `rate_limiter`, `agent_status`, `status_handler`).
-- `main.py` — FastAPI app, `/chat`, `/status`, `/usage`, `/health` endpoints.
-- `task_runner.py` — Background thread that polls `task_store` for `pending` tasks assigned to this agent (polling intervals: Ops 60 s, Eng 90 s, Chaos 120 s).
+**Workflow package (`ai-agents/ops_agent/` — name is historical):**
+- `workflow.py` — `IncidentWorkflow`, a LangGraph `StateGraph`: `check_intents → policy_fast_path → [no_ai_gate | investigate → propose_fix → validate] → approval_gate`. All stages are events on a single `rca` task. Human approval triggers `resume_execution()` (check_mode=False + post-execution verification against Prometheus).
+- `agent.py` — `OpsAgent` + the pipeline `SYSTEM_PROMPT` used by workflow nodes and the scheduler.
+- `alert_poller.py` — Polls Alertmanager every 60 s as fallback; the `/webhook/alert` endpoint is the zero-latency primary path. Dedup by fingerprint; topology correlation for blast radius.
+- `chaos_tools.py` — Ansible-backed `shutdown_interface`, `restore_interface`, `flap_bgp_neighbor`; only included when `CHAOS_TOOLS_ENABLED=true` (lab only).
+- `scheduler.py` — APScheduler for repeating chaos/validation scenarios (`/schedule`, `/schedules`).
 
 **UI (`ai-agents/ui/`):**
-- `main.py` — FastAPI app serving the web UI on port 7860. Mounts `static/` and `templates/`. Uses `httpx.AsyncClient` (not blocking) for all outbound agent calls.
-- `templates/` — Jinja2 templates. Page templates (`pipeline.html`, `chat.html`, `activity.html`) extend `base.html`. Partial templates in `templates/partials/` return HTML fragments consumed by HTMX polling (`hx-trigger="every Ns"`).
-- `static/htmx.min.js` — HTMX served locally (no CDN dependency).
-- `static/style.css` — Dark-theme CSS; no external CSS frameworks.
-- Polling intervals: agent status (2 s), pipeline/task queue (3 s), activity (5 s), status bar/cost KPIs (30 s). All polling is plain HTTP GET returning HTML fragments via `hx-trigger="every Ns"`.
-- The `from_json` Jinja2 filter is registered in `main.py` to parse JSON task result/content strings inside templates.
-
-**Ops Agent extras:**
-- `alert_poller.py` — Polls Alertmanager every 60 s. For each new alert fingerprint not already in the task queue, creates an `rca` task. Deduplicates via fingerprint to avoid re-investigating the same alert.
-
-**Chaos Agent extras:**
-- `chaos_tools.py` — Ansible-backed tools for `shutdown_interface`, `restore_interface`, `flap_bgp_neighbor`. These are the only write-action tools in the system; all others are read-only.
-- `scheduler.py` — `APScheduler` `BackgroundScheduler`; exposes `/schedule` and `/schedules` REST endpoints for repeating chaos runs.
+- `main.py` — FastAPI app on port 7860. Mounts `static/` and `templates/`. Uses `httpx.AsyncClient` for outbound agent calls and `run_in_threadpool` for store access.
+- Session login: when `UI_PASSWORD` is set, all routes except `/login` and `/static` require the session cookie (HTMX requests get `HX-Redirect`). Unset = open UI with a startup warning (dev/lab only).
+- `templates/` — Page templates extend `base.html`; partials in `templates/partials/` are HTML fragments consumed via HTMX polling and the `/stream/tasks` SSE channel.
+- `static/htmx.min.js`, `static/style.css` — no CDN, no CSS framework.
+- The `from_json` Jinja2 filter parses JSON task result/content strings inside templates.
 
 ### Closed-loop pipeline
 
-When Prometheus fires an alert, the pipeline proceeds automatically through four stages tracked in `task_store`:
+When an alert fires (webhook or poller), the unified workflow runs all stages **as events on one `rca` task**, traceable by `alert_fingerprint`:
 
 ```
-rca (ops_agent) → fix_proposal (eng_agent) → validation (chaos_agent) → approval_gate (human)
+check_intents → policy_fast_path (no LLM if a policy matches)
+             → investigate → propose_fix → validate → approval_gate (human)
+approval (UI) → /workflow/resume/{task_id} → execute (check_mode=False) → verify_resolution
 ```
 
-All tasks share an `alert_fingerprint` field so the full chain is traceable. The pipeline only requires human input at the `approval_gate` stage (Approve/Reject in the UI's Pipeline tab).
+The autonomy policy decides whether the gate needs a human (L0–L3) or can auto-execute (L4–L5, earned via promotion after consecutive successes, with TTL re-validation). The UI's approve action must call `approve_task()` before resume — `resume_execution` guards on the approved event being present.
 
 ### Tool tier model
 
@@ -119,7 +121,7 @@ Action tools require explicit user approval (`"approved"`, `"execute"`, or `"app
 
 1. Add a `@tool`-decorated function to `ai-agents/shared/tools.py`.
 2. Add it to the appropriate `*_TOOLS` list at the bottom of `tools.py`.
-3. Update the system prompt(s) in `agent.py` for every agent that should have access.
+3. Update the tool guide in `shared/unified_agent.py` (interactive prompt) and, if pipeline-relevant, the `SYSTEM_PROMPT` in `ops_agent/agent.py`.
 4. Follow the docstring convention in `docs/agent-tools-framework.md`.
 
 ### Nautobot data management
@@ -134,6 +136,7 @@ All configuration is in `.env` (gitignored). `.env.example` documents every vari
 
 ## Key constraints
 
-- **`check_mode=True` is the default for all Ansible action tools.** Never change this default — the chaos agent and approval gate exist precisely to gate `check_mode=False` execution.
-- **`activity.db` is a shared volume.** All three agent containers and the UI container read and write it concurrently; the `TaskStore` uses WAL mode and a threading lock for safe access.
+- **`check_mode=True` is the default for all Ansible action tools.** Never change this default — the validation stage and approval gate exist precisely to gate `check_mode=False` execution.
+- **The task DB is shared.** The agent and UI containers read and write it concurrently. With the SQLite backend (`activity.db` volume) the `TaskStore` relies on WAL mode and a threading lock; the compose default is Postgres (`TASK_DB_URL`).
 - **LLM selection is automatic.** `shared/llm.py` returns an OpenAI client if `OPENAI_API_KEY` is set, otherwise Ollama. Don't hardcode model clients in agent code.
+- **Auth is opt-in but warn-by-default.** `AGENT_API_KEY` protects agent endpoints, `UI_PASSWORD` protects the web UI; leaving either unset logs a startup warning and disables that auth layer (lab convenience only).

@@ -1,0 +1,76 @@
+{% if not summary %}
+<div class="card" style="text-align:center; padding:20px">
+  <div class="muted" style="font-size:0.85em">
+    No graded chaos injections yet. Run a chaos experiment with
+    <code>check_mode=False</code> — the injection becomes ground truth and the
+    pipeline's response is graded automatically.
+  </div>
+</div>
+{% else %}
+
+<table style="width:100%; font-size:0.84em">
+  <thead>
+    <tr>
+      <th style="text-align:left">Fault class</th>
+      <th>Injections</th>
+      <th>Detected</th>
+      <th>Right device</th>
+      <th>Right cause</th>
+      <th>Resolved</th>
+      <th>Fast path</th>
+      <th>Avg detect</th>
+      <th>Avg resolve</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in summary %}
+    <tr>
+      <td style="text-align:left"><strong>{{ row.fault_type }}</strong></td>
+      <td style="text-align:center">{{ row.injections }}</td>
+      {% for pct in [row.detected_pct, row.correct_device_pct, row.correct_cause_pct, row.resolved_pct] %}
+      <td style="text-align:center;
+                 color: {{ '#22c55e' if pct >= 80 else '#f59e0b' if pct >= 50 else '#ef4444' }}">
+        {{ pct }}%
+      </td>
+      {% endfor %}
+      <td style="text-align:center">{{ row.fast_path }}</td>
+      <td style="text-align:center">{{ row.avg_ttd }}</td>
+      <td style="text-align:center">{{ row.avg_ttr }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if recent %}
+<details style="margin-top:10px">
+  <summary style="cursor:pointer; font-size:0.82em">Recent grades ({{ recent|length }})</summary>
+  <table style="width:100%; font-size:0.8em; margin-top:6px">
+    <thead>
+      <tr>
+        <th style="text-align:left">Injected</th>
+        <th style="text-align:left">Fault</th>
+        <th style="text-align:left">Device / target</th>
+        <th>Detected</th>
+        <th>Device</th>
+        <th>Cause</th>
+        <th>Resolved</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for g in recent %}
+      <tr>
+        <td style="text-align:left">{{ g.injected_at }}</td>
+        <td style="text-align:left">{{ g.fault_type }}</td>
+        <td style="text-align:left">{{ g.device }}{% if g.target %} / {{ g.target }}{% endif %}</td>
+        <td style="text-align:center">{{ "✅" if g.detected else "❌" }}</td>
+        <td style="text-align:center">{{ "✅" if g.correct_device else "❌" }}</td>
+        <td style="text-align:center">{{ "✅" if g.correct_cause else "❌" }}</td>
+        <td style="text-align:center">{{ "✅" if g.resolved else "❌" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+
+{% endif %}

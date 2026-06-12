@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% set active_tab = "approvals" %}
+{% block title %}Approvals — Clano{% endblock %}
+{% block content %}
+
+<div class="section">
+  <div class="section-title">✅ Approval queue</div>
+  <p class="muted help-text" style="font-size:0.82em; margin-top:-4px">
+    Every fix waiting on a human decision, grouped by alert type — highest risk first.
+    Keyboard: <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>a</kbd> approve · <kbd>r</kbd> reject.
+  </p>
+
+  <div id="approval-queue"
+       hx-get="/partials/approval-queue"
+       hx-trigger="load, sse-refresh, every 10s"
+       hx-swap="innerHTML">
+  </div>
+</div>
+
+<script>
+  // Keyboard navigation for the approval queue: j/k select, a approve, r reject.
+  (function () {
+    var selected = -1;
+
+    function cards() {
+      return Array.from(document.querySelectorAll(".approval-card"));
+    }
+
+    function select(idx) {
+      var list = cards();
+      if (!list.length) return;
+      selected = Math.max(0, Math.min(idx, list.length - 1));
+      list.forEach(function (el, i) {
+        el.classList.toggle("kbd-selected", i === selected);
+      });
+      list[selected].scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+
+    document.addEventListener("keydown", function (e) {
+      if (e.target.matches("input, textarea, select")) return;
+      var list = cards();
+      if (!list.length) return;
+      if (e.key === "j") select(selected + 1);
+      else if (e.key === "k") select(selected - 1);
+      else if (e.key === "a" && selected >= 0) {
+        var btn = list[selected].querySelector("button[data-action='approve']");
+        if (btn) btn.click();
+      } else if (e.key === "r" && selected >= 0) {
+        var btn = list[selected].querySelector("button[data-action='reject']");
+        if (btn) btn.click();
+      }
+    });
+  })();
+</script>
+
+{% endblock %}

@@ -26,13 +26,14 @@ from typing import AsyncGenerator
 
 import uvicorn
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from shared.task_store import TaskStore
 from shared.rate_limiter import RateLimiter, BudgetExceededError
 from shared.status_tracker import AgentStatus, StatusCallbackHandler
-from shared.auth import require_api_key, warn_if_no_api_key
+from shared.auth import require_api_key, require_webhook_secret, warn_if_no_api_key
 from shared.config import settings
 from shared.metrics import ActiveTasksRefresher, metrics_response
 from shared.unified_agent import UnifiedAgent, AGENT_NAME
@@ -88,7 +89,13 @@ _intent_evaluator = IntentEvaluator(
 # ── Lifespan ───────────────────────────────────────────────────────────────────
 
 def _promotion_sweep_loop(stop_event: threading.Event, interval: int = 3600) -> None:
-    """Hourly background sweep: promote policies that hit the consecutive-success threshold."""
+    """Hourly background sweep: promote proven policies, then synthesize draft
+    fast-path policies from repeated identical AI resolutions."""
+    from shared.policy_synthesizer import PolicySynthesizer
+
+    synthesizer = PolicySynthesizer(
+        task_store, min_successes=settings.policy_synthesis_min_successes,
+    )
     stop_event.wait(300)  # initial delay — let the system stabilise
     while not stop_event.is_set():
         try:
@@ -97,7 +104,39 @@ def _promotion_sweep_loop(stop_event: threading.Event, interval: int = 3600) -> 
                 logger.info("Promotion sweep: promoted %d policies: %s", len(promoted), promoted)
         except Exception:
             logger.exception("Promotion sweep failed")
+        if settings.policy_synthesis_enabled:
+            try:
+                drafts = synthesizer.synthesize(
+                    tenant_id=settings.agent_tenant_id,
+                    environment=settings.environment,
+                )
+                if drafts:
+                    logger.info(
+                        "Policy synthesis: %d draft(s) awaiting review: %s",
+                        len(drafts), [d["name"] for d in drafts],
+                    )
+            except Exception:
+                logger.exception("Policy synthesis failed")
         stop_event.wait(interval)
+
+
+def _eval_grading_loop(stop_event: threading.Event) -> None:
+    """Periodic sweep: grade the pipeline's response to executed chaos injections."""
+    from shared.eval_engine import EvalStore, EvalGrader
+
+    grader = EvalGrader(
+        task_store,
+        EvalStore(task_store),
+        min_age_seconds=settings.eval_min_age_seconds,
+        match_window_seconds=settings.eval_match_window_seconds,
+    )
+    stop_event.wait(120)  # initial delay
+    while not stop_event.is_set():
+        try:
+            grader.grade_pending()
+        except Exception:
+            logger.exception("Eval grading sweep failed")
+        stop_event.wait(settings.eval_grading_interval)
 
 
 @asynccontextmanager
@@ -107,7 +146,7 @@ async def lifespan(app: FastAPI):
     if settings.policy_auto_seed:
         _policy_registry.seed_defaults()
         _intent_registry.seed_defaults()
-    scheduler = OpsScheduler(agent)
+    scheduler = OpsScheduler(agent, task_store=task_store)
     _intent_evaluator._scheduler = scheduler
     poller.start()
     _metrics.start()
@@ -120,11 +159,20 @@ async def lifespan(app: FastAPI):
         daemon=True,
         name="policy-promotion-sweep",
     ).start()
+    _eval_stop = threading.Event()
+    if settings.eval_grading_enabled:
+        threading.Thread(
+            target=_eval_grading_loop,
+            args=(_eval_stop,),
+            daemon=True,
+            name="eval-grading-sweep",
+        ).start()
     yield
     poller.stop()
     _metrics.stop()
     _intent_evaluator.stop()
     _promo_stop.set()
+    _eval_stop.set()
     if scheduler:
         scheduler.shutdown()
 
@@ -217,7 +265,10 @@ async def status():
 async def chat(request: ChatRequest):
     session_id = request.session_id or str(uuid.uuid4())
     try:
-        response, tool_calls = agent.chat_with_trace(
+        # The ReAct loop is synchronous and can run for tens of seconds; keep it
+        # off the event loop so /health, /status and /webhook/alert stay live.
+        response, tool_calls = await run_in_threadpool(
+            agent.chat_with_trace,
             request.message,
             session_id=session_id,
             task_id=request.task_id or None,
@@ -346,7 +397,13 @@ async def alertmanager_webhook(request: Request):
     Direct Alertmanager webhook receiver — zero polling latency.
     Alertmanager sends its standard v4 payload.
     Each alert is processed immediately in a background thread.
+
+    This path is exempt from the API-key dependency, so it has its own gate:
+    when ALERT_WEBHOOK_SECRET is set, forged alerts (which would drive the
+    pipeline and burn LLM budget) are rejected with 401.
     """
+    await require_webhook_secret(request)
+
     try:
         payload = await request.json()
     except Exception:

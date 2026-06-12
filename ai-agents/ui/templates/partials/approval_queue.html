@@ -1,0 +1,87 @@
+{% if flash %}
+<div class="card" style="border-left:3px solid #22c55e; margin-bottom:12px; padding:8px 12px; font-size:0.85em">
+  {{ flash }}
+</div>
+{% endif %}
+
+{% if total == 0 %}
+<div class="card" style="text-align:center; padding:28px">
+  <div style="font-size:1.6em">🎉</div>
+  <div class="muted" style="margin-top:6px">Nothing waiting for approval.</div>
+</div>
+{% else %}
+
+{% set risk_colors = {"high": "#ef4444", "medium": "#f59e0b", "low": "#22c55e"} %}
+
+{% for alertname, cards in groups %}
+<div class="section" style="margin-bottom:18px">
+  <div class="flex items-center gap-12" style="margin-bottom:8px">
+    <span class="section-label" style="margin:0">{{ alertname }}</span>
+    <span class="badge">{{ cards|length }} pending</span>
+    {% if cards|length > 1 %}
+    <form hx-post="/approvals/group/approve"
+          hx-target="#approval-queue" hx-swap="innerHTML"
+          hx-confirm="Approve all {{ cards|length }} pending fixes for {{ alertname }}?"
+          style="margin:0; margin-left:auto">
+      <input type="hidden" name="alertname" value="{{ alertname }}" />
+      <button type="submit" class="btn btn-sm btn-primary">Approve all ({{ cards|length }})</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% for c in cards %}
+  <div class="card approval-card card-top"
+       style="border-top-color:{{ risk_colors.get(c.risk, '#6b7280') }}; margin-bottom:10px">
+    <div class="flex items-center gap-12 flex-wrap">
+      <strong>{{ c.device or "unknown device" }}</strong>
+      <span class="badge" style="color:{{ risk_colors.get(c.risk, '#6b7280') }}">
+        risk: {{ c.risk or "?" }}
+      </span>
+      {% if c.confidence %}<span class="badge">confidence: {{ c.confidence }}</span>{% endif %}
+      {% if c.verdict %}<span class="badge">validation: {{ c.verdict }}</span>{% endif %}
+      {% if c.autonomy_level %}<span class="badge">{{ c.autonomy_level }}</span>{% endif %}
+      {% if c.fix_type %}<span class="badge">{{ c.fix_type }}</span>{% endif %}
+      <span class="muted" style="margin-left:auto; font-size:0.8em">waiting {{ c.age }}</span>
+    </div>
+
+    {% if c.reason %}
+    <p class="muted" style="font-size:0.82em; margin:6px 0 0">{{ c.reason }}</p>
+    {% endif %}
+
+    {% if c.commands and c.commands != "none" %}
+    <details style="margin-top:8px">
+      <summary style="cursor:pointer; font-size:0.82em">Commands to execute</summary>
+      <pre style="font-size:0.78em; margin:6px 0 0; white-space:pre-wrap">{{ c.commands }}</pre>
+    </details>
+    {% endif %}
+
+    {% if c.config_diff %}
+    <details style="margin-top:4px">
+      <summary style="cursor:pointer; font-size:0.82em">Config diff</summary>
+      <pre style="font-size:0.78em; margin:6px 0 0; white-space:pre-wrap">{{ c.config_diff }}</pre>
+    </details>
+    {% endif %}
+
+    <div class="flex items-center gap-12" style="margin-top:10px">
+      <button class="btn btn-sm btn-primary" data-action="approve"
+              hx-post="/tasks/{{ c.task_id }}/approve"
+              hx-target="#status-{{ c.task_id }}" hx-swap="innerHTML">
+        Approve &amp; execute
+      </button>
+      <form hx-post="/tasks/{{ c.task_id }}/reject"
+            hx-target="#status-{{ c.task_id }}" hx-swap="innerHTML"
+            class="flex items-center gap-12" style="margin:0">
+        <input type="text" name="reason" placeholder="Rejection reason (optional)"
+               style="font-size:0.78em; padding:4px 8px" />
+        <button type="submit" class="btn btn-sm btn-danger" data-action="reject">Reject</button>
+      </form>
+      <a class="muted" style="font-size:0.78em; margin-left:auto"
+         href="/?fp={{ c.fingerprint }}">Open investigation →</a>
+    </div>
+    <div id="status-{{ c.task_id }}" style="margin-top:6px"></div>
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+
+{% endif %}

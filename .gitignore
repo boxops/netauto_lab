@@ -216,3 +216,6 @@ containerlab/**
 !containerlab/configs/**
 !containerlab/topologies/
 !containerlab/topologies/*.yml
+
+# Alertmanager → agent webhook credential (see prometheus/alertmanager.yml)
+prometheus/webhook_secret

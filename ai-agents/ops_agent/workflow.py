@@ -280,6 +280,32 @@ class IncidentWorkflow:
 
     # ── node: policy_fast_path ────────────────────────────────────────────────
 
+    @staticmethod
+    def _lookup_device_role(device: str) -> str:
+        """
+        Return the lowercase Nautobot role name for a device, or "" when the
+        lookup fails. Uses depth=1 to get the role name — Nautobot 2.x dropped
+        the legacy slug field. Callers must treat "" as "role unknown": with
+        strict_role policy matching, role-specific policies are then excluded.
+        """
+        if not device:
+            return ""
+        try:
+            resp = httpx.get(
+                f"{settings.nautobot_url}/api/dcim/devices/",
+                params={"name": device, "limit": 1, "depth": 1},
+                headers={"Authorization": f"Token {settings.nautobot_token}"},
+                timeout=5,
+            )
+            if resp.is_success:
+                results = resp.json().get("results", [])
+                if results:
+                    role_obj = (results[0].get("role") or results[0].get("device_role") or {})
+                    return (role_obj.get("name") or role_obj.get("slug") or "").lower()
+        except Exception:
+            pass
+        return ""
+
     def _node_policy_fast_path(self, state: IncidentState) -> dict:
         """
         Programmatic fast path: try to resolve the alert using policies that
@@ -295,23 +321,7 @@ class IncidentWorkflow:
         task_id   = state.get("rca_task_id")
         device    = state.get("device", "")
 
-        # Look up device_role for policy specificity filtering. Uses depth=1 to get
-        # the role name — Nautobot 2.x dropped the legacy slug field.
-        device_role = ""
-        try:
-            resp = httpx.get(
-                f"{settings.nautobot_url}/api/dcim/devices/",
-                params={"name": device, "limit": 1, "depth": 1},
-                headers={"Authorization": f"Token {settings.nautobot_token}"},
-                timeout=5,
-            )
-            if resp.is_success:
-                results = resp.json().get("results", [])
-                if results:
-                    role_obj = (results[0].get("role") or results[0].get("device_role") or {})
-                    device_role = (role_obj.get("name") or role_obj.get("slug") or "").lower()
-        except Exception:
-            pass
+        device_role = self._lookup_device_role(device)
 
         candidates = self._policy_registry.get_fast_path_policies(
             alertname=alertname,
@@ -995,23 +1005,7 @@ class IncidentWorkflow:
         risk     = fix.get("risk", "medium").lower()
         confidence = fix.get("confidence", "low").lower()
 
-        # Look up device role for policy matching. depth=1 expands the role object
-        # so we can read the name — Nautobot 2.x dropped the legacy slug field.
-        device_role = ""
-        try:
-            resp = httpx.get(
-                f"{settings.nautobot_url}/api/dcim/devices/",
-                params={"name": device, "limit": 1, "depth": 1},
-                headers={"Authorization": f"Token {settings.nautobot_token}"},
-                timeout=5,
-            )
-            if resp.is_success:
-                results = resp.json().get("results", [])
-                if results:
-                    role_obj = (results[0].get("role") or results[0].get("device_role") or {})
-                    device_role = (role_obj.get("name") or role_obj.get("slug") or "").lower()
-        except Exception:
-            pass
+        device_role = self._lookup_device_role(device)
 
         prior_success_count = self._ts.count_successful_executions(device, fix_type)
 
