@@ -28,6 +28,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
+from shared.alert_journal import AlertJournal
 from shared.config import settings
 from shared.kb_store import kb_store as _kb_store
 from shared.llm import get_llm
@@ -178,6 +179,7 @@ class IncidentWorkflow:
             blast_radius_hops=settings.topology_blast_radius_hops,
         )
         self._learning_engine  = LearningEngine(self._policy_registry, task_store)
+        self._journal          = AlertJournal(task_store)
 
         self._graph = self._build_graph()
 
@@ -376,7 +378,17 @@ class IncidentWorkflow:
             self._ts.add_event(
                 task_id, AGENT, "fast_path_resolved",
                 {"policy_id": result.policy_id, "policy_name": result.policy_name,
-                 "conditions_matched": len(result.matched_conditions)},
+                 "conditions_matched": len(result.matched_conditions),
+                 # Full condition definitions so the inspector can show WHAT was
+                 # verified (query / expected value) — not just a count.
+                 "conditions": result.matched_conditions},
+            )
+            self._journal.record(
+                "fast_path", state["event"],
+                reason=f"Resolved programmatically by policy "
+                       f"'{result.policy_name}' — no LLM needed.",
+                ref_task_id=task_id, ref_id=result.policy_id,
+                tenant_id=tenant_id,
             )
             return {
                 "pipeline_decision":   "fast_path_resolved",
@@ -444,6 +456,13 @@ class IncidentWorkflow:
                     "Workflow: intent '%s' suppressed investigation for %s/%s",
                     m.intent_id, device, alertname,
                 )
+                # Without this record the alert vanishes entirely — suppression
+                # ends the graph before any task exists.
+                self._journal.record(
+                    "suppressed_by_intent", state["event"],
+                    reason=m.reason, ref_id=m.intent_id,
+                    tenant_id=state.get("tenant_id", "default"),
+                )
                 return {
                     "pipeline_decision": "no_action",
                     "intent_match":      m.intent_id,
@@ -454,6 +473,11 @@ class IncidentWorkflow:
                 logger.info(
                     "Workflow: intent '%s' escalated %s/%s",
                     m.intent_id, device, alertname,
+                )
+                self._journal.record(
+                    "escalated_by_intent", state["event"],
+                    reason=m.reason, ref_id=m.intent_id,
+                    tenant_id=state.get("tenant_id", "default"),
                 )
                 return {
                     "pipeline_decision": "escalate_human",
@@ -562,6 +586,12 @@ class IncidentWorkflow:
 
         self._ts.claim_task(task_id, AGENT)
         self._ts.start_task(task_id, AGENT)
+        self._journal.record(
+            "investigating", state["event"],
+            reason="AI investigation pipeline opened.",
+            ref_task_id=task_id,
+            tenant_id=state.get("tenant_id", "default"),
+        )
 
         try:
             self._rl.check_budget("ops_agent")
@@ -974,6 +1004,13 @@ class IncidentWorkflow:
                     },
                 )
                 task_id = task["id"]
+                self._journal.record(
+                    "investigating", state["event"],
+                    reason="AI is disabled (AI_ENABLED=false) and no fast-path "
+                           "policy matched — gated for manual review.",
+                    ref_task_id=task_id,
+                    tenant_id=state.get("tenant_id", "default"),
+                )
 
             self._ts.add_event(task_id, AGENT, "no_ai_skipped", {
                 "reason":    "ai_enabled=False — LLM investigation suppressed",

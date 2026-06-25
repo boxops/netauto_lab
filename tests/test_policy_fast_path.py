@@ -249,11 +249,13 @@ class TestWorkflowFastPathRouting:
         with mock_module.patch("ops_agent.workflow.create_react_agent", return_value=MagicMock()):
             with mock_module.patch("ops_agent.workflow.OPS_TOOLS", []):
                 from ops_agent.workflow import IncidentWorkflow
+                from shared.alert_journal import AlertJournal
                 wf = IncidentWorkflow.__new__(IncidentWorkflow)
                 wf._ts = db
                 wf._policy_resolver = PolicyResolver()
                 wf._policy_registry = PolicyRegistry(db)
                 wf._lookup_device_role = lambda device: device_role
+                wf._journal = AlertJournal(db)
                 return wf
 
     def _base_state(self) -> dict:

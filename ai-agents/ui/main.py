@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.activity_store import ActivityStore
+from shared.alert_journal import AlertJournal
 from shared.config import settings
 from shared.eval_engine import EvalStore
 from shared.kb_store import KBStore
@@ -554,10 +555,11 @@ async def logout():
     resp.delete_cookie(_SESSION_COOKIE)
     return resp
 
-store      = ActivityStore()
-task_store = TaskStore()
-kb_store   = KBStore()
-eval_store = EvalStore(task_store)
+store         = ActivityStore()
+task_store    = TaskStore()
+kb_store      = KBStore()
+eval_store    = EvalStore(task_store)
+alert_journal = AlertJournal(task_store)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -873,17 +875,29 @@ def _build_chapter(task: dict, prev_completed_at: str | None) -> dict:
     return ch
 
 
+def _journal_banner(fp: str) -> list[dict]:
+    """Decision-journal records for the inspector banner, chip-decorated."""
+    out = []
+    for r in alert_journal.for_fingerprint(fp, limit=20):
+        icon, color, label = _DECISION_CHIPS.get(
+            r["decision"], ("·", "#6b7280", r["decision"]))
+        out.append({**r, "icon": icon, "color": color, "label": label})
+    return out
+
+
 def _pipeline_chronicle_context(fp: str) -> dict:
     if not fp:
-        return {"fp": fp, "chapters": [], "overall": {}}
+        return {"fp": fp, "chapters": [], "overall": {}, "journal": []}
 
+    journal = _journal_banner(fp)
     tasks = task_store.list_tasks(alert_fingerprint=fp, type="rca", limit=1)
     if not tasks:
-        return {"fp": fp, "chapters": [], "overall": {}}
+        # No pipeline ran — the journal explains why (suppressed, deduped, …).
+        return {"fp": fp, "chapters": [], "overall": {}, "journal": journal}
 
     task = task_store.get_task(tasks[0]["id"])
     if not task:
-        return {"fp": fp, "chapters": [], "overall": {}}
+        return {"fp": fp, "chapters": [], "overall": {}, "journal": journal}
 
     events = task.get("events") or []
     try:
@@ -1111,6 +1125,7 @@ def _pipeline_chronicle_context(fp: str) -> dict:
     return {
         "fp": fp,
         "chapters": chapters,
+        "journal": journal,
         "verify_delay_min": max(1, settings.execution_verify_delay // 60),
         "overall": {
             "status":               o_status,
@@ -1747,6 +1762,106 @@ async def partial_live_feed(request: Request, tenant_id: str = "default"):
     return templates.TemplateResponse(request, "partials/live_feed.html", {
         "request": request,
         "events":  events,
+    })
+
+
+# ── Action stream + funnel (Operations visibility redesign) ───────────────────
+# Decision chips: icon, color, label per journal decision. Task state, when a
+# task exists, overrides the chip so live pipelines show their current stage.
+
+_DECISION_CHIPS: dict[str, tuple[str, str, str]] = {
+    "investigating":        ("🔍", "#3b82f6", "Investigating"),
+    "fast_path":            ("⚡", "#8b5cf6", "Fast path"),
+    "suppressed_by_intent": ("🔇", "#6b7280", "Suppressed by intent"),
+    "escalated_by_intent":  ("📣", "#f59e0b", "Escalated by intent"),
+    "deduplicated":         ("↩",  "#6b7280", "Duplicate ingress"),
+    "not_firing":           ("🌫",  "#6b7280", "Cleared before action"),
+    "resolved_cleared":     ("✅", "#22c55e", "Resolved"),
+    "severity_filtered":    ("⤵",  "#6b7280", "Severity filtered"),
+    "budget_deferred":      ("⏳", "#f59e0b", "Deferred (budget)"),
+    "already_active":       ("↩",  "#6b7280", "Already active"),
+    "correlated_into":      ("🔗", "#06b6d4", "Folded into device task"),
+    "downstream_of":        ("🔗", "#06b6d4", "Downstream of root cause"),
+}
+
+_TASK_STATE_CHIPS: dict[str, tuple[str, str, str]] = {
+    "awaiting_approval": ("⏸", "#a855f7", "Awaiting your approval"),
+    "running":           ("🔍", "#3b82f6", "Investigating"),
+    "claimed":            ("🔍", "#3b82f6", "Investigating"),
+    "pending":            ("🕐", "#6b7280", "Queued"),
+    "complete":           ("✅", "#22c55e", "Complete"),
+    "failed":             ("❌", "#ef4444", "Failed"),
+    "rejected":           ("🚫", "#ef4444", "Rejected"),
+}
+
+_STREAM_CATEGORIES = [
+    ("",         "All"),
+    ("needs_me", "Needs me"),
+    ("active",   "Handled automatically"),
+    ("dropped",  "Dropped / suppressed"),
+]
+
+
+def _action_stream_context(category: str = "", q: str = "", sel_fp: str = "") -> dict:
+    journal_cat = category if category in ("active", "dropped", "linked") else ""
+    rows = alert_journal.latest_per_fingerprint(limit=80, category=journal_cat)
+    items = []
+    for r in rows:
+        task = task_store.get_task(r["ref_task_id"]) if r.get("ref_task_id") else None
+        status = task["status"] if task else ""
+        if category == "needs_me" and status != "awaiting_approval":
+            continue
+        if q and q.lower() not in f"{r['alertname']} {r['device']}".lower():
+            continue
+        if task and status in _TASK_STATE_CHIPS:
+            icon, color, label = _TASK_STATE_CHIPS[status]
+        else:
+            icon, color, label = _DECISION_CHIPS.get(
+                r["decision"], ("·", "#6b7280", r["decision"]))
+        items.append({
+            "fp":           r["fingerprint"],
+            "alertname":    r["alertname"] or "(unknown alert)",
+            "device":       r["device"],
+            "icon":         icon,
+            "color":        color,
+            "label":        label,
+            "reason":       r.get("reason", ""),
+            "age":          _age(r.get("received_at")),
+            "count":        r.get("record_count", 1),
+            "source":       r.get("source", ""),
+            "ref_task_id":  r.get("ref_task_id", ""),
+            "selected":     bool(sel_fp) and r["fingerprint"] == sel_fp,
+            "has_pipeline": bool(task),
+        })
+    return {
+        "items":      items,
+        "category":   category,
+        "q":          q,
+        "sel_fp":     sel_fp,
+        "categories": _STREAM_CATEGORIES,
+    }
+
+
+@app.get("/partials/action-stream", response_class=HTMLResponse)
+async def partial_action_stream(
+    request: Request, category: str = "", q: str = "", sel_fp: str = "",
+):
+    ctx = await run_in_threadpool(_action_stream_context, category, q, sel_fp)
+    return templates.TemplateResponse(request, "partials/action_stream.html", {
+        "request": request, **ctx,
+    })
+
+
+@app.get("/partials/ops-funnel", response_class=HTMLResponse)
+async def partial_ops_funnel(request: Request):
+    funnel, gates = await asyncio.gather(
+        run_in_threadpool(alert_journal.funnel, 24),
+        run_in_threadpool(task_store.list_tasks, status="awaiting_approval", limit=100),
+    )
+    return templates.TemplateResponse(request, "partials/ops_funnel.html", {
+        "request":  request,
+        "f":        funnel,
+        "awaiting": len(gates),
     })
 
 

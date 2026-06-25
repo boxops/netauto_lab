@@ -111,6 +111,11 @@ class Settings(BaseSettings):
     topology_blast_radius_hops: int = 2     # BFS depth for blast-radius calculation
     topology_cache_ttl: int = 60            # seconds: cache Nautobot topology between polls
 
+    # Alert journal — decision ledger behind the Operations action stream.
+    # Every alert ingress records one decision row (investigated / suppressed /
+    # deduplicated / …). Pruned by the hourly sweep.
+    journal_retention_days: int = 14
+
     # Policy synthesis — compile repeated, identical AI resolutions of the same
     # alert pattern into DRAFT fast-path policies (created disabled; an operator
     # reviews and enables them). Runs inside the hourly promotion sweep.

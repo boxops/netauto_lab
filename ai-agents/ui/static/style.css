@@ -1497,3 +1497,64 @@ kbd {
   padding: 1px 5px;
   font-size: 0.85em;
 }
+
+/* ── Operations decision funnel + action stream ──────────── */
+.funnel-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.funnel-seg {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 9px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text);
+}
+.funnel-seg:hover { border-color: var(--seg-color); }
+.funnel-seg .funnel-n {
+  font-weight: 700;
+  font-size: 0.95em;
+  color: var(--seg-color);
+}
+.funnel-seg .funnel-label { font-size: 0.7em; color: var(--text-sub); }
+.funnel-arrow { color: var(--text-sub); font-size: 0.8em; }
+
+.stream-filters {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.stream-chip {
+  font-size: 0.7em;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-sub);
+  cursor: pointer;
+}
+.stream-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.journal-banner {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}

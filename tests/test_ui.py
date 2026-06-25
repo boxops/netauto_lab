@@ -99,10 +99,12 @@ class TestPageRoutes:
         assert "Config" in r.text
         assert "System" in r.text
 
-    def test_pipeline_incident_list_and_chronicle_present(self, client):
+    def test_pipeline_action_stream_and_chronicle_present(self, client):
         r = client.get("/")
-        # Left pane has Active Incidents; right pane has pipeline-chronicle
-        assert "Active Incidents" in r.text
+        # Funnel strip on top; left pane has the action stream; right pane has
+        # the pipeline chronicle (inspector).
+        assert "ops-funnel" in r.text
+        assert "Action Stream" in r.text
         assert "pipeline-chronicle" in r.text
 
     def test_pipeline_does_not_contain_cost_monitor_widget(self, client):

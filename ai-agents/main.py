@@ -117,6 +117,10 @@ def _promotion_sweep_loop(stop_event: threading.Event, interval: int = 3600) -> 
                     )
             except Exception:
                 logger.exception("Policy synthesis failed")
+        try:
+            poller._journal.prune(settings.journal_retention_days)
+        except Exception:
+            logger.exception("Alert journal prune failed")
         stop_event.wait(interval)
 
 

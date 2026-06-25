@@ -1,0 +1,32 @@
+<div id="ops-funnel"
+     hx-get="/partials/ops-funnel"
+     hx-trigger="sse-refresh, every 30s"
+     hx-swap="outerHTML"
+     class="funnel-strip">
+
+  {% set segments = [
+    ("",         f.alerts,       "alerts (24h)",      "#94a3b8"),
+    ("active",   f.investigated, "investigated",      "#3b82f6"),
+    ("active",   f.fast_path,    "fast-path",         "#8b5cf6"),
+    ("needs_me", awaiting,       "awaiting approval", "#a855f7"),
+    ("dropped",  f.dropped,      "dropped/suppressed","#6b7280"),
+    ("linked",   f.linked,       "correlated",        "#06b6d4"),
+  ] %}
+
+  {% for cat, n, label, color in segments %}
+  <button class="funnel-seg"
+          style="--seg-color: {{ color }}"
+          title="Filter the action stream: {{ label }}"
+          hx-get="/partials/action-stream?category={{ cat }}"
+          hx-target="#action-stream"
+          hx-swap="outerHTML">
+    <span class="funnel-n">{{ n }}</span>
+    <span class="funnel-label">{{ label }}</span>
+  </button>
+  {% if not loop.last %}<span class="funnel-arrow">{% if loop.index <= 3 %}→{% else %}·{% endif %}</span>{% endif %}
+  {% endfor %}
+
+  <span class="muted" style="margin-left:auto; font-size:0.7em">
+    every alert is accounted for — click a number to filter
+  </span>
+</div>

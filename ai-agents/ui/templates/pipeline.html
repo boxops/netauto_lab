@@ -43,30 +43,29 @@
   </div>
 </div>
 
+{# ── 24h decision funnel (every alert is accounted for) ──────────────────── #}
+<div id="ops-funnel"
+     hx-get="/partials/ops-funnel"
+     hx-trigger="load, sse-refresh, every 30s"
+     hx-swap="outerHTML"
+     class="funnel-strip">
+  <span class="muted" style="font-size:0.82em">Loading decision funnel…</span>
+</div>
+
 {# ── Fixed two-pane ops viewport ─────────────────────────────────────────── #}
 <div class="ops-viewport">
 
-  {# ── Left pane: incident list + event log ──────────────────────────────── #}
+  {# ── Left pane: action stream — every alert and what Clano decided ─────── #}
   <div class="ops-left-pane">
 
-    <div class="ops-pane-label">Active Incidents</div>
+    <div class="ops-pane-label">Action Stream</div>
 
-    <div class="ops-incident-list">
-      <div id="active-pipelines-list"
-           hx-get="/partials/active-pipelines?sel_fp={{ sel_fp | default('') | urlencode }}"
-           hx-trigger="load, sse-refresh, every 5s"
+    <div class="ops-incident-list" style="flex:1">
+      <div id="action-stream"
+           hx-get="/partials/action-stream?sel_fp={{ sel_fp | default('') | urlencode }}"
+           hx-trigger="load, sse-refresh, every 10s"
            hx-swap="outerHTML">
         <div class="muted" style="font-size:0.82em; padding:10px">Loading…</div>
-      </div>
-    </div>
-
-    <div class="ops-pane-label" style="margin-top:0">Recent Events</div>
-    <div class="ops-event-log">
-      <div id="live-feed"
-           hx-get="/partials/live-feed"
-           hx-trigger="load, sse:tasks-changed, every 3s"
-           hx-swap="outerHTML">
-        <div class="muted" style="font-size:0.82em; padding:6px 8px">Loading…</div>
       </div>
     </div>
 
@@ -125,6 +124,24 @@
       htmx.process(panel);
     }
     highlightSelectedPipeline();
+  }
+
+  // Action-stream row click: load the inspector and keep the selection sticky
+  // across the stream's periodic refreshes.
+  function selectAction(fp) {
+    if (!fp) return;
+    selectedFp = fp;
+    reloadChronicle(fp);
+    var stream = document.getElementById("action-stream");
+    if (stream) {
+      var url = new URL(stream.getAttribute("hx-get"), window.location.origin);
+      url.searchParams.set("sel_fp", fp);
+      stream.setAttribute("hx-get", url.pathname + url.search);
+      htmx.process(stream);
+    }
+    document.querySelectorAll("#action-stream .alert-row").forEach(function (el) {
+      el.classList.toggle("selected", el.dataset.fp === fp);
+    });
   }
 
   function highlightSelectedPipeline() {

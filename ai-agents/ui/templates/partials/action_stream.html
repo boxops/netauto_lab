@@ -1,0 +1,54 @@
+<div id="action-stream"
+     hx-get="/partials/action-stream?category={{ category }}&q={{ q | urlencode }}&sel_fp={{ sel_fp | urlencode }}"
+     hx-trigger="sse-refresh, every 10s"
+     hx-swap="outerHTML">
+
+  <div class="stream-filters">
+    {% for cat, label in categories %}
+    <button class="stream-chip {% if category == cat %}active{% endif %}"
+            hx-get="/partials/action-stream?category={{ cat }}&q={{ q | urlencode }}&sel_fp={{ sel_fp | urlencode }}"
+            hx-target="#action-stream" hx-swap="outerHTML">{{ label }}</button>
+    {% endfor %}
+  </div>
+
+  {% if not items %}
+  <div class="muted" style="font-size:0.82em; padding:14px 10px; text-align:center">
+    {% if category == "needs_me" %}✅ Nothing waiting on you.
+    {% elif category %}No alerts in this category yet.
+    {% else %}No alert activity recorded yet — the journal starts filling as
+    alerts arrive.{% endif %}
+  </div>
+  {% else %}
+  {% for it in items %}
+  <div class="alert-row {% if it.selected %}selected{% endif %}"
+       data-fp="{{ it.fp }}"
+       {% if it.has_pipeline %}onclick="selectAction('{{ it.fp }}')"
+       {% else %}style="cursor:default"{% endif %}>
+    <span style="font-size:0.9em; flex-shrink:0" title="{{ it.label }}">{{ it.icon }}</span>
+    <div style="flex:1; min-width:0">
+      <div style="display:flex; gap:6px; align-items:baseline">
+        <span style="font-weight:600; font-size:0.82em; overflow:hidden;
+                     text-overflow:ellipsis; white-space:nowrap">{{ it.alertname }}</span>
+        {% if it.device %}
+        <span class="mono muted" style="font-size:0.7em">{{ it.device }}</span>
+        {% endif %}
+        <span class="muted" style="font-size:0.68em; margin-left:auto; flex-shrink:0">{{ it.age }}</span>
+      </div>
+      <div style="font-size:0.72em; color:{{ it.color }}; margin-top:1px">
+        {{ it.label }}
+        {% if it.count > 1 %}
+        <span class="muted" title="{{ it.count }} journal records for this alert">· ×{{ it.count }}</span>
+        {% endif %}
+        {% if it.source == "webhook" %}<span class="muted" title="arrived via Alertmanager webhook">· wh</span>{% endif %}
+      </div>
+      {% if it.reason and not it.has_pipeline %}
+      <div class="muted" style="font-size:0.7em; margin-top:1px; overflow:hidden;
+                  text-overflow:ellipsis; white-space:nowrap" title="{{ it.reason }}">
+        {{ it.reason }}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  {% endif %}
+</div>

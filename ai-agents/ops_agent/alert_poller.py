@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 import httpx
 
+from shared.alert_journal import AlertJournal
 from shared.config import settings
 from shared.rate_limiter import BudgetExceededError
 from shared.topology_correlator import TopologyCorrelator
@@ -103,8 +104,31 @@ class AlertPoller:
         # cause the same fingerprint to be re-processed.
         self._seen: dict[str, str] = {}
         self._seed_seen_from_store()
+        # Decision ledger (docs/operations-visibility-plan.md). _journal_keys
+        # guards once-per-transition recording: dedup/filter branches re-fire on
+        # every poll cycle but must journal only when the decision changes.
+        self._journal = AlertJournal(task_store)
+        self._journal_keys: dict[str, str] = {}
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+
+    def _journal_once(
+        self,
+        event: dict,
+        decision: str,
+        reason: str = "",
+        ref_task_id: str = "",
+        ref_id: str = "",
+    ) -> None:
+        """Record a decision once per (fingerprint, decision) transition."""
+        fp = event.get("fingerprint", "")
+        key = f"{decision}:{ref_task_id}"
+        if fp and self._journal_keys.get(fp) == key:
+            return
+        if fp:
+            self._journal_keys[fp] = key
+        self._journal.record(decision, event, reason=reason,
+                             ref_task_id=ref_task_id, ref_id=ref_id)
 
     def _seed_seen_from_store(self) -> None:
         """
@@ -154,6 +178,7 @@ class AlertPoller:
         it was deduplicated, filtered, or the budget was exceeded.
         """
         import threading as _t
+        event["_source"] = "webhook"
         live_alerts = self._fetch_live_alerts()
         work = self._classify_event(event, live_alerts)
         if work is None:
@@ -324,6 +349,11 @@ class AlertPoller:
         if not fp:
             return None
         if severity not in SEVERITIES:
+            self._journal_once(
+                event, "severity_filtered",
+                reason=f"Severity '{severity}' is not investigated "
+                       f"(allow-list: {', '.join(sorted(SEVERITIES))}).",
+            )
             return None
 
         if status == "resolved":
@@ -331,6 +361,11 @@ class AlertPoller:
             if fp:
                 self._try_close_incident(fp)
                 self._auto_reject_stale_gates(fp)
+                self._journal_once(
+                    event, "resolved_cleared",
+                    reason="Alert resolved — incident closed and any stale "
+                           "approval gates auto-rejected.",
+                )
             return None
 
         if status != "firing":
@@ -338,6 +373,11 @@ class AlertPoller:
 
         seen_key = f"{fp}:{status}"
         if self._seen.get(fp) == seen_key:
+            self._journal_once(
+                event, "deduplicated",
+                reason="Fingerprint already seen in this state — an earlier "
+                       "ingress of this alert is being handled.",
+            )
             return None
 
         if not self._is_firing_in_prometheus(event, live_alerts):
@@ -351,6 +391,11 @@ class AlertPoller:
             if fp:
                 self._try_close_incident(fp)
                 self._auto_reject_stale_gates(fp)
+            self._journal_once(
+                event, "not_firing",
+                reason="Prometheus double-check: alert is no longer firing — "
+                       "cleared before an investigation was needed.",
+            )
             return None
 
         self._seen[fp] = seen_key
@@ -598,6 +643,11 @@ class AlertPoller:
                 "AlertPoller: budget exceeded for %s (fp=%s) — will retry next cycle: %s",
                 alertname, fp[:12], exc,
             )
+            self._journal_once(
+                event, "budget_deferred",
+                reason=f"LLM budget exhausted — investigation deferred to the "
+                       f"next poll cycle. ({str(exc)[:200]})",
+            )
             return
 
         # Defence-in-depth: verify the TaskStore has no active task for this
@@ -610,6 +660,12 @@ class AlertPoller:
                 logger.info(
                     "AlertPoller: task %s already exists for fp=%s (status=%s) — skipping",
                     existing["id"], fp[:12], existing["status"],
+                )
+                self._journal_once(
+                    event, "already_active",
+                    reason=f"An active task ({existing['status']}) already covers "
+                           "this alert — no new pipeline started.",
+                    ref_task_id=existing["id"],
                 )
                 return
 
@@ -649,6 +705,13 @@ class AlertPoller:
                         "AlertPoller: correlated alert %s (fp=%s) onto existing task=%s for device=%s",
                         alertname, fp[:12], correlated["id"], device,
                     )
+                    self._journal_once(
+                        event, "correlated_into",
+                        reason=f"Folded onto the active investigation for {device} "
+                               f"('{correlated.get('title', '')[:80]}') — same device, "
+                               "same time window.",
+                        ref_task_id=correlated["id"],
+                    )
                     return
 
         # Topology-aware correlation: if a directly connected upstream device already
@@ -663,6 +726,13 @@ class AlertPoller:
                  "note": f"Downstream effect of root cause on {upstream_rca.get('title', upstream_rca['id'])}"},
             )
             self._seen[fp] = f"{fp}:firing"
+            self._journal_once(
+                event, "downstream_of",
+                reason=f"Topology correlation: {device} sits downstream of the "
+                       f"root cause already under investigation "
+                       f"('{upstream_rca.get('title', '')[:80]}').",
+                ref_task_id=upstream_rca["id"],
+            )
             logger.info(
                 "AlertPoller: downstream alert %s fp=%s device=%s linked to upstream task=%s",
                 alertname, fp[:12], device, upstream_rca["id"],
