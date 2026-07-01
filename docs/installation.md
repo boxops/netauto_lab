@@ -1,157 +1,90 @@
-# Installation Guide
+# Installation
+
+## System Requirements
+
+| Component | Minimum | Recommended |
+|---|---|---|
+| OS | Ubuntu 22.04 | Ubuntu 22.04 LTS |
+| CPU | 8 cores | 16 cores |
+| RAM | 16 GB | 32 GB |
+| Disk | 50 GB SSD | 200 GB NVMe |
 
 ## Prerequisites
-
-### System Requirements
-
-| Component | Minimum      | Recommended      |
-| --------- | ------------ | ---------------- |
-| OS        | Ubuntu 22.04 | Ubuntu 22.04 LTS |
-| CPU       | 8 cores      | 16 cores         |
-| RAM       | 16 GB        | 32 GB            |
-| Disk      | 50 GB SSD    | 200 GB NVMe      |
-| Network   | 1 Gbit       | 10 Gbit          |
-
-### Required Software
 
 ```bash
 # Docker Engine (>= 24.x)
 curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-newgrp docker
-
-# Docker Compose v2 (usually included with Docker Engine)
-docker compose version   # should be >= 2.20
+sudo usermod -aG docker $USER && newgrp docker
 
 # Containerlab (for virtual lab topology)
 bash -c "$(curl -sL https://get.containerlab.dev)"
-containerlab version
 
-# Python 3.11+ (for helper scripts)
+# Python 3.11+
 python3 --version
-
-# Git
-git --version
 ```
 
-### Optional
+**Optional:** OpenAI API key (for GPT-4o; falls back to local Ollama without it) and an Arista cEOS image (for the Containerlab topology, free download from arista.com).
 
-- **OpenAI API Key** — for GPT-4o powered AI agents.  
-  Without this, agents fall back to a locally running Ollama model.
-- **Arista cEOS Image** — required to deploy the Containerlab topology.  
-  Download from [arista.com/en/support](https://www.arista.com/en/support) (free account required).
-
-## Installation Steps
-
-### Step 1: Clone the Repository
+## Setup
 
 ```bash
-git clone <repo-url> netauto_lab
-cd netauto_lab
-```
+git clone <repo-url> netauto_lab && cd netauto_lab
 
-### Step 2: Run the Automated Setup
-
-The `setup.sh` script handles everything: environment generation, secret creation, image builds, and service initialization.
-
-```bash
+# Handles everything: env generation, image builds, service init
+bash setup.sh
+# or with Docker auto-install:
 bash setup.sh --auto-install-docker
 ```
 
-If Docker is already installed, you can still use:
+`setup.sh` verifies prerequisites → generates `.env` with random secrets → creates Docker networks → builds custom images → starts core services → prepares Nautobot → starts all remaining services → health check.
 
 ```bash
-bash setup.sh
-```
-
-If you see Docker permission errors after install, apply group membership in the current shell:
-
-```bash
-sudo usermod -aG docker $USER
-newgrp docker
-```
-
-What `setup.sh` does:
-
-1. Verifies prerequisites (docker, compose, python3)
-2. Generates `.env` from `.env.example` with random secrets
-3. Creates Docker networks (`mgmt`, `monitoring`, `syslog`, `clab`)
-4. Pulls Docker images
-5. Builds custom images (Ansible, AI Agents)
-6. Starts core services (PostgreSQL, Redis, Nautobot)
-7. Prepares Nautobot (migrations, superuser, data load)
-8. Starts all remaining services
-9. Runs a final health check
-
-### Step 3: Verify the Install
-
-```bash
+# Verify all services are healthy
 make health-check
 make status
 ```
 
-All services should show as `healthy` or `running`.
+> `node-exporter` is optional. To enable: `docker compose --profile host-metrics up -d node-exporter`
 
-Note: `node-exporter` is now optional on hosts that don't support required mount propagation. To enable it explicitly:
+## Service URLs
 
-```bash
-docker compose --profile host-metrics up -d node-exporter
-```
+| Service | URL | Credentials |
+|---|---|---|
+| Nautobot | http://localhost:8080 | admin / `$NAUTOBOT_SUPERUSER_PASSWORD` |
+| Grafana | http://localhost:3000 | admin / `$GRAFANA_ADMIN_PASSWORD` |
+| Gitea | http://localhost:3001 | gitadmin / `$GITEA_ADMIN_PASSWORD` |
+| Clano UI | http://localhost:7860 | set `UI_PASSWORD` in `.env` to require login |
+| AI Agent | http://localhost:8000 | set `AGENT_API_KEY` in `.env` to require key |
 
-### Step 4: Access Services
-
-| Service   | URL                   | Credentials                                      |
-| --------- | --------------------- | ------------------------------------------------ |
-| Nautobot  | http://localhost:8080 | admin / `$NAUTOBOT_SUPERUSER_PASSWORD` in `.env` |
-| Grafana   | http://localhost:3000 | admin / `$GRAFANA_ADMIN_PASSWORD` in `.env`      |
-| Gitea     | http://localhost:3001 | gitadmin / `$GITEA_ADMIN_PASSWORD` in `.env`     |
-| Clano UI  | http://localhost:7860 | (none)                                           |
-| AI Agent  | http://localhost:8000 | (none — set `AGENT_API_KEY` in `.env` to enable) |
-
-### Step 5 (Optional): Deploy the Virtual Lab
+## Virtual Lab (Optional)
 
 ```bash
 # Import your cEOS image first
-# example: docker import cEOS64-lab-4.29.0.1F.tar.tar ceos:latest
 docker import cEOS64-lab-<version>.tar ceos:latest
 
-# Deploy the spine-leaf topology
+# Deploy spine-leaf topology and sync to Nautobot
 make deploy-lab
-
-# Sync discovered devices to Nautobot
 make sync-inventory
 ```
 
-## Environment Configuration
+## Key Environment Variables
 
-All secrets live in `.env` (auto-generated by `setup.sh`, never committed). See `.env.example` for the full list of variables.
+All secrets live in `.env` (auto-generated by `setup.sh`, never committed). Full list in `.env.example`.
 
-Key variables:
+| Variable | Purpose |
+|---|---|
+| `OPENAI_API_KEY` | GPT-4o access (optional — Ollama fallback if unset) |
+| `NAUTOBOT_SUPERUSER_PASSWORD` | Nautobot admin password |
+| `TASK_DB_URL` | PostgreSQL URL for agent task store (empty = SQLite) |
+| `RABBITMQ_URL` | AMQP URL for near-zero latency task dispatch (empty = polling) |
+| `APPROVAL_WEBHOOK_URL` | Webhook for out-of-band approval notifications |
+| `LAB_VALIDATION_ENABLED` | Apply fixes to Containerlab before production (default: false) |
+| `MAINTENANCE_CHECK_ENABLED` | Query Nautobot maintenance status before creating RCA tasks (default: false) |
+| `GITEA_TOKEN` | Gitea API token for the runbook library |
 
-| Variable                      | Purpose                                                          |
-| ----------------------------- | ---------------------------------------------------------------- |
-| `NAUTOBOT_SECRET_KEY`         | Django secret key                                                |
-| `NAUTOBOT_SUPERUSER_PASSWORD` | Nautobot admin password                                          |
-| `OPENAI_API_KEY`              | GPT-4o access (optional — Ollama fallback if unset)              |
-| `ALERTMANAGER_SLACK_WEBHOOK`  | Alertmanager Slack notifications                                 |
-| `TASK_DB_URL`                 | PostgreSQL URL for the agent task store (empty = SQLite default) |
-| `AGENT_DB_PASSWORD`           | Password for the `agent-postgres` container                      |
-| `RABBITMQ_URL`                | AMQP URL for near-zero latency task dispatch (empty = polling)   |
-| `APPROVAL_WEBHOOK_URL`        | Webhook for out-of-band approval notifications (optional)        |
-| `MAINTENANCE_CHECK_ENABLED`   | Query Nautobot before creating pipeline tasks (default: false)   |
-| `LAB_VALIDATION_ENABLED`      | Apply fixes to Containerlab device before production (default: false) |
-| `GITEA_TOKEN`                 | Gitea API token for the runbook library (optional)               |
-
-All variables are documented with defaults in `.env.example`. The `setup.sh` script auto-generates `.env` with random secrets for mandatory fields.
-
-## Upgrading
+## Upgrading / Uninstalling
 
 ```bash
-make update   # pulls new images, restarts services, preserves data
-```
-
-## Uninstalling
-
-```bash
-make clean    # stops and removes containers, networks, volumes (DESTRUCTIVE)
+make update   # pull new images, restart services, preserve data
+make clean    # DESTRUCTIVE: stops and removes containers, networks, volumes
 ```

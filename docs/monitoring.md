@@ -2,143 +2,75 @@
 
 ## Grafana Dashboards
 
-Access Grafana at **http://localhost:3000** (admin credentials in `.env`).
+Access at **http://localhost:3000** — all dashboards auto-provisioned from `grafana/dashboards/`.
 
-All dashboards are automatically provisioned from `grafana/dashboards/`. No manual import required.
-
-### Network Overview (`network-overview`)
-
-Fleet-wide health status:
-
-- Total device count and online/offline ratio
-- Interface utilization summary (top-N by traffic)
-- Active alert count by severity
-- BGP peer state across all devices
-
-### Device Detail (`device-detail`)
-
-Per-device drill-down (select device from `$device` template variable):
-
-- CPU and memory utilization
-- Interface traffic (all interfaces, stacked)
-- BGP peer state table
-- Recent syslog entries from Loki
-
-### Interface Analytics (`interface-analytics`)
-
-Traffic engineering view:
-
-- In/out bps per interface
-- Interface error and drop rates
-- CRC errors and packet discards
-- Utilization heatmap
-
-### BGP Monitoring (`bgp-monitoring`)
-
-BGP routing health:
-
-- Per-peer state (Established / Idle / Active)
-- Received and advertised prefix counts
-- Prefix count change rate (alerts if drops >20%)
+| Dashboard | UID | What it shows |
+|---|---|---|
+| Network Overview | `network-overview` | Fleet health, online/offline ratio, active alerts, BGP peer state |
+| Device Detail | `device-detail` | Per-device CPU, memory, interface traffic, BGP table, recent syslogs |
+| Interface Analytics | `interface-analytics` | In/out bps, error/drop rates, CRC errors, utilization heatmap |
+| BGP Monitoring | `bgp-monitoring` | Per-peer state, received/advertised prefix counts, flap detection |
 
 ## Prometheus
 
-Access Prometheus at **http://localhost:9090**.
+Access at **http://localhost:9090**.
 
-### Key Metrics
+### Key metrics
 
-| Metric                             | Source            | Description                      |
-| ---------------------------------- | ----------------- | -------------------------------- |
-| `ifInOctets`, `ifOutOctets`        | Telegraf/SNMP     | Interface byte counters (IF-MIB) |
-| `ifOperStatus`                     | Telegraf/SNMP     | Interface operational state      |
-| `bgpPeerState`                     | Telegraf/SNMP     | BGP peer FSM state               |
-| `bgpPeerFsmEstablishedTransitions` | Telegraf/SNMP     | BGP session flap count           |
-| `node_cpu_seconds_total`           | Node Exporter     | Host CPU usage                   |
-| `node_memory_MemAvailable_bytes`   | Node Exporter     | Host memory                      |
-| `probe_success`                    | Blackbox Exporter | HTTP/ICMP probe success          |
+| Metric | Source | Description |
+|---|---|---|
+| `ifInOctets`, `ifOutOctets` | Telegraf/SNMP | Interface byte counters |
+| `ifOperStatus`, `ifAdminStatus` | Telegraf/SNMP | Interface oper and admin state |
+| `bgpPeerState` | Telegraf/SNMP | BGP peer FSM state (6 = Established) |
+| `bgpPeerFsmEstablishedTransitions` | Telegraf/SNMP | BGP session flap count |
+| `probe_success` | Blackbox Exporter | ICMP/HTTP probe |
+| `node_cpu_seconds_total` | Node Exporter | Host CPU |
 
-### Alert Rules
+### Alert rules (`prometheus/alerts/network.yml`)
 
-Defined in `prometheus/alerts/network.yml`:
-
-| Alert                      | Condition                    | Severity |
-| -------------------------- | ---------------------------- | -------- |
-| `DeviceDown`               | `up == 0` for 2m             | critical |
-| `ServiceDown`              | `up == 0` for 2m             | critical |
-| `HighInterfaceUtilization` | `utilization > 80%` for 5m   | warning  |
-| `InterfaceDown`            | `ifOperStatus != 1` for 5m   | warning  |
-| `InterfaceHighErrorRate`   | `errors/packets > 1%` for 5m | warning  |
-| `BGPPeerDown`              | `bgpPeerState != 6` for 5m   | critical |
-| `BGPPrefixCountDecreased`  | prefix drop > 20%            | warning  |
-| `HighCPU`                  | CPU > 90% for 10m            | warning  |
-| `HighMemory`               | memory > 90% for 10m         | warning  |
-| `DiskSpaceLow`             | disk > 85%                   | warning  |
+| Alert | Condition | Severity |
+|---|---|---|
+| `DeviceDown` / `ServiceDown` | `up == 0` for 2 m | critical |
+| `BGPPeerDown` | `bgpPeerState != 6` for 5 m | critical |
+| `InterfaceDown` | `ifOperStatus != 1` for 5 m | warning |
+| `HighInterfaceUtilization` | utilization > 80% for 5 m | warning |
+| `InterfaceHighErrorRate` | errors/packets > 1% for 5 m | warning |
+| `BGPPrefixCountDecreased` | prefix drop > 20% | warning |
+| `HighCPU` / `HighMemory` | > 90% for 10 m | warning |
+| `DiskSpaceLow` | disk > 85% | warning |
 
 ## Alertmanager
 
-Access at **http://localhost:9093**.
+Access at **http://localhost:9093**. Configured in `prometheus/alertmanager.yml`.
 
-Configured in `prometheus/alertmanager.yml`:
+- **Slack:** Critical → `#network-alerts`, warnings → `#network-warnings` (set `SLACK_WEBHOOK_URL` in `.env`)
+- **Inhibition:** If `DeviceDown`, suppress sub-resource alerts for that device
+- **Grouping:** By `alertname + device`, 5-minute group_wait
 
-- **Slack**: Critical alerts go to `#network-alerts`, warnings to `#network-warnings`.
-- **Email**: All critical alerts emailed to `network-ops@example.com`.
-- **Inhibition**: If a device is unreachable (`DeviceDown`), suppress sub-resource alerts for that device.
-- **Grouping**: Grouped by `alertname` + `device`, 5-minute group_wait.
+Alertmanager forwards all warning/critical alerts to the internal `alert-event-receiver:8770` service, which the AI agent's AlertPoller consumes. See [pipeline.md](pipeline.md) for the full closed-loop flow.
 
-To enable Slack, set `SLACK_WEBHOOK_URL` in `.env`.
+## Loki
 
-### Closed-Loop Alert Pipeline
-
-Alertmanager forwards warning and critical alerts to an internal **alert-event-receiver** service at `alert-event-receiver:8770`. This provides an auditable alert-event stream independent of Prometheus's own `/api/v1/alerts` endpoint.
-
-| Endpoint | Method | Description |
-| --- | --- | --- |
-| `/alertmanager/webhook` | `POST` | Receive Alertmanager webhook payloads |
-| `/health` | `GET` | Health check |
-| `/events?limit=N` | `GET` | Retrieve recent ingested alert events |
-
-The AI agent's **AlertPoller** background thread consumes this stream every 15 s (critical alerts) or 60 s (normal alerts). For each new alert fingerprint not already in the task queue, the AlertPoller:
-
-1. Validates the alert is still firing in live Prometheus
-2. Checks device maintenance status (if `MAINTENANCE_CHECK_ENABLED=true`)
-3. Correlates with existing open RCAs for the same device
-4. Creates or links an Incident grouping entity
-5. Creates an `rca` task and triggers the LangGraph IncidentWorkflow
-
-From there the pipeline runs automatically through RCA → Fix Proposal → Validation → Approval Gate. Human review happens in the **Clano UI** at http://localhost:7860. See [`docs/closed-loop-pipeline.md`](closed-loop-pipeline.md) for the full reference.
-
-## Loki Log Queries
-
-Access Loki via Grafana's Explore panel or API at **http://localhost:3100**.
-
-### Useful LogQL Queries
+Access via Grafana Explore or API at **http://localhost:3100**.
 
 ```logql
 # All logs from a specific device
 {job="syslog", device="spine1"}
 
-# BGP state-change events in the last hour
+# BGP state-change events
 {job="syslog"} |= "BGP" |= "state"
 
-# Interface down events (severity >= error)
+# Interface down events
 {job="syslog", severity=~"error|critical"} |= "moved to down"
 
 # Failed login attempts
 {job="syslog"} |= "authentication failure"
 ```
 
-## Telegraf SNMP Configuration
+## Telegraf SNMP
 
-Telegraf is configured in `telegraf/telegraf.conf`. It polls the following OIDs on all five Containerlab nodes:
+Polls all Containerlab nodes via SNMPv2c:
 
-**IF-MIB (30s interval):**
+**IF-MIB (30 s):** `ifDescr`, `ifType`, `ifMtu`, `ifInOctets`, `ifOutOctets`, `ifInErrors`, `ifOutErrors`, `ifOperStatus`, `ifAdminStatus`
 
-- `ifDescr`, `ifType`, `ifMtu`
-- `ifInOctets`, `ifOutOctets`, `ifInErrors`, `ifOutErrors`
-- `ifOperStatus`, `ifAdminStatus`
-
-**BGP4-MIB (60s interval):**
-
-- `bgpPeerState`, `bgpPeerAdminStatus`
-- `bgpPeerInUpdates`, `bgpPeerOutUpdates`
-- `bgpPeerFsmEstablishedTime`, `bgpPeerFsmEstablishedTransitions`
+**BGP4-MIB (60 s):** `bgpPeerState`, `bgpPeerAdminStatus`, `bgpPeerInUpdates`, `bgpPeerOutUpdates`, `bgpPeerFsmEstablishedTime`, `bgpPeerFsmEstablishedTransitions`

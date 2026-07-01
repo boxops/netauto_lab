@@ -1,119 +1,209 @@
-# AI Agents
+# AI Agent Reference
 
-The stack includes a **unified AI agent** (`ai-agent` service) built with LangGraph (ReAct loop) that handles the full closed-loop pipeline — root cause analysis, fix generation, validation, and execution — within a single state machine on **port 8000**. All background tasks (AlertPoller, IntentEvaluator, APScheduler, policy-promotion sweep) run inside this one service.
-
-See [`docs/closed-loop-pipeline.md`](closed-loop-pipeline.md) for the full pipeline reference, [`docs/policy-autonomy.md`](policy-autonomy.md) for the autonomy level system, and [`docs/intent-layer.md`](intent-layer.md) for standing intents.
-
-## Accessing the Agent
+The **unified AI agent** (`ai-agent` service, port 8000) is a LangGraph ReAct loop that handles interactive chat, closed-loop incident response, and proactive monitoring. All background tasks (AlertPoller, IntentEvaluator, APScheduler, policy-promotion sweep) run inside this one service.
 
 | Interface | URL |
 |---|---|
-| Clano Web UI (pipeline dashboard, incidents, chat, config, system) | http://localhost:7860 |
+| Clano Web UI (pipeline, incidents, chat, config, system) | http://localhost:7860 |
 | AI Agent REST API | http://localhost:8000 |
 
 ---
 
-## Unified Agent Capabilities
+## Capabilities
 
-The unified agent combines the capabilities of the three legacy roles into one LangGraph ReAct loop. It has access to all tool tiers and is invoked sequentially through the pipeline stages.
-
-### Reactive capabilities (alert-driven)
-
-| Capability | Description |
+| Mode | Capability |
 |---|---|
-| Alert investigation | Queries active Prometheus alerts, correlates with metrics and logs |
-| Root cause analysis | Synthesises a structured DIAGNOSIS / AFFECTED / ACTION / CONFIDENCE summary |
-| Topology correlation | Uses `TopologyCorrelator` to detect cascading failures and infer blast radius from Nautobot cable data |
-| Runbook-first fix generation | Calls `get_runbook(alertname)` before re-deriving fixes from scratch |
-| Config diff generation | Produces a unified diff of current vs proposed running-config |
-| Blast-radius assessment | Maps which devices depend on a target interface or device |
-| Fix validation | Cross-checks fix proposals for correctness and downstream impact |
-| Execution | Applies approved fixes with `check_mode=False` after human or policy sign-off |
-| Post-execution verification | Non-LLM config check + Prometheus resolution check after execution |
-
-### Proactive capabilities (intent-driven)
-
-| Capability | Description |
-|---|---|
-| Metric monitoring | Polls Prometheus on a schedule and opens an RCA when a threshold is breached — before Alertmanager fires |
-| Alert suppression | Skips pipeline investigation for known-flapping or maintenance-window alerts |
-| Forced escalation | Forces the approval gate regardless of policy autonomy level |
-| Chaos scheduling | Runs chaos scenarios on a cron expression for resilience testing |
-
-### Interactive capabilities (chat-driven)
-
-| Capability | Description |
-|---|---|
-| Device lookup | Queries Nautobot for device info, interfaces, neighbors |
-| Config review | Reviews configs against best practices |
-| IP and VLAN planning | Finds available IPs/VLANs from Nautobot IPAM |
-| Playbook authoring | Writes Ansible playbooks from natural-language descriptions |
-| Health reporting | Generates fleet-wide or per-device health reports |
+| **Alert-driven** | Root cause analysis · Topology blast-radius correlation · Runbook-first fix generation · Config diff · Fix validation · Execution (check_mode=False after approval) · Post-execution verification |
+| **Intent-driven** | Proactive metric polling (before Alertmanager fires) · Alert suppression · Forced escalation · Chaos scheduling |
+| **Chat-driven** | Device lookup · Config review · IP/VLAN planning · Playbook authoring · Fleet health reports |
 
 ---
 
-## Tool Tiers
+## Tool Tier Model
 
-The agent follows a four-tier tool hierarchy enforced by the system prompt:
+The agent works **top-to-bottom** through the tiers. Skipping Tier 1 (inventory) before acting is the primary cause of incorrect responses.
 
-| Tier | Tools | Purpose |
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Tier 0 – Runbook    get_runbook(alertname)                   │
+│  Known fix? Check first — returns YAML procedure if exists    │
+├──────────────────────────────────────────────────────────────┤
+│  Tier 1 – Discovery  Nautobot REST API                        │
+│  What exists?        devices, interfaces, topology, IPs       │
+├──────────────────────────────────────────────────────────────┤
+│  Tier 2 – Metrics    Prometheus + Alertmanager                │
+│  What is happening?  reachability, counters, BGP, alerts      │
+├──────────────────────────────────────────────────────────────┤
+│  Tier 3 – Logs       Loki (syslog)                            │
+│  What happened?      interface events, BGP events, errors     │
+├──────────────────────────────────────────────────────────────┤
+│  Tier 4 – Actions    Nautobot Jobs + chaos tools              │
+│  Change something    run_show_commands, run_config_commands   │
+│  (requires approval) chaos tools (CHAOS_TOOLS_ENABLED)        │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Tool Reference
+
+### Tier 0 — Runbook
+
+| Tool | When to use |
+|---|---|
+| `get_runbook(alertname)` | **First call** for any alert investigation — returns Gitea YAML runbook if one exists. Reduces token usage 60–80% for known alert types. |
+
+Built-in runbooks: `BGPPeerDown`, `InterfaceDown`, `InterfaceAdminDown`, `DeviceDown`, `HighInterfaceUtilization`, `InterfaceHighErrorRate`, `BGPPrefixCountDecreased`. Add custom runbooks as `{AlertName}.yaml` in the Gitea `runbooks` repo.
+
+### Tier 1 — Nautobot Discovery
+
+| Tool | When to use | Key arg |
 |---|---|---|
-| 0 — Runbook | `get_runbook(alertname)` | **Check first** for known alert types before reasoning from scratch |
-| 1 — Discovery | Nautobot tools (`get_device_info`, `get_device_interfaces`, `get_topology`, …) | Ground answers in actual inventory data |
-| 2 — Metrics/State | Prometheus tools (`get_device_metrics`, `get_active_alerts`, …) | Validate current device state |
-| 3 — Logs | Loki tools (`get_interface_events`, `get_bgp_events`, `get_syslog_events`, …) | Correlate events with alert timeline |
-| 4 — Actions | `run_show_commands`, `run_config_commands`, chaos tools | Read or apply config (`check_mode=True` by default) |
+| `get_all_devices()` | First step for any multi-device task | — |
+| `get_device_info(device)` | Full detail on one device | exact hostname |
+| `get_device_interfaces(device)` | Interface list with neighbors and IPs | exact hostname |
+| `get_topology()` | Full physical topology / blast-radius analysis | — |
+| `get_connected_devices(device)` | Quick neighbor lookup | exact hostname |
+| `get_vlans()` | VLAN inventory | — |
+| `get_prefixes()` | Prefix/subnet inventory | — |
+| `get_ip_addresses(device, prefix)` | IPs by device or within a prefix | optional filters |
+| `get_available_ips(prefix, count)` | Find free IPs for allocation | prefix string |
+| `search_nautobot(query)` | Keyword search across all object types | search term |
+| `get_devices_by_location(location)` | All devices at one site | location name |
 
-See [`docs/agent-tools-framework.md`](agent-tools-framework.md) for adding new tools and docstring conventions.
+> **IP resolution:** Prometheus uses IPs, Nautobot uses hostnames. Tools auto-resolve `primary_ip4` from Nautobot before querying Prometheus.
+
+### Tier 2 — Prometheus Metrics
+
+| Tool | When to use |
+|---|---|
+| `get_active_alerts()` | Start of every incident investigation |
+| `get_recent_alert_events(limit)` | Alert history including resolved |
+| `get_device_metrics(device)` | Reachability, RTT, packet loss per device |
+| `get_interface_metrics(device, interface)` | Interface traffic and error counters |
+| `query_prometheus(promql, minutes)` | Custom PromQL for advanced queries |
+
+### Tier 3 — Loki Logs
+
+| Tool | Searches for |
+|---|---|
+| `get_interface_events(device, minutes)` | Link up/down, protocol changes |
+| `get_bgp_events(device, minutes)` | BGP state transitions |
+| `get_recent_errors(device, minutes)` | ERROR/WARNING/CRITICAL log lines |
+| `query_logs(device, pattern, minutes)` | Arbitrary LogQL pattern |
+
+### Tier 4 — Actions
+
+| Tool | Notes |
+|---|---|
+| `run_show_commands(device, commands)` | Read-only; any show command |
+| `run_config_commands(device, lines, check_mode)` | `check_mode=True` (default) = dry run only |
+| `shutdown_interface(device, interface, check_mode)` | Chaos — requires `CHAOS_TOOLS_ENABLED=true` |
+| `restore_interface(device, interface, check_mode)` | Chaos — requires `CHAOS_TOOLS_ENABLED=true` |
+| `flap_bgp_neighbor(device, neighbor_ip, method, check_mode)` | Chaos — requires `CHAOS_TOOLS_ENABLED=true` |
+| `verify_bgp_state(device, neighbor_ip)` | Read-only — always available |
+
+**check_mode semantics:** `run_config_commands(check_mode=True)` never submits a job — it returns a `SIMULATION` JSON. Only `check_mode=False` submits the job and requires explicit user approval.
+
+**Nautobot Jobs API flow:** resolve device → UUID → resolve job name → UUID → POST `/api/extras/jobs/{id}/run/` → poll `GET /api/extras/job-results/{id}/` (every 3 s, timeout 90–120 s) → fetch logs.
 
 ---
 
-## Safety Rules
+## Workflow Patterns
 
-- All `run_config_commands` and chaos action calls default to `check_mode=True` (dry run).
-- In the automated pipeline, the agent never sets `check_mode=False` — execution is always gated by the autonomy policy (human approval at L0–L3, or policy threshold at L4).
-- L5 (fully autonomous) is never set automatically — it requires explicit operator action in the Config UI.
-- Devices tagged `maintenance` or in a configured Nautobot status receive `do_not_auto_execute=true`, blocking automated execution at the gate regardless of policy level.
+**Incident investigation**
+```
+get_active_alerts() → get_device_metrics(device) → get_interface_events(device, 60)
+→ get_bgp_events(device, 60) → get_topology()
+```
+
+**Config design / new device**
+```
+get_all_devices() → get_topology() → get_device_interfaces(neighbor)
+→ get_prefixes() + get_available_ips(prefix) → get_vlans()
+```
+
+**Inventory / documentation**
+```
+get_all_devices() → get_device_interfaces(device)  [for each]
+→ get_topology()  [for full connection map]
+```
+
+**Chaos experiment**
+```
+# Before: get_topology() + get_device_metrics(target) + get_active_alerts()
+# After:  get_active_alerts() + get_interface_events(device) + get_bgp_events(device) + get_device_metrics(device)
+```
+
+**Health report**
+```
+get_all_devices() → get_device_metrics(device)  [for each]
+→ get_active_alerts() → get_recent_alert_events(50) → get_recent_errors(60)
+```
 
 ---
 
-## Closed-Loop Pipeline
+## Adding a New Tool
 
-When Prometheus fires an alert, the pipeline runs automatically through four stages, tracked as linked tasks in the shared TaskStore:
+1. Implement as `@tool`-decorated function in `ai-agents/shared/tools.py`.
+2. Add to the appropriate tier list (`_NAUTOBOT_TOOLS`, `_PROMETHEUS_TOOLS`, `_LOKI_TOOLS`, `_ACTION_TOOLS`).
+3. Update the tool guide in `shared/unified_agent.py` and, if pipeline-relevant, `ops_agent/agent.py`.
+4. Rebuild: `make rebuild SVC=ai-agent`.
 
-```
-Prometheus alert
-       │
-       ▼
- AlertPoller (ai-agent / IntentEvaluator)
- · Deduplicates by fingerprint
- · Checks maintenance status
- · Runs TopologyCorrelator to detect cascading failures
- · Creates or links to an Incident entity
-       │ creates rca task + immediately invokes
-       ▼
- ┌─── LangGraph IncidentWorkflow ─────────────────────────────────────────┐
- │                                                                         │
- │   Stage 1 ─ RCA        Stage 2 ─ Fix Proposal   Stage 3 ─ Validation   │
- │   · Alerts / metrics   · get_runbook() first     · Blast-radius check   │
- │   · Logs / topology    · Config diff generated   · Read-only inspection │
- │   · Structured output  · Structured output        · Verdict output       │
- │                                                                         │
- │   Stage 4 ─ Approval Gate                                               │
- │   · PolicyRegistry determines autonomy level (L0–L5)                   │
- │   · L0–L3: human approval required                                      │
- │   · L4: auto-approved when policy thresholds met                        │
- │   · Post-approval: execution + config verify + alert resolution check   │
- └─────────────────────────────────────────────────────────────────────────┘
+**Docstring template:**
+```python
+@tool
+def my_new_tool(required_arg: str, optional_arg: str = "") -> str:
+    """
+    One sentence: what this tool returns.
+
+    When to use: describe the scenario. Note what other tool to use instead
+    when this one is not appropriate.
+
+    Args:
+        required_arg: What it is, valid values (e.g., 'leaf1', 'spine2').
+        optional_arg: What it controls. Leave empty to <default behaviour>.
+
+    Returns:
+        JSON with <describe the structure>.
+    """
 ```
 
-Full pipeline documentation: [`docs/closed-loop-pipeline.md`](closed-loop-pipeline.md)
+**Tool design rules:** Return JSON always (errors as `{"error": "..."}`, never exceptions). Return names not IDs. Return helpful `{"note": "..."}` when data is absent. Limit list results to 50–200 items. Include `available_devices` in error responses so the agent can self-correct.
+
+---
+
+## Standing Intents
+
+Standing intents control *when* the agent acts and *what it does* with specific alert types — independently of Prometheus. Managed in **⚙️ Config → Standing Intents** at http://localhost:7860/config.
+
+| Type | Effect | When to use |
+|---|---|---|
+| `suppress` | Skip pipeline investigation for matching alerts | Known-flapping link, planned maintenance |
+| `escalate` | Force the approval gate regardless of policy autonomy level | Production devices where auto-execution must never happen |
+| `monitor` | Poll a Prometheus metric on a schedule; open an RCA when threshold is breached | Detect degraded state *before* Alertmanager fires |
+| `chaos_schedule` | Run a chaos scenario on a cron expression | Regular resilience testing |
+
+**Evaluation:** Alert-driven intents (`suppress`, `escalate`) are checked by the AlertPoller before any task is created. Both `device` and `alertname` fields must match (empty = wildcard). The `monitor` type runs via `IntentEvaluator` (5-min poll). Chaos schedules are handed to APScheduler.
+
+**Threshold syntax** (for `monitor` intents): `<operator> <value>` — e.g. `< 1`, `>= 95`, `== 0`. Operators: `<`, `<=`, `>`, `>=`, `==`, `!=`. The PromQL query should return a single scalar.
+
+**Deduplication:** Intent-triggered pipelines use `alert_fingerprint = "intent:<intent_id>"` — so a persisting threshold breach only creates one pipeline, not one per poll cycle.
+
+```bash
+# Examples via API
+# Suppress all InterfaceDown alerts on leaf1
+curl -X POST http://localhost:7860/partials/intent-create \
+  -d "name=suppress+leaf1+flap&intent_type=suppress&device=leaf1&alertname=InterfaceDown"
+
+# Monitor BGP prefix count — open RCA if drops below 5
+curl -X POST http://localhost:7860/partials/intent-create \
+  -d "name=BGP+prefix+monitor&intent_type=monitor&device=leaf1&metric_query=bgp_prefixes_received%7Bdevice%3D%27leaf1%27%7D&threshold=%3C+5"
+```
 
 ---
 
 ## REST API
-
-All endpoints are served by the single `ai-agent` service on port 8000. The `session_id` scopes chat history in the activity store.
 
 ```bash
 # Chat
@@ -124,44 +214,40 @@ curl -X POST http://localhost:8000/chat \
 # Streaming chat
 curl -X POST http://localhost:8000/chat/stream \
   -H "Content-Type: application/json" \
-  -d '{"message": "Investigate the BGP peer down alert on spine2", "session_id": "clano-1"}'
+  -d '{"message": "Investigate BGP peer down on spine2", "session_id": "clano-1"}'
 
 # Health / status / usage
 curl http://localhost:8000/health
 curl http://localhost:8000/status
 curl http://localhost:8000/usage
 
-# Reset alert poller deduplication state (after clearing the task queue)
-curl -X POST http://localhost:8000/poller/reset
-
-# Task CRUD
+# Tasks
 curl http://localhost:8000/tasks
 curl http://localhost:8000/tasks/<task_id>
+curl -X POST http://localhost:8000/workflow/resume/<task_id>   # after human approval
 
-# Trigger Phase 2 execution after human approval
-curl -X POST http://localhost:8000/workflow/resume/<task_id>
+# Policies and intents
+curl http://localhost:8000/policies
+curl -X POST http://localhost:8000/policies -H "Content-Type: application/json" -d '{...}'
+curl http://localhost:8000/intents
+curl -X POST http://localhost:8000/intents -H "Content-Type: application/json" -d '{...}'
 
-# Scheduled chaos experiments (APScheduler)
+# Chaos schedules
 curl http://localhost:8000/schedules
 curl -X POST http://localhost:8000/schedule \
   -H "Content-Type: application/json" \
   -d '{"scenario": "Shut Ethernet1 on leaf1 in check mode", "interval_minutes": 30}'
 curl -X DELETE http://localhost:8000/schedule/<job_id>
 
-# Autonomy policies
-curl http://localhost:8000/policies
-curl -X POST http://localhost:8000/policies -H "Content-Type: application/json" -d '{...}'
-
-# Standing intents
-curl http://localhost:8000/intents
-curl -X POST http://localhost:8000/intents -H "Content-Type: application/json" -d '{...}'
+# Reset alert poller dedup state
+curl -X POST http://localhost:8000/poller/reset
 ```
 
 ---
 
 ## Example Prompts
 
-### Investigation and diagnosis
+**Investigation**
 ```
 "What alerts are currently firing?"
 "Investigate the BGP peer down alert on spine2."
@@ -169,7 +255,7 @@ curl -X POST http://localhost:8000/intents -H "Content-Type: application/json" -
 "Generate a health report for all lab devices."
 ```
 
-### Fix generation and config design
+**Design and config**
 ```
 "Design a BGP configuration for a new leaf router with AS 65104."
 "What IPs are available in the 10.10.0.0/16 prefix?"
@@ -177,7 +263,7 @@ curl -X POST http://localhost:8000/intents -H "Content-Type: application/json" -
 "Compare spine1's running config to its intended state in Nautobot."
 ```
 
-### Chaos and validation
+**Chaos and validation**
 ```
 "What is the blast radius if I shut down Ethernet1 on spine1?"
 "Simulate a leaf uplink failure on leaf2 in check mode."
@@ -189,32 +275,20 @@ curl -X POST http://localhost:8000/intents -H "Content-Type: application/json" -
 
 ## Configuration
 
-Agent behaviour is controlled via environment variables in `.env`. See [`docs/closed-loop-pipeline.md`](closed-loop-pipeline.md) for the complete reference. Key variables:
-
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | (none) | GPT-4o key — required for OpenAI |
+| `OPENAI_API_KEY` | — | GPT-4o key; falls back to Ollama if unset |
 | `OPENAI_MODEL` | `gpt-4o` | OpenAI model name |
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | Ollama endpoint (local LLM fallback) |
 | `OLLAMA_MODEL` | `llama3` | Ollama model name |
-| `DAILY_BUDGET_USD` | `5.00` | Hard daily spend limit across all agents |
-| `MAX_TOKENS_PER_AGENT_PER_HOUR` | `2,000,000` | Hourly token cap per agent |
-| `TASK_DB_URL` | (empty = SQLite) | PostgreSQL URL for production task store |
-| `RABBITMQ_URL` | (empty = polling) | AMQP URL for near-zero latency task dispatch |
-| `APPROVAL_WEBHOOK_URL` | (none) | Webhook fired when a task enters `awaiting_approval` |
-| `MAINTENANCE_CHECK_ENABLED` | `false` | Query Nautobot before creating RCA tasks |
-| `LAB_VALIDATION_ENABLED` | `false` | Apply fix to Containerlab device before production execution |
-| `GITEA_TOKEN` | (none) | API token for the Gitea runbook library |
-| `EXECUTION_VERIFY_DELAY` | `300` | Seconds before the post-execution Prometheus check |
-| `CHAOS_TOOLS_ENABLED` | `false` | Enable chaos action tools (shutdown_interface, flap_bgp) |
-| `LANGSMITH_API_KEY` | (none) | LangSmith tracing key (optional) |
+| `AI_ENABLED` | `true` | `false` = only fast-path policies run; unmatched alerts queue for human review |
+| `DAILY_BUDGET_USD` | `5.00` | Hard daily spend limit |
+| `MAX_TOKENS_PER_AGENT_PER_HOUR` | `2,000,000` | Hourly token cap |
+| `CHAOS_TOOLS_ENABLED` | `false` | Enable chaos action tools (lab only) |
+| `LANGSMITH_API_KEY` | — | LangSmith tracing (optional) |
 
-## Local LLM Fallback (Ollama)
-
-If no `OPENAI_API_KEY` is set, the agent falls back to a locally running Ollama instance:
-
+If no `OPENAI_API_KEY` is set, pull an Ollama model first:
 ```bash
 docker compose exec ollama ollama pull llama3
 ```
-
-Local models are significantly slower and less capable for complex multi-step reasoning. For reliable pipeline operation, an OpenAI API key is recommended.
+Local models are significantly slower and less capable for multi-step reasoning; an OpenAI key is recommended for reliable pipeline operation.
